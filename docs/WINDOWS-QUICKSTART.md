@@ -26,7 +26,7 @@ PS ...> wowmod launch --config examples/12.0.7/wowmod.firestorm.json
    - 分支 ZIP：<https://github.com/wpch3/wowmod-loadexe/archive/refs/heads/arena/5a3768a5-wowmod-loadexe.zip>
    - 单个 exe：<https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod.exe>
    - 单个 DLL：<https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod_hook.dll>
-   - Release 说明页：<https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-afbfb94>
+   - Release 说明页：<https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-d467d73>
 
    放到源码根目录（就是有 `README.md`、`examples\` 那一层）：
 

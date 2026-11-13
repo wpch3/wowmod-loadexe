@@ -72,7 +72,7 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 编译好的 `wowmod.exe`**；且 PowerShell 默认不搜索当前目录，必须写 `.\wowmod.exe`。
 **现在分支里已带上预编译的 x64 `wowmod.exe` + `wowmod_hook.dll`** —— 重新下载当前分支
 ZIP（或单独下这两个文件放到根目录，两者必须同目录）就能直接跑。
-[Release 说明页](https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-afbfb94) 有校验和。
+[Release 说明页](https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-d467d73) 有校验和。
 
 ```powershell
 .\wowmod.exe version
