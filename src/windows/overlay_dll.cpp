@@ -8,6 +8,7 @@
 
 #include "windows/fileid_hook.hpp"
 #include "windows/iat_hook.hpp"
+#include "windows/mem_scan.hpp"
 #include "windows/runtime.hpp"
 
 namespace {
@@ -32,6 +33,10 @@ void initialize(HMODULE self) {
   } else {
     dlog("纯 VFS 模式: " + plan.reason);
   }
+
+  // 加密壳客户端：磁盘 .text 是密文，静态找不到 hook 点时，
+  // 在后台等壳解密完成后扫描进程内存，产出候选特征（默认不自动下断点）。
+  start_runtime_scan();
 }
 
 }  // namespace

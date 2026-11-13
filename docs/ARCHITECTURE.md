@@ -32,6 +32,7 @@
    launch.cpp  CreateProcess(SUSPENDED)         iat_hook.cpp  遍历已加载模块 IAT
    inject.cpp  LoadLibraryW 远程线程            fs_hooks.cpp  文件 API detour
                                                 fileid_hook.cpp  Dr0 + VEH 适配器
+                                                mem_scan.cpp    运行时内存映像转储 + 候选发现
 ```
 
 **关键不变量**：`wowmod_core` 里没有任何 `build == N`、没有硬编码偏移、没有内置特征表。
@@ -52,6 +53,10 @@ wowmod launch
   │          a. init_runtime()     重复 1~4（进程内），materialize_generated()
   │          b. install_iat_hooks()  ← 从这里开始才拦截文件 API（避免自递归）
   │          c. install_fileid_hook()（仅当 plan.mode == "fileid"）
+  │          d. start_runtime_scan() 后台线程（仅当静态没找到 hook 点且 runtimeScan=true）
+  │              → 等壳解密 → VirtualQuery/ReadProcessMemory 转储模块映像
+  │              → PeImage(mapped=true) + discover → 写 *.img / *.candidates.json
+  │              → 默认只产出候选，不自动下断点
   │  8. ResumeThread(主线程)
 ```
 

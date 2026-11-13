@@ -93,6 +93,7 @@ std::string help_text() {
       "  --name NAME      adapt 生成的条目名\n"
       "  --id-register R  adapt 生成的 idRegister（默认 rdx）\n"
       "  --module DLL     特征属于哪个模块（私服壳 exe 时通常是 Wow_loader.dll）\n"
+      "  --mapped         --exe 指向运行时内存转储（.img），按 RVA=偏移分析加密壳客户端\n"
       "  --materialize DIR  plan 时把内存生成文件写到 DIR 便于检查\n"
       "  --json           机器可读输出\n"
       "  --force          init 时覆盖已有文件\n\n"
@@ -256,8 +257,11 @@ int cmd_scan(const Args& a, Session& s) {
   std::vector<uint8_t> main_bytes;
   std::string rerr;
   read_binary_file(exe, &main_bytes, &rerr);
-  auto images = collect_hook_images(s.cfg, s.ci, main_bytes, &s.diag);
-  Json report = images.size() > 1 ? scan_report(images, ds, &s.diag) : scan_report(exe, ds, &s.diag);
+  bool mapped = a.has("mapped");
+  std::vector<HookImage> images;
+  if (mapped) images.push_back({"", main_bytes, true});
+  else images = collect_hook_images(s.cfg, s.ci, main_bytes, &s.diag);
+  Json report = images.size() > 1 || mapped ? scan_report(images, ds, &s.diag) : scan_report(exe, ds, &s.diag);
   if (a.json) {
     std::cout << report.dump(2) << "\n";
     return 0;
@@ -362,7 +366,8 @@ int cmd_discover(const Args& a, Session& s) {
     }
   }
   if (anchors.empty()) anchors = default_anchors();
-  DiscoveryReport rep = discover_hook_points(bytes, anchors);
+  bool mapped = a.has("mapped");
+  DiscoveryReport rep = discover_hook_points(bytes, anchors, mapped);
   rep.exe = exe;
 
   std::string emitted;
@@ -383,10 +388,12 @@ int cmd_discover(const Args& a, Session& s) {
   if (a.json) {
     Json j = rep.to_json();
     j.set("emitted", Json::make_string(emitted));
+    j.set("mapped", Json::make_bool(mapped));
     std::cout << j.dump(2) << "\n";
     return 0;
   }
-  std::cout << "本地自动发现: " << exe << " (" << (rep.pe ? rep.arch : "非 PE") << ")\n";
+  std::cout << (mapped ? "内存映像分析: " : "本地自动发现: ") << exe
+            << " (" << (rep.pe ? rep.arch : "非 PE") << ")\n";
   std::cout << "锚点命中: " << (rep.anchors_found.empty() ? "无" : join(rep.anchors_found, ", ")) << "\n";
   std::cout << "目标 " << rep.target_count << " 个 / 代码引用 " << rep.xref_count << " 处\n";
   std::cout << "候选 hook 点: " << rep.candidates.size() << " 个\n\n";

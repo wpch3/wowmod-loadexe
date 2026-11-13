@@ -25,3 +25,8 @@ __pycache__/
 .DS_Store
 .idea/
 .vs/
+
+# 运行时内存转储（体积大、含客户端代码，绝不入库）
+runtime-dumps/
+*.img
+*.candidates.json

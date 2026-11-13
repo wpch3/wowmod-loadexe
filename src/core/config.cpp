@@ -128,6 +128,13 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
     if (!s.empty()) c.hooks.scan_targets.push_back(s);
   }
   c.hooks.allow_fallback = h.at("allowFallback").as_bool(true);
+  c.hooks.runtime_scan = h.at("runtimeScan").as_bool(true);
+  c.hooks.runtime_delay_ms = static_cast<int>(h.at("runtimeDelayMs").as_int(4000));
+  c.hooks.runtime_dump = h.at("runtimeDump").as_string();
+  c.hooks.runtime_auto_install = h.at("runtimeAutoInstall").as_bool(false);
+  for (const auto& s : h.at("runtimeModules").as_string_array()) {
+    if (!s.empty()) c.hooks.runtime_modules.push_back(s);
+  }
 
   const Json& lg = j.at("log");
   c.log.file = resolve(c.base_dir, lg.at("file").as_string());
@@ -190,6 +197,15 @@ Json Config::to_json() const {
     Json st = Json::make_array();
     for (const auto& t : hooks.scan_targets) st.push(Json::make_string(t));
     h.set("scanTargets", st);
+  }
+  h.set("runtimeScan", Json::make_bool(hooks.runtime_scan));
+  h.set("runtimeDelayMs", Json::make_number(hooks.runtime_delay_ms));
+  h.set("runtimeAutoInstall", Json::make_bool(hooks.runtime_auto_install));
+  if (!hooks.runtime_dump.empty()) h.set("runtimeDump", Json::make_string(hooks.runtime_dump));
+  if (!hooks.runtime_modules.empty()) {
+    Json rm = Json::make_array();
+    for (const auto& t : hooks.runtime_modules) rm.push(Json::make_string(t));
+    h.set("runtimeModules", rm);
   }
   j.set("hooks", h);
   Json lg = Json::make_object();

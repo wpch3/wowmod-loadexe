@@ -1,12 +1,16 @@
 # WoW 12.0.7 专用起始包
 
 > **真实客户端已上传并验证**：`WoW 12.0.7 - Firestorm.exe` = `12.0.7.68974` / x64 PE32+，
-> 路径 `D:\Midnight Open Beta\_midnight_\`。按真实路径填好的配置见
-> [`wowmod.firestorm.json`](wowmod.firestorm.json)，还缺哪些文件见
-> [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md)。
+> 路径 `D:\Midnight Open Beta\_midnight_\`。exe 与 `wow_loader.dll` 均已上传并验证，
+> 按真实路径填好的配置见 [`wowmod.firestorm.json`](wowmod.firestorm.json)，
+> 完整清单/结论见 [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md)。
 >
-> ⚠ 该 exe 是启动壳（导入表里只有 `Wow_loader.dll` ordinal #1），真正的游戏代码在那个
-> 38 MB DLL 里。**请上传 `wow_loader.dll`** —— 有了它才能定位 CASC 的 FileDataID hook 点。
+> ⚠ **DLL 已上传并验证**：两个文件的磁盘代码都无法静态定位 hook 点 ——
+> exe 的 `.text` 是加密的（熵 8.00），`wow_loader.dll` 的字符串被剥光。
+> 已改用**运行时内存扫描**（`hooks.runtimeScan`）：注入后等壳解密，转储内存映像并
+> 自动产出候选特征。详见 [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md) 与
+> [`wowmod.firestorm.json`](wowmod.firestorm.json)。
+> 还差**一次 Windows 真机启动**（回传 `runtime-dumps/`）或 x64dbg 断一次入口来定稿。
 
 **能。** 这套配置本身就是给 12.0.7 准备的，但里面**没有任何版本号判断**：
 把 `client.portal` 改成你的私服地址、把模型放进 `mods/models/`，就能直接跑。
@@ -84,31 +88,36 @@ wowmod launch --config wowmod.json    # Windows
 
 找不到特征也**不影响启动**：保持 `allowFallback: true`，加载器自动用通用 VFS 层。
 
-## 5. 需要上传东西吗？不需要
+## 5. 还差什么？一次 Windows 真机运行
 
-**不用上传任何模组软件**（模型包、Arctium App 之类都是数据/UI，机制已在加载器里实现）。
-第 4 步缺的只有「你的 12.0.7 exe 自身的字节」，而这也**不必上传给我** —— 两条命令全在你本机跑：
+**不用上传任何模组软件**（模型包、Arctium App 之类都是数据/UI，机制已在加载器里实现），
+exe、分卷、`wow_loader.dll` 也**都已上传并验证完毕**。
+
+但静态扫描对这个客户端不成立（磁盘 `.text` 是密文）。最后一步只能在 Windows 上跑：
 
 ```bash
-# 没有任何参考特征时：自动从字符串引用找候选 hook 点
-wowmod discover --exe "D:/Games/WoW/Wow.exe" --emit hooks/patterns.discovered.json
+# 1) 按真实路径启动，让 hooks.runtimeScan 转储解密后的内存
+wowmod launch --config wowmod.firestorm.json
+#    → runtime-dumps/main.exe.img、wow_loader.dll.img、*.candidates.json
 
-# 有邻近 12.x 特征时：自动放宽成唯一匹配
-wowmod adapt --exe "D:/Games/WoW/Wow.exe" --pattern "..." --out hooks/patterns.adapted.json
-
-wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.discovered.json
-wowmod plan --config wowmod.json
+# 2) 离线确认候选（可在我这边做，也可你自己做）
+wowmod discover --exe runtime-dumps/main.exe.img --mapped --emit hooks/patterns.runtime.json
+wowmod scan     --exe runtime-dumps/main.exe.img --mapped --patterns hooks/patterns.runtime.json
+wowmod plan     --config wowmod.firestorm.json
 ```
 
-`discover` 会在可执行节区里扫描指向 `DBFilesClient\`、`Interface\AddOns\` 等字符串的
-RIP 相对 LEA，生成候选特征并标出是否唯一匹配。也可以用 `--anchors "你的字符串"` 换成
-你自己模组里的路径。
+`--mapped` 让加载器按「文件偏移 == RVA」解析内存映像；此时明文字符串与 RIP 相对
+引用才真正存在。把 `runtime-dumps/` 发给我即可由我定稿特征。
 
-如果愿意让我代劳验证，发我任选其一即可：
+或者更快：用 x64dbg 在解密后的 `LoadByFileId` / `CustomFileIdHook` 入口断一次，
+给我前 24 字节 + ID 所在寄存器。
 
-1. `Wow.exe`（或 `.text` 段片段）→ 我直接生成并验证特征；
-2. 同家族（12.1.x）的 `CustomFileIdHook` / `LoadByFileId` 特征；
-3. x64dbg 断下的前 24 字节 + ID 所在寄存器。
+`discover --mapped` 会在内存映像的可执行节区里扫描指向 `DBFilesClient\`、
+`Interface\AddOns\` 等字符串的 RIP 相对 LEA，生成候选特征并标出是否唯一匹配。
+也可以用 `--anchors "你的字符串"` 换成你自己模组里的路径。
+
+可选但有用的小文件：`.build.info`（Product/Branch/CDN Key）、`Data` 目录树列表、
+12.0.7 listfile、私服 portal 地址。**请勿上传账号、登录器或反作弊相关文件。**
 
 ⚠ `discover` 给的是**候选**：唯一匹配不等于函数语义正确，首次进游戏前请用调试器或
 `wowmod.log` 确认该点确实是「按 FileDataID 打开」的入口。

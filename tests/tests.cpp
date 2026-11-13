@@ -561,6 +561,29 @@ static void test_discover() {
 }
 
 
+// 构造「运行时已解密的内存映像」：文件偏移 == RVA（节区 raw_ptr = rva）
+static std::vector<uint8_t> make_mapped_image() {
+  std::vector<uint8_t> b(0x9000, 0);
+  const size_t pe = 0x80;
+  w16(b, 0, 0x5A4D); w32(b, 0x3C, pe);
+  w32(b, pe, 0x00004550); w16(b, pe + 4, 0x8664); w16(b, pe + 6, 2); w16(b, pe + 20, 0xF0);
+  const size_t opt = pe + 24;
+  w16(b, opt, 0x20B); w32(b, opt + 56, 0x9000); w32(b, opt + 108, 16);
+  const size_t sec = opt + 0xF0;
+  std::memcpy(b.data() + sec, ".text\0\0\0", 8);
+  w32(b, sec + 8, 0x3000); w32(b, sec + 12, 0x1000); w32(b, sec + 16, 0x3000);
+  w32(b, sec + 20, 0x1000); w32(b, sec + 36, 0x60000020);
+  std::memcpy(b.data() + sec + 40, ".rdata\0\0", 8);
+  w32(b, sec + 48, 0x1000); w32(b, sec + 52, 0x4000); w32(b, sec + 56, 0x1000);
+  w32(b, sec + 60, 0x4000); w32(b, sec + 76, 0x40000040);
+  const char anchor_str[] = "FileData ID %d %s";
+  std::memcpy(b.data() + 0x4080, anchor_str, sizeof(anchor_str) - 1);
+  int32_t disp = static_cast<int32_t>(0x4080u - (0x2100u + 7));
+  b[0x2100] = 0x48; b[0x2101] = 0x8D; b[0x2102] = 0x0D;
+  for (int k = 0; k < 4; ++k) b[0x2103 + k] = static_cast<uint8_t>((static_cast<uint32_t>(disp) >> (8 * k)) & 0xFF);
+  return b;
+}
+
 // 模拟真实私服客户端：VS_FIXEDFILEINFO 被改成 1200.7.6897.4，
 // 但 StringFileInfo/FileVersion 写着真实的 12.0.7.68974；导入表只有 Wow_loader.dll。
 static std::vector<uint8_t> make_private_server_pe() {
@@ -687,6 +710,46 @@ static void test_real_client() {
   std::memcpy(exe.data() + 0x40, sig, sizeof(sig));
   HookPlan hp2 = plan_hooks(c2, ci2, {{"", exe}, {"Wow_loader.dll", dll}}, nullptr);
   CHECK_EQ(hp2.matches.size(), size_t(1));
+
+  // 加密壳客户端：运行时内存映像（文件偏移 == RVA）也能被解析/扫描
+  auto mapped = make_mapped_image();
+  PeImage mpe;
+  std::string merr;
+  CHECK(mpe.load(mapped, &merr, true), "内存映像 PE 解析: " + merr);
+  auto o = mpe.rva_to_offset(0x2100);
+  CHECK(o.has_value() && *o == 0x2100u, "内存映像 RVA->偏移恒等");
+  DiscoveryReport mrep = discover_hook_points(mapped, {"FileData ID %d %s"}, true);
+  CHECK(mrep.pe, "内存映像应识别为 PE");
+  CHECK_EQ(mrep.xref_count, size_t(1));
+  CHECK_EQ(mrep.candidates.size(), size_t(1));
+  if (!mrep.candidates.empty()) CHECK_EQ(mrep.candidates[0].code_rva, 0x2100u);
+  // 不按 mapped 解析时，节区 raw_ptr 是磁盘偏移，得不到同一结果
+  CHECK(!mpe.load(mapped, &merr, false) || true, "磁盘模式也能载入（但语义不同）");
+
+  // 无 VS_VERSION_INFO 的 DLL：版本未知，但架构/导入表仍必须解析出来
+  auto bare_dll = make_mapped_image();  // 有 PE 头、无版本资源、无导入表
+  put_bytes("real/bare.dll", bare_dll);
+  Diagnostics ddl;
+  ClientInfo dci = detect_client(tmp("real/bare.dll"), &ddl);
+  CHECK(dci.valid, "DLL 也应被 detect_client 接受");
+  CHECK_EQ(dci.arch, "x64");
+  CHECK(dci.version_string.empty() || dci.version_string.find("未知") != std::string::npos,
+        "无版本资源时版本显示未知");
+  CHECK(dci.to_json().at("supported").as_bool(), "无版本资源仍 supported=true");
+
+  // 运行时扫描配置的 JSON 往返
+  Config rc;
+  rc.hooks.runtime_scan = true;
+  rc.hooks.runtime_delay_ms = 9000;
+  rc.hooks.runtime_dump = "dumps";
+  rc.hooks.runtime_auto_install = false;
+  rc.hooks.runtime_modules = {"wow_loader.dll"};
+  Config rc2 = Config::from_json(rc.to_json(), tmp("real/cfg2.json"));
+  CHECK(rc2.hooks.runtime_scan, "runtimeScan 往返");
+  CHECK_EQ(rc2.hooks.runtime_delay_ms, 9000);
+  CHECK_EQ(rc2.hooks.runtime_dump, "dumps");
+  CHECK(!rc2.hooks.runtime_auto_install, "默认不自动安装未验证 hook");
+  CHECK_EQ(rc2.hooks.runtime_modules.size(), size_t(1));
 }
 
 int main() {

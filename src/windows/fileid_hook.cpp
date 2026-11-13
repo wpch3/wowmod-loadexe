@@ -171,36 +171,25 @@ DWORD WINAPI watcher(LPVOID) {
 
 }  // namespace
 
-bool install_fileid_hook(const HookPlan& plan, std::string* err) {
-  if (plan.matches.empty()) {
-    if (err) *err = "没有选中 hook 点";
-    return false;
-  }
+// 公共安装逻辑：给定模块名与 RVA，下硬件断点并接管为路径指针。
+bool setup_hook(const std::string& module, uint32_t rva, const std::string& id_register,
+                const std::string& label, std::string* err) {
+  if (rva == 0) { if (err) *err = "hook 点 RVA 为 0"; return false; }
 #if !(defined(_WIN64) || defined(_M_IX86) || defined(__i386__))
   if (err) *err = "硬件断点适配器目前仅支持 x86/x64 客户端";
   return false;
-#endif
-  const HookMatch& m = plan.matches.front();
-  if (m.rva == 0) {
-    if (err) *err = "特征匹配位置不在 PE 节区内，无法确定内存地址";
-    return false;
-  }
+#else
   HMODULE base = nullptr;
-  if (!m.module.empty()) {
-    // 私服壳 exe 只导入 Wow_loader.dll；hook 点可能在 DLL 里。
-    // 该 DLL 是静态导入的，进程启动时已加载，GetModuleHandleW 可直接取得基址。
-    std::wstring w = utf8_to_wide(m.module);
-    base = GetModuleHandleW(w.c_str());
-    if (!base) {
-      if (err) *err = "无法取得模块基址: " + m.module + "（DLL 尚未加载或名字不匹配）";
-      return false;
-    }
-  } else {
+  if (module.empty()) {
     base = GetModuleHandleW(nullptr);
+  } else {
+    std::wstring w = utf8_to_wide(module);
+    base = GetModuleHandleW(w.c_str());
+    if (!base) { if (err) *err = "无法取得模块基址: " + module; return false; }
   }
   if (!base) { if (err) *err = "无法取得客户端模块基址"; return false; }
-  g_hook_addr = reinterpret_cast<uint8_t*>(base) + m.rva;
-  g_id_register = to_lower(m.descriptor.id_register);
+  g_hook_addr = reinterpret_cast<uint8_t*>(base) + rva;
+  g_id_register = to_lower(id_register.empty() ? "rdx" : id_register);
 
   build_path_table();
   if (g_id_paths.empty()) {
@@ -211,18 +200,38 @@ bool install_fileid_hook(const HookPlan& plan, std::string* err) {
   HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
   auto add_veh = reinterpret_cast<AddVehFn>(GetProcAddress(k32, "AddVectoredExceptionHandler"));
   if (!add_veh) { if (err) *err = "AddVectoredExceptionHandler 不可用"; return false; }
-  g_veh = add_veh(1, veh_handler);
+  if (!g_veh) g_veh = add_veh(1, veh_handler);
   if (!g_veh) { if (err) *err = "注册 VEH 失败"; return false; }
 
-  g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!g_stop) g_stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   apply_debug_registers();
-  if (g_stop) g_watcher = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
+  if (g_stop && !g_watcher) g_watcher = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
 
   if (err) *err = "硬件断点已设在 0x" + to_hex(reinterpret_cast<uintptr_t>(g_hook_addr)) +
-                  " (模块 " + (m.module.empty() ? "主 exe" : m.module) + ", rva 0x" + to_hex(m.rva) +
-                  ", " + m.descriptor.name + ", id=" + g_id_register + ")";
+                  " (模块 " + (module.empty() ? "主 exe" : module) + ", rva 0x" + to_hex(rva) +
+                  ", " + label + ", id=" + g_id_register + ")";
   dlog("fileid hook installed: " + *err);
   return true;
+#endif
+}
+
+bool install_runtime_fileid_hook(const std::string& module, uint32_t rva,
+                                 const std::string& pattern, const std::string& id_register,
+                                 std::string* err) {
+  return setup_hook(module, rva, id_register, "runtime:" + pattern.substr(0, 40), err);
+}
+
+bool install_fileid_hook(const HookPlan& plan, std::string* err) {
+  if (plan.matches.empty()) {
+    if (err) *err = "没有选中 hook 点";
+    return false;
+  }
+  const HookMatch& m = plan.matches.front();
+  if (m.rva == 0) {
+    if (err) *err = "特征匹配位置不在 PE 节区内，无法确定内存地址";
+    return false;
+  }
+  return setup_hook(m.module, m.rva, m.descriptor.id_register, m.descriptor.name, err);
 }
 
 }  // namespace win

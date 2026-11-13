@@ -31,7 +31,7 @@ done
 CORE=("$OUT"/src_core_*.obj)
 DLL_SRC=("$OUT"/src_windows_runtime.cpp.obj "$OUT"/src_windows_overlay_dll.cpp.obj
          "$OUT"/src_windows_iat_hook.cpp.obj "$OUT"/src_windows_fs_hooks.cpp.obj
-         "$OUT"/src_windows_fileid_hook.cpp.obj)
+         "$OUT"/src_windows_fileid_hook.cpp.obj "$OUT"/src_windows_mem_scan.cpp.obj)
 
 echo "==> 链接 (2/3): wowmod_hook.dll / wowmod.exe"
 "$ZIG" c++ -target x86_64-windows-gnu -shared -o "$OUT/wowmod_hook.dll" \

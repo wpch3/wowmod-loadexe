@@ -49,6 +49,7 @@ if(WIN32 AND WOWMOD_BUILD_HOOK_DLL)
     src/windows/iat_hook.cpp
     src/windows/fs_hooks.cpp
     src/windows/fileid_hook.cpp
+    src/windows/mem_scan.cpp
   )
   target_link_libraries(wowmod_hook PRIVATE wowmod_core)
   target_compile_definitions(wowmod_hook PRIVATE UNICODE _UNICODE WOWMOD_WINDOWS WOWMOD_HOOK_DLL)

@@ -428,14 +428,16 @@ std::string suggest_pattern(const std::vector<uint8_t>& exe, size_t start, size_
 
 }  // namespace
 
-DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std::vector<std::string>& anchors) {
+DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std::vector<std::string>& anchors,
+                                     bool mapped) {
   DiscoveryReport rep;
   rep.anchors = anchors;
   rep.note = "候选由字符串引用自动推导，不等于目标函数；请用调试器/wowmod scan 核实，唯一匹配也不代表语义正确";
+  if (mapped) rep.note = "【内存映像】" + rep.note;
   if (exe.empty()) { rep.note = "exe 字节为空"; return rep; }
   PeImage pe;
   std::string peerr;
-  rep.pe = pe.load(exe, &peerr);
+  rep.pe = pe.load(exe, &peerr, mapped);
   if (rep.pe) rep.arch = pe.machine == 0x8664 ? "x64" : pe.machine == 0xAA64 ? "arm64"
                                               : pe.machine == 0x14C ? "x86" : "unknown";
 

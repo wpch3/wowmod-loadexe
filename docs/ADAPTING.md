@@ -53,23 +53,39 @@ hook 模式: fileid — 通过实际二进制能力探测选中 hook 点: my-ser
 
 `vfs` 不是错误，客户端照常启动。想让按 ID 读取的文件也生效，加一条特征。
 
-## -1. 先确认你要扫的是哪个模块（12.0.7 Firestorm 必读）
+## -1. 加密壳客户端：必须用运行时内存扫描（12.0.7 Firestorm 实测）
 
-`WoW 12.0.7 - Firestorm.exe` 的导入表**只有 `Wow_loader.dll` 的一个 ordinal** —— exe 是启动壳，
-游戏代码在那个 38 MB DLL 里。对它直接跑 discover 会得到 `xrefCount=0`，这是正确结论，不是失败。
+`WoW 12.0.7 - Firestorm.exe` 的导入表**只有 `Wow_loader.dll` 的一个 ordinal** —— exe 是启动壳。
+但上传 DLL 后查明，比"扫 DLL"更根本：
+
+| 文件 | `.text` 熵 | 说明 |
+| --- | --- | --- |
+| exe | 7.95–8.00 / 8 | **磁盘上是密文/压缩数据**，运行时解密；明文字符串只在 `.rdata` |
+| `wow_loader.dll` | 6.23–7.23 | 真实代码，但游戏字符串被剥光 |
+
+对两者跑 `discover` 都是 `xrefCount=0`，这是正确结论而非工具失败：**磁盘上不存在
+指向明文字符串的 RIP 相对引用**。解决办法是扫进程运行时解密后的内存：
 
 ```bash
-# 看导入表里的加载层 DLL
-wowmod detect --exe "D:/Midnight Open Beta/_midnight_/WoW 12.0.7 - Firestorm.exe"
+# 1) 在 Windows 上按 examples/12.0.7/wowmod.firestorm.json 启动一次
+#    （hooks.runtimeScan=true, runtimeDump="runtime-dumps"）
+#    → 生成 runtime-dumps/main.exe.img、wow_loader.dll.img、*.candidates.json
 
-# 对 DLL 跑（注意 --module，生成的特征会被限定在该模块）
-wowmod discover --exe "D:/Midnight Open Beta/_midnight_/wow_loader.dll" \
-                --emit hooks/patterns.discovered.json --module Wow_loader.dll
+# 2) 离线分析内存映像（--mapped = 文件偏移等于 RVA）
+wowmod discover --exe runtime-dumps/main.exe.img --mapped \
+                --emit hooks/patterns.runtime.json --module ""
+wowmod scan --exe runtime-dumps/main.exe.img --mapped \
+            --patterns hooks/patterns.runtime.json
 ```
 
-配置里加 `"hooks": {"scanTargets": ["Wow_loader.dll"]}`（或直接依赖 `detect` 自动从导入表收集），
-`plan` 会同时扫描主 exe 与 DLL；特征命中 DLL 时，Windows 注入层用
-`GetModuleHandleW(L"Wow_loader.dll") + rva` 下硬件断点，而不是误加到主 exe 基址上。
+`PeImage(mapped=true)` 会把节区的 `raw_ptr` 设成 `rva`，否则会按磁盘 PE 的
+`PointerToRawData` 读错位置。`--module` 决定断点加在哪个模块；空串是主 exe。
+
+配置里加 `"hooks": {"scanTargets": ["Wow_loader.dll"]}`，`plan` 会同时扫描主 exe 与 DLL；
+特征命中 DLL 时 Windows 注入层用 `GetModuleHandleW(L"Wow_loader.dll") + rva` 下断点。
+`runtimeAutoInstall` 默认 `false`：候选仍需调试器确认 ID 寄存器与返回值语义。
+
+**只有非加密客户端**才适用下面第 0 节的静态 `discover`；对本客户端请直接跳到内存扫描。
 
 ## 0. 先试试「零上传」的本地自动发现
 

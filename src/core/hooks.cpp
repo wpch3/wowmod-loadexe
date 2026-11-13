@@ -247,7 +247,7 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<H
   for (const auto& img : images) {
     PeImage pe;
     std::string peerr;
-    bool have_image = pe.load(img.bytes, &peerr);
+    bool have_image = pe.load(img.bytes, &peerr, img.mapped);
     for (const auto& d : ds) {
       if (!d.arch.empty() && !iequals(d.arch, ci.arch)) continue;
       if (!d.module.empty() && !iequals(d.module, img.module) &&
@@ -311,7 +311,7 @@ Json scan_report(const std::vector<HookImage>& images, const std::vector<HookDes
     mods.push(Json::make_string(label));
     PeImage pe;
     std::string peerr;
-    bool have_pe = pe.load(img.bytes, &peerr);
+    bool have_pe = pe.load(img.bytes, &peerr, img.mapped);
     for (const auto& d : ds) {
       if (!d.module.empty() && !iequals(d.module, img.module)) continue;
       auto all = d.pattern.find_all(img.bytes);
@@ -340,7 +340,8 @@ Json scan_report(const std::vector<HookImage>& images, const std::vector<HookDes
   return j;
 }
 
-Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& ds, Diagnostics* diag) {
+Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& ds, Diagnostics* diag,
+                 bool mapped) {
   Json j = Json::make_object();
   j.set("exe", Json::make_string(exe_path));
   std::vector<uint8_t> bytes;
@@ -351,7 +352,7 @@ Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>&
   }
   PeImage pe;
   std::string peerr;
-  bool have_pe = pe.load(bytes, &peerr);
+  bool have_pe = pe.load(bytes, &peerr, mapped);
   j.set("pe", Json::make_bool(have_pe));
   j.set("size", Json::make_number(static_cast<double>(bytes.size())));
   if (have_pe) {

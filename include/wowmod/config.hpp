@@ -58,6 +58,13 @@ struct HookSettings {
   std::vector<std::string> pattern_files;  // 支持多个特征文件，新增适配不必改原文件
   std::vector<std::string> scan_targets;   // 额外要扫描的模块（私服常见的 Wow_loader.dll 之类）
   bool allow_fallback = true;    // 找不到 hook 点时允许仅 VFS 启动
+
+  // 加密壳客户端（exe 的 .text 在磁盘上是密文）：注入后在进程内存里扫描解密后的代码。
+  bool runtime_scan = true;             // 静态找不到 hook 点时自动做运行时发现
+  int runtime_delay_ms = 4000;          // 等壳完成解密再扫（毫秒）
+  std::vector<std::string> runtime_modules;  // 空 = 主 exe + 导入的加载层 DLL
+  std::string runtime_dump;             // 非空 = 把内存映像写到该目录，供离线分析/发给我
+  bool runtime_auto_install = false;    // 默认只产出候选，不自动对未验证特征下断点
 };
 
 struct LogSettings {

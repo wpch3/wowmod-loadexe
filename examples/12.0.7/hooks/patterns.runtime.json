@@ -1,0 +1,10 @@
+{
+  // 由运行时内存扫描产出的候选特征（未验证前不要启用）。
+  // Windows 启动一次 -> runtime-dumps/*.img -> ：
+  //   wowmod discover --exe runtime-dumps/main.exe.img --mapped \
+  //                   --emit hooks/patterns.runtime.json --module ""
+  //   wowmod scan --exe runtime-dumps/main.exe.img --mapped \
+  //               --patterns hooks/patterns.runtime.json
+  // 用调试器确认「ID 寄存器 + 返回路径指针」后，再把条目复制到 patterns.json。
+  "patterns": []
+}

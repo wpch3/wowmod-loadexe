@@ -71,7 +71,9 @@ struct PeImage {
   std::vector<Section> sections;
   bool ok = false;
 
-  bool load(const std::vector<uint8_t>& data, std::string* err);
+  // mapped=true: data 是「已映射的内存映像」（文件偏移 == RVA，节区 raw_ptr=rva）。
+  // 用于分析运行时解密后的内存转储；磁盘文件请用 false。
+  bool load(const std::vector<uint8_t>& data, std::string* err, bool mapped = false);
   // 返回文件偏移，越界返回 nullopt。
   std::optional<uint32_t> rva_to_offset(uint32_t rva) const;
   std::optional<uint32_t> offset_to_rva(uint32_t off) const;

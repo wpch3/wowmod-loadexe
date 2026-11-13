@@ -66,6 +66,30 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 ---
 
+## ⚠ 真实客户端是加密壳：静态特征扫描无效
+
+上传的 `wow_loader.dll`（39,514,832 字节）查清了一个决定性事实：
+
+- exe 的 `.text`（53 MB）采样熵 **7.95–8.00**，零字节 0.4%，几乎没有正常 x64 函数序言
+  → 磁盘上是**密文/压缩数据**，运行时才由加载层解密；明文游戏字符串只留在 `.rdata`。
+- `wow_loader.dll` 的 `.text`（31 MB）是真实代码，但游戏字符串被剥光，
+  只剩 `eidolon-generator .../loader.pdb` 和 `.eid`/`.eidsig` 自定义节区。
+- 对两个文件跑 `wowmod discover` 都是 `xrefCount=0` —— 磁盘上不存在可引用的明文代码。
+
+**所以**：通用 VFS 层（IAT hook 文件 API）照常可用，但 FileDataID hook 点只能从
+**运行时已解密的进程内存**里找。已实现 `hooks.runtimeScan`：
+
+```
+注入 → 等 runtimeDelayMs 让壳解密 → VirtualQuery/ReadProcessMemory 转储模块内存
+     → 在「文件偏移==RVA」的映像上做 discover → 写出 *.img / *.candidates.json
+     → 默认只产出候选，不自动下断点
+wowmod discover --exe runtime-dumps/main.exe.img --mapped --emit hooks/patterns.runtime.json
+```
+
+详见 [examples/12.0.7/UPLOAD-CHECKLIST.md](examples/12.0.7/UPLOAD-CHECKLIST.md)。
+**还差一次 Windows 真机启动**（把 `runtime-dumps/` 发我）或用 x64dbg 断一次入口，
+才能把最后那条 hook 点定稿；不是再上传更多文件能解决的。
+
 ## 真实客户端：12.0.7 Firestorm（已验证）
 
 仓库 `main` 分支上上传的 `WoW 12.0.7 - Firestorm.exe`（73,463,504 字节）已在本地真实跑过：
@@ -80,13 +104,14 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 **关键发现**：这个 exe 是**启动壳** —— 导入表只有 `Wow_loader.dll` 的一个 ordinal。
 `wowmod discover` 在 56 MB `.text` 里能找到 `DBFilesClient`、`FileData ID %d %s` 等
-字符串，但 `xrefCount=0`（没有任何指向这些字符串的代码引用），因为游戏代码在那个
-38 MB 的 DLL 里。因此：
+明文字符串，但 `xrefCount=0`。DLL 上传后进一步确认：exe 的 `.text` 熵 8.00（密文）、
+DLL 的字符串被剥光，**两个文件的磁盘内容都没有可引用的明文代码**。因此不是"再对
+DLL 扫一遍"就能解决，而是必须走运行时内存扫描（见上一节）。已具备：
 
-- `hooks.scanTargets` / `--module Wow_loader.dll` 支持多模块扫描，
-  命中 DLL 时用 `GetModuleHandleW(L"Wow_loader.dll") + rva` 下断点；
-- 上传 `wow_loader.dll` 后对它跑 `discover` / `adapt` 即可完成最后一步；
-- 没上传之前，纯 VFS 模式照常启动、路径型覆盖照常生效。
+- `hooks.scanTargets` / `--module Wow_loader.dll` 多模块扫描，命中 DLL 时
+  用 `GetModuleHandleW(L"Wow_loader.dll") + rva` 下断点；
+- `hooks.runtimeScan` + `--mapped`：注入后转储解密内存并自动产出候选；
+- 纯 VFS 模式与磁盘是否加密无关，照常启动、路径型覆盖照常生效。
 
 完整清单见 [examples/12.0.7/UPLOAD-CHECKLIST.md](examples/12.0.7/UPLOAD-CHECKLIST.md)，
 按真实路径填好的配置见 [examples/12.0.7/wowmod.firestorm.json](examples/12.0.7/wowmod.firestorm.json)。
@@ -244,7 +269,12 @@ node web/server.js        # http://localhost:3000
     "mode": "auto",            // auto | vfs | fileid | off
     "patterns": ["hooks/patterns.json", "hooks/patterns.adapted.json"],  // 可写单个字符串或多个文件
     "scanTargets": ["Wow_loader.dll"],  // 私服壳 exe：连同导入的加载层 DLL 一起扫描
-    "allowFallback": true      // 找不到 hook 点仍以 VFS 启动
+    "allowFallback": true,     // 找不到 hook 点仍以 VFS 启动
+    "runtimeScan": true,       // 加密壳：等解密后扫描进程内存，产出候选
+    "runtimeDelayMs": 4000,
+    "runtimeDump": "runtime-dumps",
+    "runtimeModules": ["wow_loader.dll", ""],
+    "runtimeAutoInstall": false // 候选未经调试器确认前不自动下断点
   },
   "log": { "file": "wowmod.log", "verbose": false }
 }

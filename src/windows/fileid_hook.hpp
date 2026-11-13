@@ -15,6 +15,12 @@ namespace win {
 // 返回是否成功安装；失败时调用方继续用纯 VFS 模式，绝不阻止启动。
 bool install_fileid_hook(const HookPlan& plan, std::string* err);
 
+// 运行时内存扫描发现 hook 点后直接安装（module 为空 = 主 exe）。
+// 特征来自运行时的实际内存，不依赖磁盘文件是否被加密。
+bool install_runtime_fileid_hook(const std::string& module, uint32_t rva,
+                                 const std::string& pattern, const std::string& id_register,
+                                 std::string* err);
+
 }  // namespace win
 }  // namespace wowmod
 #endif

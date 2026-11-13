@@ -60,6 +60,7 @@ struct HookMatch {
 struct HookImage {
   std::string module;              // 空 = 主 exe；否则为 DLL 文件名
   std::vector<uint8_t> bytes;
+  bool mapped = false;            // true = 运行时内存映像（文件偏移 == RVA）
 };
 
 struct HookPlan {
@@ -85,7 +86,8 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<u
 HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<HookImage>& images, Diagnostics* diag = nullptr);
 
 // 扫描并报告所有特征的匹配情况（wowmod scan 用）。
-Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& descriptors, Diagnostics* diag = nullptr);
+Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& descriptors,
+                 Diagnostics* diag = nullptr, bool mapped = false);
 // 多模块版本：壳 exe + 加载层 DLL 一起报告。
 Json scan_report(const std::vector<HookImage>& images, const std::vector<HookDescriptor>& descriptors, Diagnostics* diag = nullptr);
 

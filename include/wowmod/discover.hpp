@@ -84,7 +84,9 @@ bool write_pattern_descriptor(const std::string& out_path, const std::string& na
                               std::string* err = nullptr, const std::string& module = "");
 
 std::vector<std::string> default_anchors();
+// mapped=true 时 exe_bytes 是运行时内存映像（文件偏移 == RVA），用于加密壳客户端。
 DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe_bytes,
-                                     const std::vector<std::string>& anchors);
+                                     const std::vector<std::string>& anchors,
+                                     bool mapped = false);
 
 }  // namespace wowmod

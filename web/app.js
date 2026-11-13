@@ -236,8 +236,9 @@ $('addPatternBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, true); }
 });
 
-const DISCOVER_NOTE = '真实 12.0.7 Firestorm 客户端的 exe 是启动壳（只导入 Wow_loader.dll）。'
-  + '若 xrefCount=0，请对 wow_loader.dll 单独运行 discover/adapt，而不是对 exe。';
+const DISCOVER_NOTE = '真实 12.0.7 Firestorm 的 exe 磁盘 .text 是加密的（熵 8.00），DLL 字符串被剥光，'
+  + '静态扫描必然 xrefCount=0。请在 Windows 启动一次，让 hooks.runtimeScan 转储解密后的内存，'
+  + '再用 wowmod discover --exe runtime-dumps/main.exe.img --mapped 分析。';
 
 $('discoverBtn').addEventListener('click', async () => {
   const out = $('discoverOut');

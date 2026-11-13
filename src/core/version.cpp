@@ -184,7 +184,7 @@ bool scan_version_signature(const std::vector<uint8_t>& b, ClientInfo* out) {
 
 }  // namespace
 
-bool PeImage::load(const std::vector<uint8_t>& data, std::string* err) {
+bool PeImage::load(const std::vector<uint8_t>& data, std::string* err, bool mapped) {
   bytes = data;
   ok = false;
   bool okr = true;
@@ -231,6 +231,12 @@ bool PeImage::load(const std::vector<uint8_t>& data, std::string* err) {
     uint32_t chars = rd32(bytes, sec_off + 36, &okr);
     s.executable = (chars & 0x20000000u) != 0;  // IMAGE_SCN_MEM_EXECUTE
     if (!okr) break;
+    if (mapped) {
+      // 内存映像里节区就在它的 RVA 上，文件偏移 == RVA。
+      // 用 min(vsize, raw_size) 作为可读范围，避免把未提交的虚地址当数据读。
+      s.raw_ptr = s.rva;
+      s.raw_size = std::min(s.vsize, s.raw_size);
+    }
     sections.push_back(s);
   }
   ok = true;
@@ -351,7 +357,6 @@ std::vector<std::string> read_import_dlls(const PeImage& pe) {
   };
   size_t pe_off = b.size() > 0x40 ? u32(0x3C) : 0;
   if (pe_off + 24 > b.size() || u32(pe_off) != 0x00004550u) return out;
-  uint16_t opt_size = static_cast<uint16_t>(b[pe_off + 20] | (b[pe_off + 21] << 8));
   size_t opt = pe_off + 24;
   uint16_t magic = static_cast<uint16_t>(b[opt] | (b[opt + 1] << 8));
   size_t dir_off = magic == 0x10B ? opt + 96 : opt + 112;
@@ -475,7 +480,8 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector
   // Windows 盘符路径（D:/...）在 Linux 上做 dry-run 校验时不能再被 fs::absolute 拼到 cwd 上。
   std::string input = is_absolute_path(path) ? normalize_path(path) : absolute_path(path);
   std::string exe;
-  if (file_exists(input) && iequals(file_extension(input), ".exe")) exe = input;
+  std::string ext = file_extension(input);
+  if (file_exists(input) && (iequals(ext, ".exe") || iequals(ext, ".dll"))) exe = input;
   else if (dir_exists(input)) {
     auto exes = discover_client_exes(input);
     if (!exes.empty()) exe = exes.front();
@@ -493,11 +499,15 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector
       if (exe_bytes_out) *exe_bytes_out = bytes;
       ClientInfo pe_info;
       std::string pe_err;
-      if (parse_pe_metadata(bytes, &pe_info, &pe_err)) {
+      // parse_pe_metadata 的返回值只表示「是否读到版本资源」；架构与导入表
+      // 即便在没有 VS_VERSION_INFO 的 DLL 上也已经解析好了，不能丢弃。
+      bool has_version = parse_pe_metadata(bytes, &pe_info, &pe_err);
+      if (!pe_info.arch.empty()) ci.arch = pe_info.arch;
+      ci.companion_dlls = pe_info.companion_dlls;
+      if (has_version) {
         ci.major = pe_info.major; ci.minor = pe_info.minor; ci.patch = pe_info.patch; ci.build = pe_info.build;
-        ci.version_string = pe_info.version_string; ci.arch = pe_info.arch;
-        ci.companion_dlls = pe_info.companion_dlls;
-      } else if (diag) diag->warn("detect", "PE 版本资源读取失败: " + pe_err + "（不影响启动）");
+        ci.version_string = pe_info.version_string;
+      } else if (diag) diag->warn("detect", "未读到 PE 版本资源（不影响启动，版本显示为未知）: " + pe_err);
       // 私服的 "Wow_loader.dll" 这类加载层：exe 只是壳，特征扫描要覆盖到 DLL。
       for (const auto& dll : ci.companion_dlls) {
         std::string lp = join_path(ci.game_dir, dll);

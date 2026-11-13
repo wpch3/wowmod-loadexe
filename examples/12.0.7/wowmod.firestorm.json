@@ -2,19 +2,22 @@
 // 真实路径: D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe
 // 把本目录整个复制到 _midnight_ 下（或改 client.exe / client.gameDir）。
 //
-// ⚠ 这个客户端的 exe 是「壳」：导入表里只有 Wow_loader.dll (ordinal #1)，
-//   真正的游戏代码和 CASC 文件读取逻辑在那个 38 MB 的 DLL 里。
-//   已实测：exe 的 .text 里能找到 DBFilesClient / "FileData ID %d %s" 等字符串，
-//   但没有任何指向它们的 RIP 相对代码引用 —— 所以 hook 特征要在 wow_loader.dll 上找。
-//   没有该 DLL 时本配置仍能以纯 VFS 模式启动，路径型覆盖照常生效。
+// ⚠ 已用上传的 exe + wow_loader.dll 实测，结论：
+//   1) exe 只导入 Wow_loader.dll ordinal#1；exe 的 .text（53 MB）熵 8.00、几乎没有
+//      正常函数序言 —— 磁盘上是【加密/压缩的】，运行时才由加载层解密到内存。
+//   2) wow_loader.dll 的 .text（31 MB）是真实代码，但游戏字符串被剥光。
+//   3) 因此静态扫磁盘文件找不到 hook 点（这是文件本身的性质，不是加载器的 bug）。
+//
+// 解决方式 = 运行时内存扫描：注入后等壳解密，把模块内存映像转储出来并自动做
+// 字符串/引用发现，产出候选特征。默认只产出候选、不自动下断点（避免误 hook）。
 {
   "version": 1,
   "client": {
     "exe": "D:/Midnight Open Beta/_midnight_/WoW 12.0.7 - Firestorm.exe",
     "gameDir": "D:/Midnight Open Beta/_midnight_",
-    "version": "12.0.7.68974",     // 仅展示；实际由 exe 资源自动读出，不是支持性判断
-    "build": 68974,                 // 仅用于 when 过滤
-    "portal": "",                   // ← 填你的私服地址（或让我从 WTF/Config.wtf 读）
+    "version": "12.0.7.68974",
+    "build": 68974,
+    "portal": "",                   // ← 填你的私服地址
     "realmlist": "",
     "args": [],
     "clearCache": false
@@ -35,12 +38,18 @@
     "mode": "auto",
     "patterns": [
       "hooks/patterns.json",
-      "hooks/patterns.adapted.json"
+      "hooks/patterns.adapted.json",
+      "hooks/patterns.runtime.json"
     ],
-    // 附加扫描模块：会自动把导入表里的 Wow_loader.dll 也扫进来。
-    // 拿到 DLL 后用 --module Wow_loader.dll 生成/adapt 特征即可。
-    "scanTargets": ["Wow_loader.dll"],
-    "allowFallback": true
+    "scanTargets": ["wow_loader.dll"],
+    "allowFallback": true,
+
+    // 加密壳适配：磁盘找不到 hook 点时，自动扫描运行时解密后的内存
+    "runtimeScan": true,
+    "runtimeDelayMs": 4000,          // 等壳解密的毫秒数，按机器调整
+    "runtimeDump": "runtime-dumps",  // 内存映像 + 候选特征写到这里，可发给我做离线确认
+    "runtimeModules": ["wow_loader.dll", ""],  // 空串 = 主 exe
+    "runtimeAutoInstall": false      // 改成 true 才会对最佳唯一候选自动下硬件断点（需先核实语义）
   },
   "log": { "file": "wowmod.log", "verbose": true }
 }
