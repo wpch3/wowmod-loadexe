@@ -39,6 +39,31 @@ Get-ChildItem -Name wowmod*                   # 看看当前目录有没有
 
    路径带引号时 PowerShell 要用 `&` 调用运算符。
 
+## 从源码文件夹运行：一条龙复制粘贴（对应仓库根目录 `RUN.txt`）
+
+如果你已经在资源管理器里看到 `wowmod.exe` / `wowmod_hook.dll` 和 `examples\` 在一起
+（截图里那种），**就在那个文件夹里打开 PowerShell**：点资源管理器地址栏，删掉路径，
+输入 `powershell` 回车。然后整段复制：
+
+```powershell
+Unblock-File .\wowmod.exe, .\wowmod_hook.dll
+.\wowmod.exe version
+Test-Path "D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe"
+.\wowmod.exe detect   --config "examples\12.0.7\wowmod.firestorm.json"
+.\wowmod.exe validate --config "examples\12.0.7\wowmod.firestorm.json"
+.\wowmod.exe plan     --config "examples\12.0.7\wowmod.firestorm.json"
+.\wowmod.exe launch   --config "examples\12.0.7\wowmod.firestorm.json"
+```
+
+预期：`version` → `wowmod-loadexe 1.0.0`；`Test-Path` → `True`；
+`detect` → `12.0.7.68974 / x64 / 加载层 DLL: Wow_loader.dll / 已支持`；
+`validate` → `校验通过`；`plan` → `hook 模式: vfs`（加密壳正常回退）。
+`launch` 会真的启动游戏，别再手动双击 exe。
+
+模组文件放 `examples\12.0.7\mods\models\`，里面路径就是游戏内路径；
+按 FileDataID 覆盖写 `examples\12.0.7\mappings\listfile.txt`（`fileId;filePath`）。
+放完再跑 `plan` 看覆盖表条数。完整说明见仓库根目录 **`RUN.txt`**。
+
 ## 方式 0：解压到游戏目录（最省事，推荐你用这个）
 
 你现在 PowerShell 停在 `D:\Midnight Open Beta\_midnight_>`，所以 `wowmod.exe`

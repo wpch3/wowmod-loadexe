@@ -1,0 +1,93 @@
+wowmod 12.0.7 — 从源码文件夹运行（复制粘贴版）
+================================================
+
+适用：你已经在资源管理器里看到 wowmod.exe (984 KB) 和 wowmod_hook.dll (983 KB)
+      和 examples\、docs\ 等文件夹在一起。
+
+第 0 步：在【这个文件夹】里打开 PowerShell
+------------------------------------------
+最简单：点资源管理器地址栏，把里面那一串路径删掉，输入 powershell 然后回车。
+PowerShell 打开后，提示符应该显示这个文件夹路径。
+
+如果 PowerShell 是从别处打开的，先切过来（注意路径有两层同名文件夹）：
+
+  cd "C:\Users\Administrator\Downloads\Compressed\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe"
+
+确认一下：
+
+  Get-Location
+  Test-Path .\wowmod.exe            # 必须是 True
+  Test-Path .\wowmod_hook.dll        # 必须是 True
+
+第 1 步：解锁 + 看版本
+------------------------------------------
+  Unblock-File .\wowmod.exe, .\wowmod_hook.dll
+  .\wowmod.exe version
+
+预期输出：wowmod-loadexe 1.0.0 (通用版本 / version-agnostic)
+
+第 2 步：确认游戏路径（很重要）
+------------------------------------------
+  Test-Path "D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe"
+
+必须是 True。如果是 False，用记事本打开
+  examples\12.0.7\wowmod.firestorm.json
+把 client.exe / client.gameDir 改成你机器上的真实路径。
+
+第 3 步：四条检查命令（都不启动游戏）
+------------------------------------------
+  .\wowmod.exe detect   --config "examples\12.0.7\wowmod.firestorm.json"
+  .\wowmod.exe validate --config "examples\12.0.7\wowmod.firestorm.json"
+  .\wowmod.exe plan     --config "examples\12.0.7\wowmod.firestorm.json"
+  .\wowmod.exe scan     --config "examples\12.0.7\wowmod.firestorm.json"
+
+预期：
+  detect    → 版本 12.0.7.68974 (build 68974) / 架构 x64 /
+              加载层 DLL: Wow_loader.dll / 支持状态: 已支持（无版本白名单）
+  validate  → 校验通过。
+  plan      → 覆盖表 + hook 模式: vfs（加密壳客户端的正常回退）
+  scan      → 当前没有特征时报告 0 条，正常
+
+第 4 步：放模组文件（想替换模型时）
+------------------------------------------
+模组包路径 = examples\12.0.7\mods\models\
+里面的相对路径就是游戏内路径，例如：
+
+  examples\12.0.7\mods\models\World\Model\Example\Dragon.m2
+  examples\12.0.7\mods\models\Interface\AddOns\MyAddon\MyAddon.toc
+
+按 FileDataID 覆盖时，在 examples\12.0.7\mappings\listfile.txt 里写：
+
+  123456;World/Model/Example/Dragon.m2
+
+放完再跑一次 plan，覆盖表条数会从 0 变成对应数量。
+（示例包里只有 README.md，所以第一次 plan 显示 0 条是正常的。）
+
+第 5 步：启动游戏（这一步会真的启动客户端）
+------------------------------------------
+  .\wowmod.exe launch --config "examples\12.0.7\wowmod.firestorm.json"
+
+不要另外手动双击游戏 exe。launcher 会：
+  - CREATE_SUSPENDED 启动客户端
+  - 远程 LoadLibraryW 注入 wowmod_hook.dll
+  - 装好 IAT 文件 API hook / 内存 VFS 后再恢复主线程
+
+成功后 examples\12.0.7\runtime-dumps\ 会生成解密后的内存映像和候选特征，
+把这个文件夹发回即可完成最后一条 FileDataID hook 点的确认。
+
+只想干跑不启动：  .\wowmod.exe launch --dry-run --config "examples\12.0.7\wowmod.firestorm.json"
+
+排错速查
+------------------------------------------
+无法将"wowmod"项识别为…        → 少了 .\，写 .\wowmod.exe
+无法将".\wowmod.exe"项识别为…  → 不在正确目录；Test-Path 检查一下
+找不到 wowmod_hook.dll          → 两个文件必须同一目录
+找不到客户端 exe                → 第 2 步路径不对，改配置
+LoadLibraryW 返回 NULL          → 位数不匹配（x64 客户端必须用 x64 DLL）
+缺 api-ms-win-crt-*.dll        → 装 VC++ 2015–2022 x64 运行库
+被 SmartScreen 拦              → Unblock-File .\wowmod.exe, .\wowmod_hook.dll
+
+更详细的说明：docs\WINDOWS-QUICKSTART.md
+x64dbg 手工解密：docs\X64DBG.md
+
+仅用于你有权修改/调试的私服或离线环境。

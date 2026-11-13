@@ -84,7 +84,8 @@ ZIP（或单独下这两个文件放到根目录，两者必须同目录）就�
 [`wowmod-12.0.7-game-dir.zip`](https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod-12.0.7-game-dir.zip)
 解压到游戏目录，然后 `.\wowmod.exe launch --config ".\wowmod.firestorm.json"`（配置在根目录）。
 
-完整步骤与排错见 **[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
+一步步复制粘贴的命令见仓库根目录 **[RUN.txt](RUN.txt)** 与
+**[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
 x64dbg 手工解密/定位见 **[docs/X64DBG.md](docs/X64DBG.md)**。
 
 ## ⚠ 真实客户端是加密壳：静态特征扫描无效
