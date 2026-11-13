@@ -230,7 +230,7 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<H
   HookPlan plan;
   std::string mode = to_lower(cfg.hooks.mode);
   if (mode == "off") { plan.mode = "off"; plan.reason = "配置里 hooks.mode=off"; return plan; }
-  if (mode == "vfs") { plan.reason = "配置里 hooks.mode=vfs（仅使用通用 VFS 覆盖）"; return plan; }
+  if (mode == "vfs") { plan.reason = "配置里 hooks.mode=vfs（选择旧版 VFS 路径；不代表目标客户端资源覆盖已验证）"; return plan; }
 
   std::vector<HookDescriptor> ds;
   std::vector<std::string> files = cfg.hooks.pattern_files;
@@ -240,9 +240,9 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<H
     ds.insert(ds.end(), part.begin(), part.end());
   }
   if (files.empty() && diag)
-    diag->info("hooks", "没有配置任何特征文件（纯 VFS 模式，任何版本可用）");
+    diag->info("hooks", "没有配置任何特征文件（旧版 VFS 路径；未安装 FileDataID hook）");
   if (ds.empty()) {
-    plan.reason = "没有可用的 hook 特征，自动退化为纯 VFS 覆盖（不修改客户端代码，任何版本可用）";
+    plan.reason = "没有可用的 hook 特征；旧版流程将使用 VFS-only 路径，CASC FileDataID 资源覆盖未验证";
     if (diag) diag->info("hooks", plan.reason);
     return plan;
   }

@@ -543,14 +543,14 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector
   }
   if (ci.version_string.empty()) {
     ci.version_string = "未知版本";
-    ci.notes.push_back("未能读取版本号 —— 加载器不依赖版本号，所有功能照常可用");
+    ci.notes.push_back("未能读取版本号；不会仅因版本号拒绝启动，但资源读取 hook 能力尚未验证");
   } else if (ci.build == 0) {
-    ci.notes.push_back("版本串里没有 build 号（例如只写了 12.0.7）—— 不影响任何功能；可在配置的 client.build 里补一个供 when 过滤使用");
+    ci.notes.push_back("版本串里没有 build 号（例如只写了 12.0.7）；这不验证资源 hook，client.build 仅供可选过滤使用");
   }
   ci.storage = detect_storage_layout(ci.game_dir, &ci.data_dir);
   detect_server_settings(ci.game_dir, &ci);
-  if (ci.storage == "unknown") ci.notes.push_back("未探测到 CASC/MPQ 目录；通用 VFS 覆盖仍然生效");
-  ci.notes.push_back("无任何版本白名单：本客户端被视为【已支持】");
+  if (ci.storage == "unknown") ci.notes.push_back("未探测到 CASC/MPQ 目录；不能据此判断客户端资源读取或替换能力");
+  ci.notes.push_back("版本检测不会按 build 白名单拒绝客户端；实际资源替换能力仍需逐客户端验证");
   return ci;
 }
 
@@ -570,7 +570,11 @@ Json ClientInfo::to_json() const {
   j.set("arch", Json::make_string(arch));
   j.set("storage", Json::make_string(storage));
   j.set("portal", Json::make_string(portal));
+  // Backward-compatible version-gate field only; it is not a runtime capability result.
   j.set("supported", Json::make_bool(true));
+  j.set("versionGatePassed", Json::make_bool(true));
+  j.set("supportStatus", Json::make_string("not-verified"));
+  j.set("capabilitiesVerified", Json::make_bool(false));
   Json dll_arr = Json::make_array();
   for (const auto& d : companion_dlls) dll_arr.push(Json::make_string(d));
   j.set("companionDlls", dll_arr);
@@ -602,7 +606,7 @@ std::string ClientInfo::display() const {
      << "Data: " << data_dir << "\n"
      << "portal: " << (portal.empty() ? "(未设置)" : portal) << "\n";
   if (!companion_dlls.empty()) os << "加载层 DLL: " << join(companion_dlls, ", ") << "\n";
-  os << "支持状态: 已支持（无版本白名单）";
+  os << "版本限制: 未设置 build 白名单；资源 hook / 替换能力: 未验证";
   return os.str();
 }
 

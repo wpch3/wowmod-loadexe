@@ -1,5 +1,95 @@
-# 换成你的 12.0.7 客户端对应的 listfile：https://github.com/wowdev/wow-listfile
-# 格式: fileId;filePath
-# 有了它，按路径摆放的模组会自动获得 FileDataID，CASC 客户端也能按 ID 覆盖。
-# 示例（请替换成 12.0.7 的真实 ID）：
-# 123456;World/Model/Example/Dragon.m2
+# Partial map only for the included Blood Elf Female HD texture pack; NOT a full 12.0.7 listfile.
+# The same asset pack was submitted to origin/main and copied into this branch.
+# Asset commit: wpch3/wowmod-loadexe 86e058794ff405f96e81f42f6c1efff52a8c6702 (89 BLP files).
+# Path/ID source commit: wowdev/wow-listfile d0404f4db2a8037b6863734fd744bba8570b8bed.
+# These path mappings are community-listfile results; local Firestorm CASC presence is not yet verified.
+# Format: FileDataID;game-relative-path
+3500114;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500114.blp
+3500115;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500115.blp
+3500116;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500116.blp
+3500117;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500117.blp
+3500118;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500118.blp
+3500119;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500119.blp
+3500120;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500120.blp
+3500121;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500121.blp
+3500122;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500122.blp
+3500123;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500123.blp
+3500124;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500124.blp
+3500125;Character/BloodElf/Female/bloodelffemale_hd_skin_color_3500125.blp
+1098179;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_00_hd.blp
+1098180;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_01_hd.blp
+1098181;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_02_hd.blp
+1098182;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_03_hd.blp
+1098183;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_04_hd.blp
+1098184;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_05_hd.blp
+1098185;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_06_hd.blp
+1098186;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_07_hd.blp
+1098187;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_08_hd.blp
+1098188;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_09_hd.blp
+1098190;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_100_hd.blp
+1098191;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_101_hd.blp
+1098192;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_102_hd.blp
+1098193;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_103_hd.blp
+1098194;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_104_hd.blp
+1098195;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_105_hd.blp
+1098189;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_10_hd.blp
+1098196;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_11_hd.blp
+1098197;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_12_hd.blp
+1280983;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_13_hd.blp
+1280984;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_14_hd.blp
+1280985;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_15_hd.blp
+1280986;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_16_hd.blp
+1282360;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_17_hd.blp
+1282361;Character/BloodElf/Female/bloodelffemalenakedpelvisskin00_18_hd.blp
+1098198;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_00_hd.blp
+1098199;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_01_hd.blp
+1098200;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_02_hd.blp
+1098201;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_03_hd.blp
+1098202;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_04_hd.blp
+1098203;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_05_hd.blp
+1098204;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_06_hd.blp
+1098205;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_07_hd.blp
+1098206;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_08_hd.blp
+1098207;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_09_hd.blp
+1098209;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_100_hd.blp
+1098210;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_101_hd.blp
+1098211;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_102_hd.blp
+1098212;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_103_hd.blp
+1098213;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_104_hd.blp
+1098214;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_105_hd.blp
+1098208;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_10_hd.blp
+1098215;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_11_hd.blp
+1098216;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_12_hd.blp
+1280987;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_13_hd.blp
+1280988;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_14_hd.blp
+1280989;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_15_hd.blp
+1280990;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_16_hd.blp
+1282362;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_17_hd.blp
+1282363;Character/BloodElf/Female/bloodelffemalenakedtorsoskin00_18_hd.blp
+1098217;Character/BloodElf/Female/bloodelffemaleskin00_00_hd.blp
+1098218;Character/BloodElf/Female/bloodelffemaleskin00_01_hd.blp
+1098219;Character/BloodElf/Female/bloodelffemaleskin00_02_hd.blp
+1098220;Character/BloodElf/Female/bloodelffemaleskin00_03_hd.blp
+1098221;Character/BloodElf/Female/bloodelffemaleskin00_04_hd.blp
+1098222;Character/BloodElf/Female/bloodelffemaleskin00_05_hd.blp
+1098223;Character/BloodElf/Female/bloodelffemaleskin00_06_hd.blp
+1098224;Character/BloodElf/Female/bloodelffemaleskin00_07_hd.blp
+1098225;Character/BloodElf/Female/bloodelffemaleskin00_08_hd.blp
+1098226;Character/BloodElf/Female/bloodelffemaleskin00_09_hd.blp
+1098228;Character/BloodElf/Female/bloodelffemaleskin00_100_hd.blp
+1098229;Character/BloodElf/Female/bloodelffemaleskin00_101_hd.blp
+1098230;Character/BloodElf/Female/bloodelffemaleskin00_102_hd.blp
+1098231;Character/BloodElf/Female/bloodelffemaleskin00_103_hd.blp
+1098232;Character/BloodElf/Female/bloodelffemaleskin00_104_hd.blp
+1098233;Character/BloodElf/Female/bloodelffemaleskin00_105_hd.blp
+1995447;Character/BloodElf/Female/bloodelffemaleskin00_106_hd.blp
+1098227;Character/BloodElf/Female/bloodelffemaleskin00_10_hd.blp
+1098234;Character/BloodElf/Female/bloodelffemaleskin00_11_hd.blp
+1098235;Character/BloodElf/Female/bloodelffemaleskin00_12_hd.blp
+1280991;Character/BloodElf/Female/bloodelffemaleskin00_13_hd.blp
+1280992;Character/BloodElf/Female/bloodelffemaleskin00_14_hd.blp
+1280993;Character/BloodElf/Female/bloodelffemaleskin00_15_hd.blp
+1280994;Character/BloodElf/Female/bloodelffemaleskin00_16_hd.blp
+1282364;Character/BloodElf/Female/bloodelffemaleskin00_17_hd.blp
+1282365;Character/BloodElf/Female/bloodelffemaleskin00_18_hd.blp
+1348719;Character/BloodElf/Female/bloodelffemaleskin00_25_hd.blp

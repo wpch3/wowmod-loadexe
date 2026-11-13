@@ -144,6 +144,9 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
     if (!s.empty()) c.hooks.runtime_modules.push_back(s);
   }
 
+  const Json& arctium = j.at("arctium");
+  c.arctium.files_dir = resolve(c.base_dir, arctium.at("filesDir").as_string());
+
   const Json& lg = j.at("log");
   c.log.file = resolve(c.base_dir, lg.at("file").as_string());
   c.log.verbose = lg.at("verbose").as_bool(false);
@@ -226,6 +229,11 @@ Json Config::to_json() const {
     h.set("runtimeModules", rm);
   }
   j.set("hooks", h);
+  if (!arctium.files_dir.empty()) {
+    Json a = Json::make_object();
+    a.set("filesDir", Json::make_string(arctium.files_dir));
+    j.set("arctium", a);
+  }
   Json lg = Json::make_object();
   lg.set("file", Json::make_string(log.file));
   lg.set("verbose", Json::make_bool(log.verbose));
@@ -268,12 +276,12 @@ bool validate_config(const Config& cfg, Diagnostics* diag) {
     else diag->info(where, msg);
   };
   bool ok = true;
-#ifndef _WIN32
-  // 在非 Windows 平台上校验一份 Windows 配置（如 12.0.7 Firestorm 的真实路径）时，
-  // D:/... 不可能存在。这是跨机预览，不该报成配置错误。
   auto win_path = [](const std::string& p) {
     return p.size() >= 3 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':' && p[2] == '/';
   };
+#ifndef _WIN32
+  // 在非 Windows 平台上校验一份 Windows 配置（如 12.0.7 Firestorm 的真实路径）时，
+  // D:/... 不可能存在。这是跨机预览，不该报成配置错误。
   const bool cross_os = win_path(cfg.client.exe) || win_path(cfg.client.game_dir);
   if (cross_os)
     d(Level::Info, "client", "检测到 Windows 盘符路径；当前在非 Windows 平台上做校验，跳过路径存在性检查（到 Windows 上直接可用）");
@@ -291,6 +299,19 @@ bool validate_config(const Config& cfg, Diagnostics* diag) {
     d(Level::Error, "client.gameDir", "目录不存在: " + cfg.client.game_dir); ok = false;
   }
 #endif
+  if (!cfg.arctium.files_dir.empty()) {
+#ifndef _WIN32
+    if (win_path(cfg.arctium.files_dir)) {
+      d(Level::Info, "arctium.filesDir", "检测到 Windows 盘符路径；当前平台跳过本地目录检查");
+    } else if (!dir_exists(cfg.arctium.files_dir)) {
+      d(Level::Error, "arctium.filesDir", "Arctium 松散文件目录不存在: " + cfg.arctium.files_dir); ok = false;
+    }
+#else
+    if (!dir_exists(cfg.arctium.files_dir)) {
+      d(Level::Error, "arctium.filesDir", "Arctium 松散文件目录不存在: " + cfg.arctium.files_dir); ok = false;
+    }
+#endif
+  }
   if (cfg.client.exe.empty() && cfg.client.game_dir.empty()) {
     d(Level::Warn, "client", "未指定 exe / gameDir；将使用启动器所在目录自动发现客户端");
   }

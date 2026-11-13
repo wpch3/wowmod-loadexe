@@ -1,9 +1,7 @@
 # 构建
 
-> **只想运行、不想编译？** 当前分支已带预编译的 x64 `wowmod.exe` + `wowmod_hook.dll`，
-> 重新下载分支 ZIP 即可；PowerShell 里必须用 `.\wowmod.exe`。
-> 见 [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md)。
-> 本地重新生成：`./scripts/build-windows-release.sh`（产物在 `dist/`，用 zig 交叉编译）。
+> 仓库附带的 x64 `wowmod.exe` / `wowmod_hook.dll` 是此前版本的预编译文件，可能不包含本分支的 `arctium-plan`。
+> 请按本页从当前源码重新构建。即使编译成功，Firestorm 12.0.7 的 Arctium 运行时 hook 仍未实现/验证；见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。
 
 ## 依赖
 
@@ -18,12 +16,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ./build/wowmod --help
+./build/wowmod arctium-plan --config examples/12.0.7/wowmod.firestorm.json
 ```
 
-这个平台上 `detect / validate / plan / scan / init` 全部可用，只有 `launch` 会给出明确提示
-（客户端本身是 Windows PE，注入只能在 Windows 做）。
+这个平台可编译、运行 Arctium 映射预检和核心单元测试。它不能对 Firestorm 客户端做 Windows 进程内 hook 或游戏内验证。
 
-## Windows（完整功能）
+## Windows 构建（仅说明可编译产物，不代表运行时替换已验证）
 
 ```powershell
 cmake -S . -B build -A x64
@@ -37,13 +35,13 @@ build/Release/wowmod.exe
 build/Release/wowmod_hook.dll
 ```
 
-把两个文件放在同一目录，配置好 `wowmod.json`，运行：
+用构建目录中的 CLI 运行预检（PowerShell 从仓库根目录执行）：
 
 ```powershell
-.\wowmod.exe detect
-.\wowmod.exe plan
-.\wowmod.exe launch --config wowmod.json
+.\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json
 ```
+
+不要把旧 `wowmod launch` 当成 12.0.7 Arctium 资源替换测试；当前 runtime hook 尚未实现/验证。
 
 MinGW-w64 也可以：`cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release`。
 32 位客户端请用 32 位工具链构建（`launch` 会检查位数并给出提示，这不是版本限制）。
@@ -59,7 +57,7 @@ python3 -m pip install ziglang
 ```
 
 它会：
-1. 用 `-target x86_64-windows-gnu` 编译 8 个 core + 6 个 windows 源 + CLI
+1. 用 `-target x86_64-windows-gnu` 编译 `src/core/*.cpp`、Windows 源和 CLI
 2. 链接 `wowmod_hook.dll` 和 `wowmod.exe`
 3. 校验 PE 头（MZ / PE / machine=0x8664）与导出符号 `wowmod_version` 等
 
@@ -69,7 +67,7 @@ python3 -m pip install ziglang
 
 `.github/workflows/ci.yml` 里有两个 job：
 
-- **ubuntu**: GCC 构建核心 + 跑 115 项单元测试 + 跑演示 `plan` / `scan` + 交叉编译校验
+- **ubuntu**: GCC 构建核心、运行单元测试及演示命令，并交叉编译校验 Windows 源码
 - **windows**: MSVC 构建 `wowmod.exe` + `wowmod_hook.dll`，上传为 artifact
 
 ## 生成演示客户端

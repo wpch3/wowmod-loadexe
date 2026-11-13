@@ -1,90 +1,38 @@
-# 材料清单与完成状态（12.0.7 Firestorm）
+# 12.0.7 Firestorm：素材与运行时验证清单
 
-## 已收到的 ✅ —— 文件齐全，不用再传了
+## 已收到并已处理
 
-| 文件 | 校验 |
-| --- | --- |
-| `WoW 12.0.7 - Firestorm.exe` | 73,463,504 字节；SHA-256 `e31066a9fd7f16fc…`；x64 PE32+；`12.0.7.68974` |
-| `wow_loader.dll` | 39,514,832 字节；SHA-256 `020791224a4bcf82b…`；x64 DLL，导出 ordinal #1 |
-| `*.7z.001~003` | 解压出的 exe 与完整 exe 哈希完全一致 |
+- 用户提供 Firestorm 安装目录截图，路径为 `D:\Midnight Open Beta\_midnight_`，其中可见 `WoW 12.0.7 - Firestorm.exe` 与 `wow_loader.dll`。不需要重发截图或路径。
+- BloodElf Female 替换包已由用户提交到远端 `main`；当前活动分支已从素材提交 `86e058794ff405f96e81f42f6c1efff52a8c6702` 拷入 `mods/models/Character/BloodElf/Female/`。
+- 包内有 89 个 `.blp`，共 12,208,284 字节；本地只检查到 BLP2 文件头和尺寸（58 个 256×128、31 个 1024×512）。没有 `.m2`，所以这是纹理替换包。
+- 公开 `wowdev/wow-listfile` 分类 CSV（检查提交 `d0404f4db2a8037b6863734fd744bba8570b8bed`）对 89 个相对路径全部精确匹配到 FileDataID。12 个 skin-color 纹理 ID 为 `3500114–3500125`。公开映射不等于 Firestorm CASC 内容存在性或游戏加载验证。
 
-`detect` 对真实 exe 的输出：
+## 当前可执行的检查
 
-```
-版本: 12.0.7.68974 (build 68974)
-架构: x64 | 加载层 DLL: Wow_loader.dll
-支持状态: 已支持（无版本白名单）
-```
+源码新增 `wowmod arctium-plan --config examples/12.0.7/wowmod.firestorm.json`：扫描 `arctium.filesDir`，用配置映射表构造确定性的 ID → 本地路径计划。此命令不启动或修改客户端；计划状态为 `preflight-only`，`hookInstalled` 为 `false`。
 
-## DLL 到手后查明的决定性事实
+建议从包含新源码的构建产物运行，而不是假设仓库里附带的旧 `wowmod.exe` 已更新：
 
-**这个客户端磁盘上的代码是加密的。** 静态特征扫描在这里不可能成功，理由如下：
-
-| 观察 | exe | wow_loader.dll |
-| --- | --- | --- |
-| `.text` 大小 | 53 MB | 31 MB |
-| `.text` 采样熵 | **7.95–8.00 / 8** | 6.23–7.23（正常代码） |
-| 零字节比例 | 0.4% | 8.5% |
-| 常见 x64 函数序言片段 | 857 处 | 7658 处 |
-| 游戏字符串 | 大量明文在 `.rdata` | 几乎全部剥离 |
-
-- exe 的导入表**只有 `Wow_loader.dll` 一个 ordinal #1** → 它是启动壳。
-- 但 exe 的 `.text` 不是代码，而是**高熵密文/压缩数据**（`2d 18 d1 12 99 96 8f b9 …`），
-  `.rdata` 里却留着 `DBFilesClient`、`FileData ID %d %s`、`addons.txt` 等明文字符串。
-- DLL 里甚至找不到这些字符串的 UTF-16/ASCII 版本，只有一个 PDB 路径
-  `D:\Jenkins\workspace\eidolon-generator_main\wow_prod_workspace\...\loader.pdb`
-  和 `.eid` / `.eidsig` 这类自定义节区。
-- 实测 `wowmod discover` 对两个文件都是 `xrefCount=0`：不是工具没找到，而是**磁盘上确实没有可引用的明文代码**。
-
-结论：**通用 VFS 模式已经完全可用**（IAT hook 文件 API 在运行时生效，与磁盘是否加密无关），
-但「按 FileDataID 从 CASC 读模型」的 hook 点只能在**进程解密之后的内存里**找。
-这一步无法靠上传更多文件来完成。
-
-## 我已经实现的解法：运行时内存扫描
-
-新增 `wowmod_hook.dll` 的后台扫描（`hooks.runtimeScan`）：
-
-1. 注入后等 `runtimeDelayMs`（默认 4 秒）让壳完成解密；
-2. 用 `VirtualQuery` + `ReadProcessMemory` 把主 exe 和 `wow_loader.dll` 的**内存映像**
-   转储为「文件偏移 == RVA」的 `.img`（`PeImage(mapped=true)` 支持这种布局）；
-3. 在内存映像上跑 `discover_hook_points(..., mapped=true)`：明文字符串、指针表、RIP 相对引用
-   这时才真正存在；
-4. 把候选特征写到 `runtime-dumps/*.candidates.json` 和 `runtime-report.json`；
-5. **默认不自动下断点**（`runtimeAutoInstall: false`）—— 候选仍需确认函数语义。
-
-离线分析这些转储（在任意机器上）：
-
-```bash
-wowmod discover --exe runtime-dumps/main.exe.img --mapped --emit hooks/patterns.runtime.json
-wowmod scan     --exe runtime-dumps/main.exe.img --mapped --patterns hooks/patterns.runtime.json
+```powershell
+.\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json --json > arctium-plan.json
 ```
 
-`--mapped` 让加载器按 RVA=偏移解析内存映像；已在模拟解密映像上验证能找到唯一候选。
+## 尚缺的运行时资料
 
-## 还需要的（不是文件，是一次真机运行）
+用户此前提供的日志显示尝试过 LoadLibraryW、NtCreateThreadEx、APC 与 SetWindowsHookExW；这些是注入尝试的结果，**不能据此确认注入成功、客户端存在白名单保护或 hook 已工作**。当前分支配置仍将 `runtimeAutoInstall` 设为 `false`，并建议 `runtimeDelayMs` 为 15000。
 
-> 运行命令前先看 **[../../docs/WINDOWS-QUICKSTART.md](../../docs/WINDOWS-QUICKSTART.md)**：
-> 分支 ZIP 里现在已带编译好的 exe，PowerShell 必须写 `.\wowmod.exe`。
-> **最省事**：下载 [`wowmod-12.0.7-game-dir.zip`](https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod-12.0.7-game-dir.zip)
-> 直接解压到 `D:\Midnight Open Beta\_midnight_\`，然后
-> `.\wowmod.exe launch --config ".\wowmod.firestorm.json"`（配置在根目录）。
-> 手工 x64dbg 解密步骤见 **[../../docs/X64DBG.md](../../docs/X64DBG.md)**。
+要在不猜 hook ABI 的前提下继续实现 Arctium 风格运行时补丁，需要一次 Windows 端采集：
 
-1. **在 Windows 上启动一次游戏**（`wowmod launch --config wowmod.firestorm.json`），
-   然后把 `runtime-dumps/` 目录（含 `.img` 与 `*.candidates.json`）传给我。
-   我会据此确认候选是不是「按 FileDataID 打开」的入口，并定稿 `patterns.json`。
-2. **或者**：用 x64dbg 在解密后的 `LoadByFileId` / `CustomFileIdHook` 入口断一次，
-   给我前 24 字节 + ID 所在寄存器。这条最快。
-3. `SET portal` 的私服地址（也别传账号/密码/登录器）。
-4. 可选：`.build.info`（Product/Branch/CDN Key）、`Data` 目录树截图、12.0.7 listfile。
+- `runtime-dumps/wow_loader.dll.img`
+- `runtime-dumps/wow_loader.dll.candidates.json`
+- `runtime-dumps/runtime-report.json`
+- `wowmod.log`（需保留完整注入报告）
 
-## 不需要的 ❌
+或者用 x64dbg 提供已解密模块名、目标函数 RVA、入口前后 24–32 字节、FileDataID 实际所在寄存器/栈槽及宽度、命中/未命中时的返回值语义。
 
-分卷压缩包、参考模组软件本体、整个 `Data` 目录、任何登录器/反作弊/账号文件。
-**请勿上传账号或登录器。**
+## 不需要再次提供 / 不需要额外爬取
 
-## 现在能用什么
-
-`wowmod validate` 通过；`plan` 输出 `hook 模式: vfs`：路径型模型文件、AddOns、
-`WTF/Config.wtf` / `realmlist.wtf` 内存覆盖、优先级冲突处理全部生效，客户端正常启动。
-唯一待定的是 CASC 按 ID 读模型那一条路径，需要上面第 1 或第 2 项来收尾。
+- 不需要重发替换包、安装目录截图或客户端路径。
+- 不需要为这 89 条路径再爬全量游戏数据；公开路径到 ID 已全部匹配。
+- 若要证明 Firestorm 12.0.7 的 CASC 归档内确有这些 ID，需要从该客户端本地数据另行核验；目前没有完成这一步。
+- 这里无法进行 Windows 构建或游戏内运行：当前开发环境没有 Windows 交叉编译器、Wine，也没有正在运行的 Firestorm 进程。

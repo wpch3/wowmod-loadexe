@@ -1,4 +1,4 @@
-// wowmod-loadexe - 通用版本 WoW 模组加载器
+// wowmod-loadexe - WoW Arctium-style loader development tree
 // SPDX-License-Identifier: MIT
 #pragma once
 

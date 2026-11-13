@@ -1,4 +1,6 @@
-# 模组包 / 映射 / 规则
+# 模组包 / 映射 / 规则（旧版通用 VFS）
+
+> 本文描述历史 VFS 配置与映射行为，不表示 CASC 按 ID 的模型/纹理替换已在 Firestorm 12.0.7 生效。当前 Arctium 风格映射预检及运行时缺口见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。
 
 ## 目录结构
 

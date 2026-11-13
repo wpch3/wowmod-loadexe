@@ -1,4 +1,6 @@
-# 架构与数据流
+# 架构与数据流（旧版通用 VFS 设计）
+
+> 本文记录仓库此前的通用 VFS / IAT / 硬件断点方案，**不是当前 Arctium 风格加载器已完成或已验证的说明**。Firestorm 12.0.7 的运行时 FileDataID hook 仍未实现/验证；当前 Arctium 工作状态见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。
 
 ## 为什么现有 launcher 会"不支持你的版本"
 

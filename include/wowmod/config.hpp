@@ -76,6 +76,10 @@ struct HookSettings {
   bool keep_client_on_inject_failure = true;  // 注入失败也继续启动游戏，但不启用模组覆盖
 };
 
+struct ArctiumSettings {
+  std::string files_dir;  // Root whose relative paths match fileId;filePath mappings.
+};
+
 struct LogSettings {
   std::string file;
   bool verbose = false;
@@ -90,6 +94,7 @@ struct Config {
   std::vector<std::string> mappings;
   std::vector<Rule> rules;
   HookSettings hooks;
+  ArctiumSettings arctium;
   LogSettings log;
 
   static Config from_json(const Json& j, const std::string& config_path, Diagnostics* diag = nullptr);

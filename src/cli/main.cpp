@@ -16,6 +16,7 @@
 #include <windows.h>
 #endif
 
+#include "wowmod/arctium.hpp"
 #include "wowmod/config.hpp"
 #include "wowmod/discover.hpp"
 #include "wowmod/hooks.hpp"
@@ -118,7 +119,7 @@ const char* kBanner =
     "   \\ \\/\\/ / _ \\| '__/ _` |/ _ \\| '_ \\ | |_| |/ _ \\ / _` |/ _ \\ '__/ _ \\\n"
     "    \\  /\\  / (_) | | | (_| | (_) | | | |  _  |  __/| (_| |  __/ | |  __/\n"
     "     \\/  \\/ \\___/|_|  \\__,_|\\___/|_| |_|_| |_|\\___| \\__,_|\\___|_|  \\___|\n"
-    "  通用版本 WoW 模组加载器  ·  no version whitelist, no hardcoded offsets\n";
+    "  WoW Arctium 风格加载器开发版  ·  FileDataID runtime 尚未验证\n";
 
 struct Args {
   std::string command;
@@ -165,12 +166,14 @@ std::string help_text() {
       "  scan       扫描客户端 exe，报告 hook 特征匹配情况（用于适配新版本）\n"
       "  adapt      把邻近版本的特征自动放宽成你的 exe 上唯一匹配的特征\n"
       "  discover   只用自己的 exe 自动找出候选 hook 点（无需上传任何文件）\n"
+      "  arctium-plan  生成 Arctium 风格 FileDataID -> 松散文件预检表（不修改/启动客户端）\n"
       "  launch     启动客户端并注入覆盖层（Windows；其他平台给出提示）\n"
       "  version    显示加载器版本\n\n"
       "选项:\n"
       "  --config FILE    配置文件（默认当前目录 wowmod.json）\n"
       "  --exe FILE       覆盖配置中的客户端 exe\n"
       "  --dir DIR        覆盖配置中的游戏目录\n"
+      "  --files-dir DIR  覆盖 Arctium 预检使用的松散文件根目录（arctium-plan）\n"
       "  --patterns FILE  覆盖 hook 特征文件\n"
       "  --pattern TEXT   adapt 用的原始特征（IDA 风格字节串）\n"
       "  --from FILE      adapt 从某个 patterns.json 的第一条取起点特征\n"
@@ -188,6 +191,7 @@ std::string help_text() {
       "  wowmod init --dir \"D:/Games/MyPrivateServer\"\n"
       "  wowmod detect --dir \"D:/Games/MyPrivateServer\"\n"
       "  wowmod plan --json > plan.json\n"
+      "  wowmod arctium-plan --config examples/12.0.7/wowmod.firestorm.json\n"
       "  wowmod adapt --exe Wow.exe --pattern \"48 89 5C 24 08 57 ...\"\n"
       "  wowmod launch --config wowmod.json\n";
 }
@@ -211,6 +215,61 @@ std::string find_config(const Args& a) {
   std::string near_exe = join_path(exe_dir_path(), "wowmod.json");
   if (file_exists(near_exe)) return near_exe;
   return local;
+}
+
+int cmd_arctium_plan(const Args& a) {
+  const std::string config_path = find_config(a);
+  Diagnostics diag;
+  Config cfg;
+  if (!file_exists(config_path) || !load_config(config_path, &cfg, &diag)) {
+    std::cerr << "Arctium 预检需要一个有效配置：" << config_path << "\n" << diag.render(false);
+    return 1;
+  }
+  if (a.has("files-dir")) cfg.arctium.files_dir = absolute_path(a.opt("files-dir"));
+  if (cfg.arctium.files_dir.empty()) {
+    diag.error("arctium.filesDir", "未设置松散文件根目录；请在配置 arctium.filesDir 或传入 --files-dir");
+  }
+
+  MappingTable mappings;
+  for (const auto& path : cfg.mappings) mappings.load_file(path, &diag);
+  if (mappings.size() == 0) diag.error("arctium.mapping", "映射表为空；需要至少一条有效的 fileId;filePath 记录");
+  ArctiumFilePlan plan;
+  if (!cfg.arctium.files_dir.empty())
+    plan = plan_arctium_files(cfg.arctium.files_dir, mappings, &diag);
+  else
+    plan.error = "缺少 arctium.filesDir";
+  if (plan.error.empty() && mappings.size() != 0 && plan.files.empty())
+    diag.error("arctium.filesDir", "目录内没有任何文件命中 FileDataID 映射");
+
+  if (a.json) {
+    Json out = plan.to_json();
+    out.set("config", Json::make_string(config_path));
+    out.set("uniqueMappedPaths", Json::make_number(static_cast<double>(mappings.size())));
+    Json ds = Json::make_array();
+    for (const auto& item : diag.items()) {
+      Json row = Json::make_object();
+      row.set("level", Json::make_string(item.level == Level::Error ? "error" : item.level == Level::Warn ? "warn" : "info"));
+      row.set("where", Json::make_string(item.where));
+      row.set("message", Json::make_string(item.message));
+      ds.push(row);
+    }
+    out.set("diagnostics", ds);
+    std::cout << out.dump(2) << "\n";
+  } else {
+    std::cout << "Arctium 风格 FileDataID -> 松散文件预检\n"
+              << "配置: " << config_path << "\n"
+              << "文件根目录: " << plan.files_root << "\n"
+              << "映射表唯一路径: " << mappings.size() << " 条\n"
+              << "扫描文件: " << plan.scanned_files << "，命中 ID: " << plan.files.size()
+              << "，无映射: " << plan.unmapped_files << "，重复 ID: " << plan.duplicate_ids
+              << "，无效 ID: " << plan.invalid_ids << "\n"
+              << "状态: 仅生成预检表；未启动客户端、未注入、未安装 hook、未修改进程。\n";
+    if (!plan.error.empty()) std::cout << "错误: " << plan.error << "\n";
+    for (const auto& f : plan.files)
+      std::cout << f.file_id << ";" << f.game_path << " -> " << f.local_path << " (" << f.size << " bytes)\n";
+    if (!diag.items().empty()) std::cout << "\n" << diag.render(false);
+  }
+  return plan.error.empty() && !diag.has_errors() ? 0 : 1;
 }
 
 bool prepare(const Args& a, Session* s) {
@@ -632,11 +691,12 @@ int main(int argc, char** argv) {
 
   if (a.help || a.command.empty()) { std::cout << kBanner << "\n" << help_text(); return 0; }
   if (a.command == "version" || a.command == "--version" || a.command == "-v") {
-    std::cout << "wowmod-loadexe 1.0.0 (通用版本 / version-agnostic)\n";
+    std::cout << "wowmod-loadexe 1.0.0 (Arctium-style preflight; runtime hook not verified)\n";
     return 0;
   }
   if (a.command == "help") { std::cout << help_text(); return 0; }
   if (a.command == "init") return cmd_init(a);
+  if (a.command == "arctium-plan") return cmd_arctium_plan(a);
 
   Session s;
   if (!prepare(a, &s)) {

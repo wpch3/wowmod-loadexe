@@ -33,6 +33,11 @@
     }
   ],
   "mappings": ["mappings/listfile.txt"],
+  "arctium": {
+    // Arctium loose-file input root. `wowmod arctium-plan` only builds/validates the map;
+    // it does not yet patch the 12.0.7 process.
+    "filesDir": "mods/models"
+  },
   "rules": [],
   "hooks": {
     "mode": "auto",
@@ -44,12 +49,12 @@
     "scanTargets": ["wow_loader.dll"],
     "allowFallback": true,
 
-    // 加密壳适配：磁盘找不到 hook 点时，自动扫描运行时解密后的内存
+    // 仅当 wowmod_hook.dll 确实进入目标进程后，才会尝试扫描运行时内存
     "runtimeScan": true,
-    "runtimeDelayMs": 4000,          // 等壳解密的毫秒数，按机器调整
+    "runtimeDelayMs": 15000,         // 运行时转储建议等 15 秒；不等于确认 hook 已可用
     "runtimeDump": "runtime-dumps",  // 内存映像 + 候选特征写到这里，可发给我做离线确认
     "runtimeModules": ["wow_loader.dll", ""],  // 空串 = 主 exe
-    "runtimeAutoInstall": false,     // 改成 true 才会对最佳唯一候选自动下硬件断点（需先核实语义）
+    "runtimeAutoInstall": false,     // ABI/函数语义未确认，保持关闭；不要改成 true
 
     // 挂起阶段注入失败时：先恢复主线程等 loader 初始化完，再重试一次
     "injectRetry": true,

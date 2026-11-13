@@ -1,127 +1,47 @@
-# WoW 12.0.7 专用起始包
+# WoW 12.0.7 Firestorm 示例（Arctium 风格开发中）
 
-> **真实客户端已上传并验证**：`WoW 12.0.7 - Firestorm.exe` = `12.0.7.68974` / x64 PE32+，
-> 路径 `D:\Midnight Open Beta\_midnight_\`。exe 与 `wow_loader.dll` 均已上传并验证，
-> 按真实路径填好的配置见 [`wowmod.firestorm.json`](wowmod.firestorm.json)，
-> 完整清单/结论见 [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md)。
->
-> ⚠ **DLL 已上传并验证**：两个文件的磁盘代码都无法静态定位 hook 点 ——
-> exe 的 `.text` 是加密的（熵 8.00），`wow_loader.dll` 的字符串被剥光。
-> 已改用**运行时内存扫描**（`hooks.runtimeScan`）：注入后等壳解密，转储内存映像并
-> 自动产出候选特征。详见 [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md) 与
-> [`wowmod.firestorm.json`](wowmod.firestorm.json)。
-> 还差**一次 Windows 真机启动**（回传 `runtime-dumps/`）或 x64dbg 断一次入口来定稿。
+## 当前分支已包含什么
 
-**能。** 这套配置本身就是给 12.0.7 准备的，但里面**没有任何版本号判断**：
-把 `client.portal` 改成你的私服地址、把模型放进 `mods/models/`，就能直接跑。
-换成 12.1.5 / 3.3.5 / 1.12.1 也一样，不需要换加载器。
+- `mods/models/Character/BloodElf/Female/`：已从远端 `main` 的素材提交 `86e058794ff405f96e81f42f6c1efff52a8c6702` 拷入当前工作分支，共 89 个 `.blp`（12,208,284 字节）。这是纹理替换包，不含 `.m2` 几何模型。
+- `mappings/listfile.txt`：这 89 个游戏相对路径均已从公开 `wowdev/wow-listfile` 分类 CSV 找到精确 FileDataID，映射数为 89/89。12 个 skin-color 文件对应 `3500114–3500125`。
+- `wowmod.firestorm.json`：保留截图中的 Firestorm 安装路径；`arctium.filesDir` 指向这组 loose files。
 
-## 1. 放置
+映射是公开 listfile 的路径到 ID 关系，**不证明这些 ID 在该 Firestorm 客户端的 CASC 归档里存在，也不代表客户端加载器已经替换它们**。
 
-把这个目录里的文件复制到游戏根目录（`Wow.exe` 所在目录），或者保持目录结构，
-用 `--config` 指向这里的 `wowmod.json`（相对路径都相对配置文件解析）。
+## 运行映射预检
 
-改 `wowmod.json` 里的：
+从仓库根目录用包含本次修改的源码构建后运行：
 
-```jsonc
-"client": {
-  "exe": "",                  // 留空会自动找 wow*.exe；也可填绝对路径
-  "portal": "127.0.0.1"      // ← 改成你的私服地址
-}
+```powershell
+.\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json
 ```
 
-## 2. 放模型 / 给 listfile
+也可输出 JSON：
 
-```
-mods/models/World/Model/.../Dragon.m2        ← 按游戏内路径放
-mappings/listfile.txt                        ← 换成 12.0.7 的 fileId;filePath 表
-```
-
-listfile 来源：<https://github.com/wowdev/wow-listfile>。
-有了它，按路径摆放的模组会自动获得 FileDataID。
-
-## 3. 直接看结果（这一步就能证明"已支持"）
-
-```bash
-wowmod detect   --config wowmod.json
-wowmod validate --config wowmod.json
-wowmod plan     --config wowmod.json
+```powershell
+.\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json --json > arctium-plan.json
 ```
 
-`detect` 会显示 `12.0.7`（若 `.build.info` 有完整 build 号则显示完整版本）、`x64`、`casc`，
-以及 **支持状态: 已支持（无版本白名单）**。
-`plan` 里的路径型覆盖（模型、材质、AddOns、`Config.wtf`）**立刻生效，与版本无关**。
+预期：89 个 `.blp` 全部映射；扫描数多 1 是因为 `mods/models/README.md` 没有 FileDataID 映射，会被忽略。JSON 明确写着 `status: preflight-only`、`hookInstalled: false`。
 
-> 如果你的 exe 版本资源被改过、读不到版本号，可在配置里填
-> `client.version: "12.0.7"` 和 `client.build: 70500`（换成你的真实值）。
-> 这两个字段**只影响展示与 `when` 过滤**，不是支持性判断。
+## 尚未完成 / 不要误判
 
-## 4. 让 CASC「按 FileDataID 读取」的模型也生效（可选）
+- **还没有**将 ID/路径表分配到 WoW 进程，也没有安装 Arctium 风格 hook/trampoline。
+- `wowmod arctium-plan` 不启动游戏、不注入 DLL、不改客户端内存；它只验证 loose-file 文件树和映射输入。
+- `wowmod launch` 仍走仓库中旧的通用覆盖层流程，不能把它当作 Arctium 12.0.7 纹理替换成功的证明。
+- 尚无 Firestorm 12.0.7 Windows 运行时目标函数、寄存器/返回语义和补丁边界证据；没有完成游戏内验证。注入日志本身也不足以证明客户端保护机制。
 
-12.0.7 是 CASC 客户端，内部按 ID 从归档读文件，不会为每个模型调 `CreateFileW`。
-这一步需要一个 hook 点（特征），但它**是数据、不是代码**：
+旧版 Arctium fork 的源码检查表明其做法是“按文件路径映射 FileDataID → 在目标进程保存路径表 → 在客户端 ID 读取函数入口安装 x64 trampoline”；该 fork 的公开支持范围截至 10.x，不能把旧签名或 EDX 假设直接套到 12.0.7。详见 [`docs/ARCTIUM-STYLE.md`](../../docs/ARCTIUM-STYLE.md)。
 
-```bash
-# 方式 A：拿邻近 12.x 的特征当起点，让工具自动放宽成你这个 exe 上唯一匹配的版本
-wowmod adapt --config wowmod.json \
-  --exe "D:/Games/WoW/Wow.exe" \
-  --pattern "48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ..." \
-  --out hooks/patterns.adapted.json \
-  --name "wow-12.0.7"
+## 下一步需要什么
 
-# 方式 B：从仓库自带的参考特征文件开始（9.x/10.x 起点，跨大版本可能需要你提供更贴近 12.x 的特征）
-wowmod adapt --config wowmod.json --exe "D:/Games/WoW/Wow.exe" \
-  --from hooks/known-patterns.json --out hooks/patterns.adapted.json
-```
+不需要再次发送素材、安装目录截图、客户端路径，也不需要为了这 89 条映射再爬全量游戏数据。要继续实现和验证运行时 hook，需要 Windows 运行时输出：
 
-`hooks/patterns.adapted.json` 已经在 `wowmod.json` 的 `patterns` 数组里，生成后直接：
+- `runtime-dumps/wow_loader.dll.img`
+- `runtime-dumps/wow_loader.dll.candidates.json`
+- `runtime-dumps/runtime-report.json`
+- `wowmod.log`
 
-```bash
-wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.adapted.json
-wowmod plan --config wowmod.json      # 期望看到 hook 模式: fileid
-wowmod launch --config wowmod.json    # Windows
-```
+配置建议：`runtimeScan: true`、`runtimeDelayMs: 15000`、`runtimeAutoInstall: false`。若扫描 DLL 没有成功进入游戏进程，请同时保留完整注入诊断；不要打开自动 hook。
 
-`adapt` 会优先用**差异引导**找最小的通配集合（只把跨版本真正变了的字节改成 `??`），
-保证结果仍然唯一匹配、并落在可执行节区。若原始特征在你 exe 上 0 处匹配，
-它会明确给出 ⚠ 警告 —— 唯一匹配不等于函数语义正确，请按 `docs/ADAPTING.md` 用调试器核实。
-
-找不到特征也**不影响启动**：保持 `allowFallback: true`，加载器自动用通用 VFS 层。
-
-## 5. 还差什么？一次 Windows 真机运行
-
-**不用上传任何模组软件**（模型包、Arctium App 之类都是数据/UI，机制已在加载器里实现），
-exe、分卷、`wow_loader.dll` 也**都已上传并验证完毕**。
-
-但静态扫描对这个客户端不成立（磁盘 `.text` 是密文）。最后一步只能在 Windows 上跑：
-
-```bash
-# 1) 按真实路径启动，让 hooks.runtimeScan 转储解密后的内存
-wowmod launch --config wowmod.firestorm.json
-#    → runtime-dumps/main.exe.img、wow_loader.dll.img、*.candidates.json
-
-# 2) 离线确认候选（可在我这边做，也可你自己做）
-wowmod discover --exe runtime-dumps/main.exe.img --mapped --emit hooks/patterns.runtime.json
-wowmod scan     --exe runtime-dumps/main.exe.img --mapped --patterns hooks/patterns.runtime.json
-wowmod plan     --config wowmod.firestorm.json
-```
-
-`--mapped` 让加载器按「文件偏移 == RVA」解析内存映像；此时明文字符串与 RIP 相对
-引用才真正存在。把 `runtime-dumps/` 发给我即可由我定稿特征。
-
-或者更快：用 x64dbg 在解密后的 `LoadByFileId` / `CustomFileIdHook` 入口断一次，
-给我前 24 字节 + ID 所在寄存器。
-
-`discover --mapped` 会在内存映像的可执行节区里扫描指向 `DBFilesClient\`、
-`Interface\AddOns\` 等字符串的 RIP 相对 LEA，生成候选特征并标出是否唯一匹配。
-也可以用 `--anchors "你的字符串"` 换成你自己模组里的路径。
-
-可选但有用的小文件：`.build.info`（Product/Branch/CDN Key）、`Data` 目录树列表、
-12.0.7 listfile、私服 portal 地址。**请勿上传账号、登录器或反作弊相关文件。**
-
-⚠ `discover` 给的是**候选**：唯一匹配不等于函数语义正确，首次进游戏前请用调试器或
-`wowmod.log` 确认该点确实是「按 FileDataID 打开」的入口。
-
----
-
-完整原理见 [docs/ADAPTING.md](../../docs/ADAPTING.md) 与 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。
+也可替代为 x64dbg 记录已解密模块名、目标 RVA、入口前后 24–32 字节、FileDataID 所在寄存器/栈槽和宽度，以及返回值的实际含义。当前沙箱没有 Windows 交叉编译器或 Wine，无法替代这一步做 Windows 进程验证。

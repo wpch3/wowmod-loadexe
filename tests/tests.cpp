@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "wowmod/arctium.hpp"
 #include "wowmod/config.hpp"
 #include "wowmod/discover.hpp"
 #include "wowmod/hooks.hpp"
@@ -253,7 +254,10 @@ static void test_version() {
   CHECK_EQ(full.version_string, "3.3.5.12340");
   CHECK_EQ(full.portal, "old.server");
   CHECK_EQ(full.storage, "unknown");  // 没有 Data 目录
-  CHECK(full.to_json().at("supported").as_bool(), "永远 supported=true");
+  CHECK(full.to_json().at("supported").as_bool(), "legacy supported means version gate passed");
+  CHECK_EQ(full.to_json().at("supportStatus").as_string(), "not-verified");
+  CHECK(!full.to_json().at("capabilitiesVerified").as_bool(), "detect 不伪报运行时能力已验证");
+  CHECK(full.display().find("未验证") != std::string::npos, "detect 文本应明确运行时能力未验证");
   CHECK(!full.notes.empty(), "应有诊断说明");
   auto exes = discover_client_exes(tmp("full"));
   CHECK_EQ(exes.size(), size_t(1));
@@ -276,6 +280,46 @@ static void test_mapping() {
   CHECK_EQ(m.id_for_path("foo/bar.m2").value_or(0), 999u);
 }
 
+static void test_arctium_file_plan() {
+  group("arctium-file-plan");
+  const std::string root = tmp("arctium/files");
+  put("arctium/files/Character/BloodElf/Female/a.blp", "a-data");
+  put("arctium/files/Character/BloodElf/Female/b.blp", "bb-data");
+  put("arctium/files/Character/BloodElf/Female/unmapped.blp", "not-mapped");
+  put("arctium/files/Character/BloodElf/Female/overflow.blp", "too-large-id");
+  put("arctium/files/README.txt", "not-a-game-file");
+
+  MappingTable mappings;
+  mappings.add(210u, "Character/BloodElf/Female/a.blp", "test");
+  mappings.add(205u, "Character/BloodElf/Female/b.blp", "test");
+  mappings.add(205u, "Character/BloodElf/Female/unmapped.blp", "duplicate-id");
+  mappings.add(0x100000000ull, "Character/BloodElf/Female/overflow.blp", "overflow");
+
+  Diagnostics d;
+  ArctiumFilePlan plan = plan_arctium_files(root, mappings, &d);
+  CHECK(plan.error.empty(), "目录扫描成功: " + plan.error);
+  CHECK_EQ(plan.files_root, absolute_path(root));
+  CHECK_EQ(plan.scanned_files, size_t(5));
+  CHECK_EQ(plan.files.size(), size_t(2));
+  CHECK_EQ(plan.files[0].file_id, uint32_t(205));
+  CHECK_EQ(plan.files[1].file_id, uint32_t(210));
+  CHECK_EQ(plan.files[1].game_path, "Character/BloodElf/Female/a.blp");
+  CHECK_EQ(plan.files[1].local_path, to_native_path(absolute_path(root + "/Character/BloodElf/Female/a.blp")));
+  CHECK_EQ(plan.files[1].size, uint64_t(6));
+  CHECK_EQ(plan.unmapped_files, size_t(1));
+  CHECK_EQ(plan.duplicate_ids, size_t(1));
+  CHECK_EQ(plan.invalid_ids, size_t(1));
+  CHECK(d.count(Level::Warn) >= 1, "重复 ID 应产生警告");
+  Json plan_json = plan.to_json();
+  CHECK_EQ(plan_json.at("files").as_array().size(), size_t(2));
+  CHECK_EQ(plan_json.at("status").as_string(), "preflight-only");
+  CHECK(!plan_json.at("clientModified").as_bool(), "预检不修改客户端");
+  CHECK(!plan_json.at("hookInstalled").as_bool(), "预检不假报已安装 hook");
+
+  ArctiumFilePlan missing = plan_arctium_files(tmp("arctium/no-such-files"), mappings, &d);
+  CHECK(!missing.error.empty(), "不存在的 filesDir 必须显式报错");
+}
+
 static void test_config() {
   group("config");
   std::string cfg_text =
@@ -290,6 +334,7 @@ static void test_config() {
       "  \"mappings\": [\"mappings/l.txt\"],\n"
       "  \"rules\": [ { \"match\": \"World/**/*.m2\", \"replace\": \"\" } ],\n"
       "  \"hooks\": { \"mode\": \"auto\", \"patterns\": \"hooks/p.json\" },\n"
+      "  \"arctium\": { \"filesDir\": \"mods/a\" },\n"
       "  \"log\": { \"file\": \"wowmod.log\" }\n"
       "}\n";
   std::string path = tmp("cfg/wowmod.json");
@@ -304,6 +349,7 @@ static void test_config() {
   CHECK_EQ(cfg.mods.size(), size_t(2));
   CHECK_EQ(cfg.mods[0].priority, 20);
   CHECK(cfg.mods[0].path == tmp("cfg/mods/a"), "相对路径按配置目录解析");
+  CHECK_EQ(cfg.arctium.files_dir, tmp("cfg/mods/a"));
   CHECK_EQ(cfg.client.portal, "my.private");
   CHECK_EQ(cfg.rules.size(), size_t(1));
   CHECK(validate_config(cfg, &d), "配置校验应通过");
@@ -320,6 +366,8 @@ static void test_config() {
   std::string err2;
   Json round = Json::parse(cfg.to_json().dump(2), &err2);
   CHECK(err2.empty() && round.at("mods").as_array().size() == 2, "Config -> JSON 往返");
+  Config cfg_roundtrip = Config::from_json(round, path);
+  CHECK_EQ(cfg_roundtrip.arctium.files_dir, cfg.arctium.files_dir);
 }
 
 static void test_vfs() {
@@ -393,7 +441,8 @@ static void test_vfs() {
   CHECK_EQ(vfs3.stats().packs, size_t(1));
 
   Json plan = vfs.plan_json();
-  CHECK(plan.at("client").at("supported").as_bool(), "plan 输出 supported=true");
+  CHECK(plan.at("client").at("supported").as_bool(), "legacy supported 仅表示版本门未拒绝");
+  CHECK_EQ(plan.at("client").at("supportStatus").as_string(), "not-verified");
   CHECK(!plan.at("overlays").as_array().empty(), "plan 有覆盖表");
   CHECK(!vfs.plan_text().empty(), "plan 文本非空");
 }
@@ -529,7 +578,8 @@ static void test_discover() {
   apply_display_overrides(&ci, cfg.client.version, cfg.client.build);
   CHECK_EQ(ci.version_string, "12.0.7");
   CHECK_EQ(ci.build, 70500);
-  CHECK(ci.to_json().at("supported").as_bool(), "覆盖版本后依然 supported");
+  CHECK(ci.to_json().at("supported").as_bool(), "展示覆盖不改变版本门结果");
+  CHECK(!ci.to_json().at("capabilitiesVerified").as_bool(), "展示覆盖不伪造运行时能力验证");
   Json dumped = Json::parse(cfg.to_json().dump(2), &err);
   CHECK(err.empty() && dumped.at("hooks").at("patterns").as_array().size() == 2, "多特征文件 JSON 往返");
 
@@ -735,7 +785,8 @@ static void test_real_client() {
   CHECK_EQ(dci.arch, "x64");
   CHECK(dci.version_string.empty() || dci.version_string.find("未知") != std::string::npos,
         "无版本资源时版本显示未知");
-  CHECK(dci.to_json().at("supported").as_bool(), "无版本资源仍 supported=true");
+  CHECK(dci.to_json().at("supported").as_bool(), "无版本资源不会被版本门拒绝");
+  CHECK_EQ(dci.to_json().at("supportStatus").as_string(), "not-verified");
 
   // 运行时扫描配置的 JSON 往返
   Config rc;
@@ -789,6 +840,7 @@ int main() {
   test_json();
   test_version();
   test_mapping();
+  test_arctium_file_plan();
   test_config();
   test_vfs();
   test_hooks();

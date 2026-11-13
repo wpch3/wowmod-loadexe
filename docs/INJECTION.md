@@ -1,34 +1,20 @@
-# 注入机制与客户端启动排错
+# 注入机制与客户端启动排错（历史记录；不证明替换加载成功）
 
-> 这份文档针对 12.0.7 Firestorm / `wow_loader.dll` 加密壳客户端。
-> 只用于你有权修改/调试的私服或离线环境。
+> **状态核对：**用户提供的日志显示 LoadLibraryW / NtCreateThreadEx 线程退出码为 0 但模块表未见 DLL、APC 3 秒未进入 alertable wait、SetWindowsHookExW 失败 87，程序报告终止客户端。这些结果不证明注入成功，也不足以认定客户端有反注入保护。当前源码在 `keepClientOnInjectFailure=true` 时应恢复客户端；若实际运行却终止，必须先核对实际 exe 与配置，不能把源码行为当成该次运行事实。
+>
+> 本页其余内容记录此前注入排错实现；它不等于当前 Arctium 风格 FileDataID hook 已实现。当前加载器状态见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。只用于你有权修改/调试的私服或离线环境。
 
-## 已经确认的事实（来自真机输出）
+## 用户已提供的注入日志（仅代表该次尝试）
 
-```
-目标进程 GetLastError=0 （无错误）
-本地 PE 映射预检通过（x64/格式正确）
-本进程完整加载成功（DllMain + 依赖都正常）
-依赖: [OK] KERNEL32.dll
-```
+- LoadLibraryW 线程退出码为 `0x00000000`，但目标进程模块表未出现 DLL。
+- NtCreateThreadEx 线程退出码为 `0x00000000`，但目标进程模块表未出现 DLL。
+- APC 已排队；等待 3 秒后没有观察到目标线程进入 alertable wait。
+- x64 / PE 预检与依赖检查报告通过。
+- `SetWindowsHookExW` 失败，错误 87；程序报告终止客户端。
 
-用户报告直接双击游戏可启动，`launch` 的注入尝试失败；此前把进程移到 `D:\`、
-提高权限并重试后仍失败。当前日志显示 PE 映射通过、本进程完整加载成功，而目标进程
-模块表未出现 DLL。可以判断 DLL 自身大概率正常、当前注入尝试没有成功；但还不能据此断言
-是客户端反注入：远程线程退出码 `0` 不是完整的 64 位 `HMODULE`；
-`NtCreateThreadEx` 的退出码也不能直接当作 `LoadLibraryW` 返回值。
-`GetLastError=0` 只说明采样到的线程/调用上下文没有保留 Win32 错误，不能证明
-存在 `LoadLibraryW` hook。`SetWindowsHookExW` 的错误 87 是 `ERROR_INVALID_PARAMETER`，
-需要在 GUI 线程已运行后重试，不能直接归因于游戏保护。
+线程退出码 `0` 和本地预检通过都不是目标 DLL 已在游戏进程初始化的证明；错误 87 也不足以判断客户端存在保护。日志没有确认 hook 安装或资源读取。
 
-- DLL 能在加载器进程完整加载、PE 映射检查通过、依赖可见；所以 DLL 文件本身问题
-  的可能性较低，但最终原因尚未实机确定。
-- 直接双击客户端可以启动，说明客户端本身可运行。此前 `launch` 在注入失败后调用
-  `TerminateProcess`，会把语言选择框/游戏一起关掉；这属于启动器行为，不是你选错
-  语言或游戏 exe 坏了。新版默认在注入失败后恢复客户端继续运行，并明确显示
-  「模组覆盖未加载」，不再杀掉游戏；配置 `keepClientOnInjectFailure=false`
-  可恢复严格失败行为。
-
+当前活动分支的源代码在 `keepClientOnInjectFailure=true` 时应恢复客户端；这与用户报告的“已终止客户端”不一致。实际运行的 exe、配置和源码版本尚未核对，故不能说该次运行符合当前源代码行为，也不应据此推断保护机制。
 ## 本次修正：DLL 初始化不再阻塞 Windows loader lock
 
 此前 DLL 的 `DllMain(DLL_PROCESS_ATTACH)` 里直接读取配置、扫描文件、安装 IAT hooks、

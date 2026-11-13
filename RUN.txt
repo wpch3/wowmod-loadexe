@@ -1,112 +1,54 @@
-wowmod 12.0.7 — 从源码文件夹运行（复制粘贴版）
+WoW 12.0.7 Firestorm — 当前分支的准确状态
 ================================================
 
-适用：你已经在资源管理器里看到 wowmod.exe (984 KB) 和 wowmod_hook.dll (983 KB)
-      和 examples\、docs\ 等文件夹在一起。
+重要：仓库原有 wowmod.exe / wowmod_hook.dll 可能是旧预编译文件，不能假设它包含本分支新增的
+Arctium 预检命令。请从当前源码重新构建后再运行。当前 Arctium 代码只生成映射预检表，
+没有安装客户端 hook，也没有确认游戏内纹理替换。
 
-第 0 步：在【这个文件夹】里打开 PowerShell
+当前分支已经包含：
+  - 89 个 BloodElf Female .blp 纹理（12,208,284 字节）；
+  - 89/89 条来自 wowdev/wow-listfile 分类 CSV 的路径 -> FileDataID 映射；
+  - 独立于旧 VFS 的 `arctium-plan` 命令。
+
+第 1 步：构建当前源码
 ------------------------------------------
-最简单：点资源管理器地址栏，把里面那一串路径删掉，输入 powershell 然后回车。
-PowerShell 打开后，提示符应该显示这个文件夹路径。
+  cmake -S . -B build
+  cmake --build build --config Release
 
-如果 PowerShell 是从别处打开的，先切过来（注意路径有两层同名文件夹）：
+PowerShell 下生成的 CLI 一般在：
+  .\build\Release\wowmod.exe
 
-  cd "C:\Users\Administrator\Downloads\Compressed\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe"
-
-确认一下：
-
-  Get-Location
-  Test-Path .\wowmod.exe            # 必须是 True
-  Test-Path .\wowmod_hook.dll        # 必须是 True
-
-第 1 步：解锁 + 看版本
+第 2 步：运行 Arctium 映射预检（不启动游戏）
 ------------------------------------------
-  Unblock-File .\wowmod.exe, .\wowmod_hook.dll
-  .\wowmod.exe version
+从仓库根目录执行：
 
-预期输出：wowmod-loadexe 1.0.0 (通用版本 / version-agnostic)
-（若中文显示成 閫氱敤鐗堟湰 之类乱码：先执行 chcp 65001 并重新下载 exe；
- 新版 exe 会自动按控制台代码页转码。乱码不影响功能。）
+  .\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json
 
-第 2 步：确认游戏路径（很重要）
+导出机器可读结果：
+
+  .\build\Release\wowmod.exe arctium-plan --config .\examples\12.0.7\wowmod.firestorm.json --json > arctium-plan.json
+
+预期：映射文件 89 条；扫描文件 90 个（额外的 README.md 没有 ID，会忽略）；映射 89 个，重复 ID 0，
+无效 ID 0。JSON 的 `status` 是 `preflight-only`、`hookInstalled` 是 `false`，表示只做输入预检。
+
+第 3 步：当前还不能宣称游戏内替换
 ------------------------------------------
-  Test-Path "D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe"
+`wowmod launch` 仍走仓库旧的注入/VFS 实验流程，不是完成的 Firestorm 12.0.7 Arctium runtime。
+不要把客户端窗口启动、线程退出码为 0、DLL 本地加载成功或静态映射预检通过当成资源替换成功。
+目前也没有证据确认客户端存在反注入/白名单保护。
 
-必须是 True。如果是 False，用记事本打开
-  examples\12.0.7\wowmod.firestorm.json
-把 client.exe / client.gameDir 改成你机器上的真实路径。
+要继续实现并验证运行时 FileDataID hook，需要 Windows 采集以下文件：
+  runtime-dumps\wow_loader.dll.img
+  runtime-dumps\wow_loader.dll.candidates.json
+  runtime-dumps\runtime-report.json
+  wowmod.log（保留完整注入报告）
 
-第 3 步：四条检查命令（都不启动游戏）
-------------------------------------------
-  .\wowmod.exe detect   --config "examples\12.0.7\wowmod.firestorm.json"
-  .\wowmod.exe validate --config "examples\12.0.7\wowmod.firestorm.json"
-  .\wowmod.exe plan     --config "examples\12.0.7\wowmod.firestorm.json"
-  .\wowmod.exe scan     --config "examples\12.0.7\wowmod.firestorm.json"
+配置应保持 `runtimeScan: true`、`runtimeDelayMs: 15000`、`runtimeAutoInstall: false`。
+若 DLL 没有进入目标进程，runtime dump 也不会产生；请保留完整日志。替代方案是用 x64dbg 提供已解密模块名、
+目标函数 RVA、入口前后 24–32 字节、ID 所在寄存器/栈槽及宽度、命中/未命中时的返回值语义。
 
-预期：
-  detect    → 版本 12.0.7.68974 (build 68974) / 架构 x64 /
-              加载层 DLL: Wow_loader.dll / 支持状态: 已支持（无版本白名单）
-  validate  → 校验通过。
-  plan      → 覆盖表 + hook 模式: vfs（加密壳客户端的正常回退）
-  scan      → 当前没有特征时报告 0 条，正常
+不需要重发替换包、客户端路径或安装目录截图；公开 listfile 的 89 条映射已经找齐，无需再爬全量游戏数据。
+如果需要证明 Firestorm 12.0.7 的本地 CASC 归档中包含这些 ID，仍需从该客户端本地数据单独验证。
 
-第 4 步：放模组文件（想替换模型时）
-------------------------------------------
-模组包路径 = examples\12.0.7\mods\models\
-里面的相对路径就是游戏内路径，例如：
-
-  examples\12.0.7\mods\models\World\Model\Example\Dragon.m2
-  examples\12.0.7\mods\models\Interface\AddOns\MyAddon\MyAddon.toc
-
-按 FileDataID 覆盖时，在 examples\12.0.7\mappings\listfile.txt 里写：
-
-  123456;World/Model/Example/Dragon.m2
-
-放完再跑一次 plan，覆盖表条数会从 0 变成对应数量。
-（示例包里只有 README.md，所以第一次 plan 显示 0 条是正常的。）
-
-第 5 步：启动游戏（这一步会真的启动客户端）
-------------------------------------------
-  .\wowmod.exe launch --config "examples\12.0.7\wowmod.firestorm.json"
-
-不要另外手动双击游戏 exe。launcher 会：
-  - CREATE_SUSPENDED 启动客户端
-  - 远程 LoadLibraryW 注入 wowmod_hook.dll
-  - 装好 IAT 文件 API hook / 内存 VFS 后再恢复主线程
-
-成功后 examples\12.0.7\runtime-dumps\ 会生成解密后的内存映像和候选特征，
-把这个文件夹发回即可完成最后一条 FileDataID hook 点的确认。
-
-只想干跑不启动：  .\wowmod.exe launch --dry-run --config "examples\12.0.7\wowmod.firestorm.json"
-
-launch 注入失败时
-------------------------------------------
-新版默认不会再杀掉客户端：注入失败会恢复游戏继续运行，但模组覆盖没有加载，
-终端会明确显示「注入失败；已让客户端继续启动（模组覆盖未加载）」。
-语言选择框随后正常出现是预期行为；先前旧版关闭它是启动器误杀进程，和你选什么语言无关。
-
-你之前的 launch 输出已包含本进程内完整加载成功；GetLastError=0 不能单独证明反注入，
-SetWindowsHookExW 错误 87 也只说明参数/调用时机问题。新版会在线程恢复后再尝试该 hook。
-若还失败，把新版失败段发回即可；你已说明双击可启动、一个进程、无反作弊，不用重复。
-
-诊断脚本可选。游戏目录包根目录运行：
-  Test-Path .\diagnose-load.ps1
-  powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
-源码 ZIP 才用 .\scripts\diagnose-load.ps1。若脚本不存在可跳过，不必为此下载整个源码目录。
-
-完整说明见 docs\INJECTION.md。
-
-排错速查
-------------------------------------------
-无法将"wowmod"项识别为…        → 少了 .\，写 .\wowmod.exe
-无法将".\wowmod.exe"项识别为…  → 不在正确目录；Test-Path 检查一下
-找不到 wowmod_hook.dll          → 两个文件必须同一目录
-找不到客户端 exe                → 第 2 步路径不对，改配置
-注入失败/窗口关闭               → 旧版会终止客户端；更新新版后会让游戏继续启动（模组未加载）
-缺 api-ms-win-crt-*.dll        → 装 VC++ 2015–2022 x64 运行库
-被 SmartScreen 拦              → Unblock-File .\wowmod.exe, .\wowmod_hook.dll
-
-更详细的说明：docs\WINDOWS-QUICKSTART.md
-x64dbg 手工解密：docs\X64DBG.md
-
-仅用于你有权修改/调试的私服或离线环境。
+当前开发环境是 Linux，没有 Windows 交叉编译器或 Wine；Linux 单元测试通过不代表 Windows 构建或游戏内测试通过。
+详细状态见 docs\ARCTIUM-STYLE.md 和 examples\12.0.7\README.md。
