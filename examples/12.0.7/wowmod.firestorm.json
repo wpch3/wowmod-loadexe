@@ -58,7 +58,8 @@
 
     // 多种注入机制自动轮换（远程线程被客户端加载层拦截时尤其重要）
     "injectMethods": ["loadlibrary", "ntcreatethreadex", "apc"],
-    "injectWindowsHook": true
+    "injectWindowsHook": true,
+    "keepClientOnInjectFailure": true
   },
   "log": { "file": "wowmod.log", "verbose": true }
 }

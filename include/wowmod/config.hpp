@@ -73,6 +73,7 @@ struct HookSettings {
   int inject_retry_delay_ms = 1000;   // 第 i 次等待 i * delay 毫秒
   std::vector<std::string> inject_methods;  // 空 = loadlibrary, ntcreatethreadex(+apc)
   bool inject_windows_hook = true;   // 额外用 SetWindowsHookEx 让 user32 把 DLL 带进客户端
+  bool keep_client_on_inject_failure = true;  // 注入失败也继续启动游戏，但不启用模组覆盖
 };
 
 struct LogSettings {

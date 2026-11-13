@@ -139,6 +139,7 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
     if (!m.empty()) c.hooks.inject_methods.push_back(m);
   }
   c.hooks.inject_windows_hook = h.at("injectWindowsHook").as_bool(true);
+  c.hooks.keep_client_on_inject_failure = h.at("keepClientOnInjectFailure").as_bool(true);
   for (const auto& s : h.at("runtimeModules").as_string_array()) {
     if (!s.empty()) c.hooks.runtime_modules.push_back(s);
   }
@@ -212,6 +213,7 @@ Json Config::to_json() const {
   h.set("injectRetryAttempts", Json::make_number(hooks.inject_retry_attempts));
   h.set("injectRetryDelayMs", Json::make_number(hooks.inject_retry_delay_ms));
   h.set("injectWindowsHook", Json::make_bool(hooks.inject_windows_hook));
+  h.set("keepClientOnInjectFailure", Json::make_bool(hooks.keep_client_on_inject_failure));
   if (!hooks.inject_methods.empty()) {
     Json im = Json::make_array();
     for (const auto& m : hooks.inject_methods) im.push(Json::make_string(m));

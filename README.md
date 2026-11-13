@@ -85,7 +85,7 @@ ZIP（或单独下这两个文件放到根目录，两者必须同目录）就�
 解压到游戏目录，然后 `.\wowmod.exe launch --config ".\wowmod.firestorm.json"`（配置在根目录）。
 
 中文乱码修复见 **[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
-`LoadLibraryW` 注入失败（客户端拒绝注入）与 4 种注入机制见 **[docs/INJECTION.md](docs/INJECTION.md)**；
+`LoadLibraryW` 注入失败的诊断与 4 种注入机制见 **[docs/INJECTION.md](docs/INJECTION.md)**；
 一步步复制粘贴的命令见仓库根目录 **[RUN.txt](RUN.txt)** 与
 **[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
 x64dbg 手工解密/定位见 **[docs/X64DBG.md](docs/X64DBG.md)**。

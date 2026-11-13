@@ -765,6 +765,7 @@ static void test_real_client() {
   Config rc5 = Config::from_json(rc4.to_json(), tmp("real/cfg5.json"));
   CHECK_EQ(rc5.hooks.inject_methods.size(), size_t(3));
   CHECK(!rc5.hooks.inject_windows_hook, "注入机制配置往返");
+  CHECK(rc5.hooks.keep_client_on_inject_failure, "失败时默认不终止原游戏进程");
 
   // scanTargets 与导入表里的 DLL 只大小写不同，不应重复读 40MB 两次
   Config dc;

@@ -79,18 +79,22 @@ PowerShell 打开后，提示符应该显示这个文件夹路径。
 
 只想干跑不启动：  .\wowmod.exe launch --dry-run --config "examples\12.0.7\wowmod.firestorm.json"
 
-launch 报 LoadLibraryW 返回 NULL 时
+launch 注入失败时
 ------------------------------------------
-  powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
+新版默认不会再杀掉客户端：注入失败会恢复游戏继续运行，但模组覆盖没有加载，
+终端会明确显示「注入失败；已让客户端继续启动（模组覆盖未加载）」。
+语言选择框随后正常出现是预期行为；先前旧版关闭它是启动器误杀进程，和你选什么语言无关。
 
-这个脚本会打印本进程侧的 Win32 错误码。
-最新真机结论：目标进程 GetLastError=0 且「本进程完整加载成功」= DLL 本身
-完全正常，是客户端加载层拒绝远程注入。换目录/管理员/Defender 排除项都没用。
-加载器现在自动轮换 4 种注入机制：
-  loadlibrary / ntcreatethreadex / apc / windowshook(SetWindowsHookEx)
-并用「目标进程模块表里有没有 wowmod_hook.dll」做最终判定，重试 3 次。
-windowshook 成功后 wowmod.exe 会等游戏退出才返回命令行，这是正常的。
-完整说明见 docs\INJECTION.md；四种都失败时按该文档把输出发回。
+你之前的 launch 输出已包含本进程内完整加载成功；GetLastError=0 不能单独证明反注入，
+SetWindowsHookExW 错误 87 也只说明参数/调用时机问题。新版会在线程恢复后再尝试该 hook。
+若还失败，把新版失败段发回即可；你已说明双击可启动、一个进程、无反作弊，不用重复。
+
+诊断脚本可选。游戏目录包根目录运行：
+  Test-Path .\diagnose-load.ps1
+  powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
+源码 ZIP 才用 .\scripts\diagnose-load.ps1。若脚本不存在可跳过，不必为此下载整个源码目录。
+
+完整说明见 docs\INJECTION.md。
 
 排错速查
 ------------------------------------------
@@ -98,7 +102,7 @@ windowshook 成功后 wowmod.exe 会等游戏退出才返回命令行，这是�
 无法将".\wowmod.exe"项识别为…  → 不在正确目录；Test-Path 检查一下
 找不到 wowmod_hook.dll          → 两个文件必须同一目录
 找不到客户端 exe                → 第 2 步路径不对，改配置
-LoadLibraryW 返回 NULL          → 位数不匹配（x64 客户端必须用 x64 DLL）
+注入失败/窗口关闭               → 旧版会终止客户端；更新新版后会让游戏继续启动（模组未加载）
 缺 api-ms-win-crt-*.dll        → 装 VC++ 2015–2022 x64 运行库
 被 SmartScreen 拦              → Unblock-File .\wowmod.exe, .\wowmod_hook.dll
 

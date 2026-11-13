@@ -183,6 +183,17 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
     std::string all;
     for (int i = 1; i <= attempts && !injected; ++i) {
       Sleep(static_cast<DWORD>(static_cast<long long>(base) * i));
+      // 主线程恢复后才有机会创建 GUI 消息队列；初次 SetWindowsHookEx 在挂起阶段
+      // 可能报 ERROR_INVALID_PARAMETER(87)，这里在客户端启动后重新尝试。
+      if (!win_hook && self_dll) {
+        auto proc = reinterpret_cast<HOOKPROC>(GetProcAddress(self_dll, "wowmod_hook_proc"));
+        if (proc) {
+          win_hook = SetWindowsHookExW(WH_GETMESSAGE, proc, self_dll, pi.dwThreadId);
+          hook_note = win_hook ? "WH_GETMESSAGE 钩子已在客户端线程恢复后安装"
+                               : "客户端线程恢复后 SetWindowsHookExW 仍失败 (" +
+                                     std::to_string(GetLastError()) + ")";
+        }
+      }
       if (win_hook && poll_hook(1500)) {
         injected = true;
         inject_err = "Windows 钩子注入成功（user32 已把 wowmod_hook.dll 加载进客户端）\n  " + hook_note +
@@ -204,7 +215,13 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
   if (injected) {
     if (!resumed) ResumeThread(pi.hThread);
   } else {
-    TerminateProcess(pi.hProcess, 1);  // 不注入就不要启动，避免无覆盖层运行
+    // 注入失败不能吞掉原本可独立启动的游戏。默认恢复客户端，让语言选择器/游戏
+    // 正常继续；明确报告模组覆盖未加载。需要严格 fail-closed 时可在配置关闭此项。
+    if (cfg.hooks.keep_client_on_inject_failure) {
+      if (!resumed) ResumeThread(pi.hThread);
+    } else {
+      TerminateProcess(pi.hProcess, 1);
+    }
     if (win_hook) UnhookWindowsHookEx(win_hook);
     if (self_dll) FreeLibrary(self_dll);
   }
@@ -222,7 +239,9 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
   CloseHandle(pi.hProcess);
   if (!injected) {
     r.code = 1;
-    r.message = "注入失败，已终止客户端: " + inject_err;
+    r.message = cfg.hooks.keep_client_on_inject_failure
+                    ? "注入失败；已让客户端继续启动（模组覆盖未加载）: " + inject_err
+                    : "注入失败，已终止客户端（配置要求严格失败）: " + inject_err;
     return r;
   }
 
