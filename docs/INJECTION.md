@@ -29,6 +29,21 @@
   「模组覆盖未加载」，不再杀掉游戏；配置 `keepClientOnInjectFailure=false`
   可恢复严格失败行为。
 
+## 本次修正：DLL 初始化不再阻塞 Windows loader lock
+
+此前 DLL 的 `DllMain(DLL_PROCESS_ATTACH)` 里直接读取配置、扫描文件、安装 IAT hooks、
+启动内存扫描线程。Windows 在 `DllMain` 期间持有 loader lock；这类耗时/会加载库的
+工作放在这里有死锁和初始化时序风险。
+
+当前分支已改成：`DllMain` 只创建一个初始化 worker 并立即返回；配置读取与 overlay hook
+安装在 worker 中执行。新增 `wowmod_init_status` 导出（0 初始化中、1 runtime 初始化完成、
+-1 初始化失败、-2 worker 创建失败、2 诊断探测跳过）。此外，诊断输出已改成准确说明
+`WOWMOD_PROBE` 会跳过 overlay 初始化，不再把它说成完整 DllMain 验证；恢复主线程后的
+Windows hook 重试结果也会列在失败输出中。
+
+这一修改降低了 loader-lock 风险，但**还没有在真实 Windows / Firestorm 12.0.7 上验证能成功注入**，
+不能把它当作已解决。
+
 ## 当前自动轮换的注入机制
 
 `launch` 会依次尝试，并且**一律用「目标进程模块表里是否出现 wowmod_hook.dll」

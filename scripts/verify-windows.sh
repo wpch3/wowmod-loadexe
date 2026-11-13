@@ -52,7 +52,7 @@ for p in sys.argv[1:]:
     assert machine == 0x8664, p + ': 不是 x64'
     print('  OK', p.split('/')[-1], 'machine=0x%x' % machine)
 dll = open(sys.argv[2], 'rb').read()
-for sym in [b'wowmod_version', b'wowmod_overlay_count', b'wowmod_client_build', b'wowmod_hook_mode', b'wowmod_hook_proc']:
+for sym in [b'wowmod_version', b'wowmod_overlay_count', b'wowmod_client_build', b'wowmod_hook_mode', b'wowmod_hook_proc', b'wowmod_init_status']:
     assert sym in dll, 'DLL 缺少导出: ' + sym.decode()
     print('  OK export', sym.decode())
 PY

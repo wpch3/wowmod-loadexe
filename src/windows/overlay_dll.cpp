@@ -15,13 +15,14 @@ namespace {
 
 using namespace wowmod::win;
 
+volatile LONG g_init_status = 0;  // 0=initializing, 1=runtime ready, -1=init failed, 2=probe only
+
 // 诊断脚本/加载器会在自身进程里 LoadLibraryW 本 DLL 再 FreeLibrary；
-// 此时必须完全跳过初始化（尤其不能 patch 自己进程的 IAT，否则卸载后留下悬空指针）。
+// 探测模式只验证 Windows loader 能否映射 DLL，不运行 overlay 初始化。
 bool probe_only() { return GetEnvironmentVariableW(L"WOWMOD_PROBE", nullptr, 0) != 0; }
 
-void initialize(HMODULE self) {
-  if (probe_only()) { dlog("WOWMOD_PROBE: 跳过初始化"); return; }
-  if (!init_runtime(self)) { dlog("runtime init failed"); return; }
+bool initialize(HMODULE self) {
+  if (!init_runtime(self)) { dlog("runtime init failed"); return false; }
 
   std::string err;
   if (!install_iat_hooks(self, &err)) dlog("IAT hook: " + err);
@@ -42,6 +43,13 @@ void initialize(HMODULE self) {
   // 加密壳客户端：磁盘 .text 是密文，静态找不到 hook 点时，
   // 在后台等壳解密完成后扫描进程内存，产出候选特征（默认不自动下断点）。
   start_runtime_scan();
+  return true;
+}
+
+DWORD WINAPI initialize_worker(void* p) {
+  bool ok = initialize(static_cast<HMODULE>(p));
+  InterlockedExchange(&g_init_status, ok ? 1 : -1);
+  return ok ? 0 : 1;
 }
 
 }  // namespace
@@ -49,7 +57,15 @@ void initialize(HMODULE self) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     DisableThreadLibraryCalls(hModule);
-    initialize(hModule);
+    if (probe_only()) {
+      InterlockedExchange(&g_init_status, 2);
+      return TRUE;
+    }
+    // DllMain 在 Windows loader lock 下运行。配置读取、文件 I/O、IAT 修改、
+    // 扫描线程创建都移到 worker；不能在 DllMain 里等待它完成。
+    HANDLE worker = CreateThread(nullptr, 0, initialize_worker, hModule, 0, nullptr);
+    if (worker) CloseHandle(worker);
+    else InterlockedExchange(&g_init_status, -2);
   }
   return TRUE;
 }
@@ -70,6 +86,10 @@ __declspec(dllexport) int WINAPI wowmod_client_build() {
 __declspec(dllexport) const char* WINAPI wowmod_hook_mode() {
   return runtime().ready ? runtime().hooks.mode.c_str() : "not-initialized";
 }
+
+// 0=初始化中，1=运行时配置/Hook 安装步骤完成，-1=runtime 初始化失败，
+// -2=无法创建初始化线程，2=诊断探测模式（主动跳过 overlay 初始化）。
+__declspec(dllexport) LONG WINAPI wowmod_init_status() { return InterlockedCompareExchange(&g_init_status, 0, 0); }
 
 // 供 SetWindowsHookEx 注入机制使用：user32 会在目标 GUI 线程收到消息时
 // 自动把本 DLL 加载进那个进程（不经过 CreateRemoteThread / LoadLibraryW 远程调用）。

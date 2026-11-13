@@ -200,6 +200,10 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
                      "\n  首次失败:" + first_err;
         break;
       }
+      if (cfg.hooks.inject_windows_hook) {
+        all += "\n  第 " + std::to_string(i) + " 次 Windows hook: " + hook_note;
+        if (win_hook) all += "（已安装，但模块表尚未确认 DLL）";
+      }
       std::vector<std::string> m2 = methods;
       if (std::find(m2.begin(), m2.end(), "apc") == m2.end()) m2.push_back("apc");
       win::InjectReport rp = win::inject_dll(pi.hProcess, pi.hThread, true, dll_w, m2);

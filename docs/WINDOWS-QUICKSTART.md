@@ -191,7 +191,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 当前输出能确认 PE 映射检查与加载器进程内完整加载成功；但 `GetLastError=0`、
 远程线程退出码 0、`SetWindowsHookExW` 错误 87 **都不足以单独证明客户端反注入**。
-新版会在线程恢复后再尝试安装 Windows hook。若仍失败，发回新版失败段即可；
+新版会在线程恢复后再尝试安装 Windows hook；DLL 初始化也已从 `DllMain` loader lock 移到 worker。若仍失败，发回新版失败段即可；
 你已提供的「双击能启动、任务管理器一个进程、无反作弊」不用重复。
 
 诊断脚本路径：

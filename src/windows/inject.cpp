@@ -19,7 +19,7 @@ namespace {
 
 std::string win_error_text(DWORD e) {
   switch (e) {
-    case 0: return "（无错误 —— 常见于目标进程 hook/拦截了 LoadLibraryW 或远程代码未执行）";
+    case 0: return "（没有捕获到 Win32 错误；单凭 0 无法判断失败原因）";
     case 2: return "ERROR_FILE_NOT_FOUND";
     case 3: return "ERROR_PATH_NOT_FOUND";
     case 5: return "ERROR_ACCESS_DENIED（Defender/ASR/完整性级别/受保护进程）";
@@ -235,10 +235,10 @@ InjectReport inject_dll(HANDLE process, HANDLE main_thread, bool allow_apc,
     SetEnvironmentVariableW(L"WOWMOD_PROBE", nullptr);
 
     rep.attempts.push_back("本地 PE 映射预检: " + std::string(mapped ? "通过 (x64/格式正确)" : "失败 GetLastError=" + local_error(map_err)));
-    rep.attempts.push_back("本进程完整加载: " + std::string(self ? "成功 (DllMain + 依赖都正常)" : "失败 GetLastError=" + local_error(self_err)));
+    rep.attempts.push_back("本进程 LoadLibrary 探测: " + std::string(self ? "成功（WOWMOD_PROBE 模式，跳过 overlay 初始化）" : "失败 GetLastError=" + local_error(self_err)));
     rep.attempts.push_back("依赖: " + (self_bytes.empty() ? "无法读取 DLL" : dependency_report(self_bytes)));
-    rep.attempts.push_back("结论: DLL 本身正常，目标进程拒绝注入 —— 客户端加载层可能有模块/线程白名单保护；"
-                           "所有机制都失败时需要改用手动映射(Reflective DLL Injection)或让客户端自行加载。");
+    rep.attempts.push_back("结论: 这些注入尝试没有在目标进程模块表中确认 DLL；当前结果不足以区分初始化时序、"
+                           "目标进程状态、线程创建限制或客户端加载策略。请勿据此断言已找到反注入原因。");
   }
   return rep;
 }
