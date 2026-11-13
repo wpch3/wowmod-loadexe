@@ -192,11 +192,26 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 2. **Windows Defender / ASR 规则**拦截从 `Downloads` 目录向另一个进程注入未签名 DLL；
 3. DLL 位数不符 / 缺 VC++ 运行库 / 客户端有反注入保护。
 
-已加入的处理：**自动延迟重试** —— 挂起阶段失败时先恢复主线程，等
-`injectRetryDelayMs`（默认 600ms）让 loader 初始化完，再注入一次。配置里
-`hooks.injectRetry: true`。若成功，启动信息会写明"已在进程初始化后重试成功"。
+已加入的处理：**自动延迟重试 3 次** —— 挂起阶段失败时恢复主线程，
+依次等 1s / 2s / 3s 再注入（`hooks.injectRetry`、`injectRetryAttempts`、
+`injectRetryDelayMs`）。若成功，启动信息会写明"第 N 次重试成功"。
 
-还失败就跑诊断脚本，它会给出真正的 Win32 错误码：
+新版注入器改为「带回写结果的远程调用」：直接拿到**目标进程里**的完整 64 位
+`HMODULE` 和 `GetLastError`，不再只看 32 位线程退出码（那会误判）；另外会
+枚举目标进程模块表二次确认，并做 3 次递增延迟重试（1s / 2s / 3s）。
+失败信息里会包含三行关键内容：
+
+```
+  目标进程 GetLastError=126 ERROR_MOD_NOT_FOUND(...)
+  本地 PE 映射预检通过（x64/格式正确）
+  本进程完整加载成功（DllMain + 依赖都正常）   ← 或「本进程完整加载也失败」
+```
+
+- 若「目标进程有错误码」而「本进程加载成功」→ 是跨进程注入被拦截/时机问题
+  （Defender/ASR、反注入、挂起阶段 loader 未就绪），与 DLL 本身无关。
+- 若两处都失败且错误码相同 → 按下面的错误码表处理。
+
+还失败就跑诊断脚本，它会给出本进程的 Win32 错误码作对照：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1

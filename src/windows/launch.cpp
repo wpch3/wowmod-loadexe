@@ -136,15 +136,21 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
     std::string first_err = inject_err;
     ResumeThread(pi.hThread);
     resumed = true;
-    Sleep(static_cast<DWORD>(std::max(0, std::min(10000, cfg.hooks.inject_retry_delay_ms))));
-    std::string retry_err;
-    if (win::inject_dll(pi.hProcess, dll_w, &retry_err)) {
-      injected = true;
-      inject_err = "挂起阶段注入失败，已在进程初始化后重试成功；" + retry_err +
-                   "\n  首次失败: " + first_err;
-    } else {
-      inject_err = "挂起阶段注入失败: " + first_err + "\n延迟重试仍失败: " + retry_err;
+    int attempts = std::max(1, std::min(10, cfg.hooks.inject_retry_attempts));
+    int base = std::max(0, std::min(10000, cfg.hooks.inject_retry_delay_ms));
+    std::string all_retries;
+    for (int i = 1; i <= attempts && !injected; ++i) {
+      Sleep(static_cast<DWORD>(static_cast<long long>(base) * i));
+      std::string retry_err;
+      if (win::inject_dll(pi.hProcess, dll_w, &retry_err)) {
+        injected = true;
+        inject_err = "挂起阶段注入失败，已在进程初始化后第 " + std::to_string(i) +
+                     " 次重试成功；" + retry_err + "\n  首次失败: " + first_err;
+      } else {
+        all_retries += "\n  第 " + std::to_string(i) + " 次重试: " + retry_err;
+      }
     }
+    if (!injected) inject_err = "挂起阶段注入失败: " + first_err + all_retries;
   }
   if (injected) {
     if (!resumed) ResumeThread(pi.hThread);

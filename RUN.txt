@@ -85,7 +85,9 @@ launch 报 LoadLibraryW 返回 NULL 时
 
 这个脚本会打印真正的 Win32 错误码（126=缺运行库/依赖，193=位数不符，
 5=Defender/权限，1114=DllMain 失败，0=DLL 本身没问题只是注入时机/策略）。
-加载器现在会自动「恢复主线程 -> 等 600ms -> 重试注入」一次。
+加载器现在会：直接读取目标进程里的 GetLastError 并在失败信息里打印出来，
+自动「恢复主线程 -> 等 1s/2s/3s -> 重试注入」共 3 次，还会枚举目标进程
+模块表确认 DLL 是否其实已经加载（避免 32 位退出码误判）。
 仍失败就把 wowmod.exe + wowmod_hook.dll 移到 D:\wowmod\ 之类的简单目录，
 并以管理员运行 PowerShell、给该目录加 Defender 排除项。
 

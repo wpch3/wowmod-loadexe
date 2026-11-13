@@ -15,7 +15,12 @@ namespace {
 
 using namespace wowmod::win;
 
+// 诊断脚本/加载器会在自身进程里 LoadLibraryW 本 DLL 再 FreeLibrary；
+// 此时必须完全跳过初始化（尤其不能 patch 自己进程的 IAT，否则卸载后留下悬空指针）。
+bool probe_only() { return GetEnvironmentVariableW(L"WOWMOD_PROBE", nullptr, 0) != 0; }
+
 void initialize(HMODULE self) {
+  if (probe_only()) { dlog("WOWMOD_PROBE: 跳过初始化"); return; }
   if (!init_runtime(self)) { dlog("runtime init failed"); return; }
 
   std::string err;

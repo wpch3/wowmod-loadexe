@@ -133,7 +133,8 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
   c.hooks.runtime_dump = resolve(c.base_dir, h.at("runtimeDump").as_string());  // 与 log/mappings 一样相对配置文件
   c.hooks.runtime_auto_install = h.at("runtimeAutoInstall").as_bool(false);
   c.hooks.inject_retry = h.at("injectRetry").as_bool(true);
-  c.hooks.inject_retry_delay_ms = static_cast<int>(h.at("injectRetryDelayMs").as_int(600));
+  c.hooks.inject_retry_attempts = static_cast<int>(h.at("injectRetryAttempts").as_int(3));
+  c.hooks.inject_retry_delay_ms = static_cast<int>(h.at("injectRetryDelayMs").as_int(1000));
   for (const auto& s : h.at("runtimeModules").as_string_array()) {
     if (!s.empty()) c.hooks.runtime_modules.push_back(s);
   }
@@ -204,6 +205,7 @@ Json Config::to_json() const {
   h.set("runtimeDelayMs", Json::make_number(hooks.runtime_delay_ms));
   h.set("runtimeAutoInstall", Json::make_bool(hooks.runtime_auto_install));
   h.set("injectRetry", Json::make_bool(hooks.inject_retry));
+  h.set("injectRetryAttempts", Json::make_number(hooks.inject_retry_attempts));
   h.set("injectRetryDelayMs", Json::make_number(hooks.inject_retry_delay_ms));
   if (!hooks.runtime_dump.empty()) h.set("runtimeDump", Json::make_string(hooks.runtime_dump));
   if (!hooks.runtime_modules.empty()) {

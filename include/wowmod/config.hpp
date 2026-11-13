@@ -69,7 +69,8 @@ struct HookSettings {
   // 挂起阶段 CreateRemoteThread(LoadLibraryW) 在部分 Windows/加壳客户端上会失败；
   // 失败时先恢复主线程让 loader/UCRT 初始化完，再重试一次（默认开启）。
   bool inject_retry = true;
-  int inject_retry_delay_ms = 600;
+  int inject_retry_attempts = 3;      // 恢复主线程后最多再试几次
+  int inject_retry_delay_ms = 1000;   // 第 i 次等待 i * delay 毫秒
 };
 
 struct LogSettings {
