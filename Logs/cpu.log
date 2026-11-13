@@ -1,0 +1,6 @@
+11/13 15:57:27.962  vendor: AuthenticAMD
+11/13 15:57:27.962  branding: AMD Ryzen 5 5600U with Radeon Graphics         
+11/13 15:57:27.962  features: lahf64 cmpxchg16b sse sse2 sse3 ssse3 sse41 sse42 avx avx2 aesni clmul sha rdrand 
+11/13 15:57:27.962  sockets: 1
+11/13 15:57:27.962  cores: 6
+11/13 15:57:27.962  threads: 12

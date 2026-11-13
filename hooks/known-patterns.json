@@ -1,0 +1,29 @@
+{
+  // 仅作为 `wowmod adapt --from hooks/known-patterns.json` 的【起点数据】。
+  // 这些特征来自公开的 Arctium WoW-Launcher 开源实现（9.x/10.x, x64, MIT），
+  // 并不保证匹配 12.0.7。跨一个大版本时编译器输出变化较大，
+  // 最好拿同家族（12.1.x）的 pattern 当起点。
+  // 本文件不会被 wowmod.json 直接加载，只喂给 adapt。
+  "patterns": [
+    {
+      "name": "reference-custom-fileid-hook-10x",
+      "kind": "fileId",
+      "arch": "x64",
+      "pattern": "48 89 5C 24 08 57 48 83 EC 20 48 8B ?? 48 ?? ?? 48 ?? ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 ?? ?? ?? ?? ?? ?? 48 ?? ?? 74 ?? 48 ?? CD",
+      "offset": 0,
+      "idRegister": "rdx",
+      "result": "rax=pathPtr",
+      "note": "参考起点，非 12.0.7 可用特征"
+    },
+    {
+      "name": "reference-load-by-fileid-10x",
+      "kind": "fileId",
+      "arch": "x64",
+      "pattern": "41 ?? ?? 01 0F 84 ?? 00 00 00 48 8B ?? ?? ?? ?? ?? 8B",
+      "offset": 0,
+      "idRegister": "rdx",
+      "result": "rax=pathPtr",
+      "note": "参考起点，非 12.0.7 可用特征"
+    }
+  ]
+}
