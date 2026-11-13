@@ -166,6 +166,57 @@ Copy-Item build\Release\wowmod.exe, build\Release\wowmod_hook.dll .
 也可以用 MinGW-w64：`cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release`。
 32 位客户端要用 32 位工具链（本项目预编译包是 x64，对应你这个 x64 客户端）。
 
+## 中文输出乱码（PowerShell 默认 GBK）
+
+`wowmod-loadexe 1.0.0 (閫氱敤鐗堟湰...)`、`鏋舵瀯: x64` 这类不是程序坏了，
+是程序输出 UTF-8 而 Windows PowerShell 5.1 用代码页 936(GBK) 解码。**乱码不影响功能**，
+日志里的 `12.0.7.68974` / `True` / `校验通过` 都能照常读。
+
+现在 CLI 会自动检测控制台代码页并转码（控制台且非 `--json` 时），重新下载
+`wowmod.exe` 即可正常显示中文。也可以手动统一编码：
+
+```powershell
+chcp 65001
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+`--json` 输出与重定向到文件时**始终**保持 UTF-8（保证 JSON 可解析）。
+
+## `launch` 报 `LoadLibraryW 返回 NULL`
+
+前四条命令都正常、只有 `launch` 失败时，说明**客户端进程里加载
+`wowmod_hook.dll` 失败**（远程线程确实执行了，返回 0）。常见三类原因：
+
+1. **挂起阶段 loader/UCRT 还没初始化完**（加壳客户端常见）；
+2. **Windows Defender / ASR 规则**拦截从 `Downloads` 目录向另一个进程注入未签名 DLL；
+3. DLL 位数不符 / 缺 VC++ 运行库 / 客户端有反注入保护。
+
+已加入的处理：**自动延迟重试** —— 挂起阶段失败时先恢复主线程，等
+`injectRetryDelayMs`（默认 600ms）让 loader 初始化完，再注入一次。配置里
+`hooks.injectRetry: true`。若成功，启动信息会写明"已在进程初始化后重试成功"。
+
+还失败就跑诊断脚本，它会给出真正的 Win32 错误码：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
+# 游戏目录包里则是
+powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
+```
+
+错误码含义：
+
+| 码 | 含义 / 处理 |
+| --- | --- |
+| 126 `ERROR_MOD_NOT_FOUND` | 依赖缺失 → 装 [VC++ 2015–2022 x64 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) |
+| 193 / 216 | 位数不符 → 用 x64 的 `wowmod_hook.dll` |
+| 5 `ERROR_ACCESS_DENIED` | Defender/ASR 或权限 → 以管理员运行、移出 Downloads、加 Defender 排除项 |
+| 1114 `ERROR_DLL_INIT_FAILED` | `DllMain` 初始化失败 → 看 `wowmod.log` |
+| 0（脚本里能加载成功） | 说明 DLL 本身没问题，是注入时机/安全策略 → 用延迟重试与上面的 1/2 项 |
+
+实用建议：把 `wowmod.exe` + `wowmod_hook.dll` 放到简单路径（例如 `D:\wowmod\`），
+并把该目录加入 Windows Defender 排除项；比放在 `Downloads\Compressed\...` 稳。
+
 ## 排错表
 
 | 现象 | 原因 / 处理 |
@@ -177,6 +228,8 @@ Copy-Item build\Release\wowmod.exe, build\Release\wowmod_hook.dll .
 | `LoadLibraryW 返回 NULL` | 位数不匹配（x64 客户端必须用 x64 DLL），或缺少系统运行库 |
 | 提示缺 `api-ms-win-crt-*.dll` | 装 [VC++ 2015–2022 x64 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)；Win10/11 一般自带 |
 | SmartScreen / Defender 拦截 | `Unblock-File .\wowmod.exe`、`Unblock-File .\wowmod_hook.dll`，或右键属性 → 解除锁定 |
+| 中文显示成 `閫氱敤鐗堟湰` | 见上面「中文输出乱码」；重新下载 exe 或 `chcp 65001` |
+| `LoadLibraryW 返回 NULL` | 见上面专节；跑 `diagnose-load.ps1` 拿错误码 |
 | `plan` 显示 `hook 模式: vfs` | **正常**，加密壳客户端的安全回退；路径型覆盖照常生效 |
 | `runtime-dumps` 没生成 | 确认 `hooks.runtimeScan: true`；等 `runtimeDelayMs`（默认 4 秒）之后再看；目录相对配置文件所在目录 |
 

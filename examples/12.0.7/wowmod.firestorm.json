@@ -49,7 +49,11 @@
     "runtimeDelayMs": 4000,          // 等壳解密的毫秒数，按机器调整
     "runtimeDump": "runtime-dumps",  // 内存映像 + 候选特征写到这里，可发给我做离线确认
     "runtimeModules": ["wow_loader.dll", ""],  // 空串 = 主 exe
-    "runtimeAutoInstall": false      // 改成 true 才会对最佳唯一候选自动下硬件断点（需先核实语义）
+    "runtimeAutoInstall": false,     // 改成 true 才会对最佳唯一候选自动下硬件断点（需先核实语义）
+
+    // 挂起阶段注入失败时：先恢复主线程等 loader 初始化完，再重试一次
+    "injectRetry": true,
+    "injectRetryDelayMs": 600
   },
   "log": { "file": "wowmod.log", "verbose": true }
 }

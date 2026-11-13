@@ -65,6 +65,11 @@ struct HookSettings {
   std::vector<std::string> runtime_modules;  // 空 = 主 exe + 导入的加载层 DLL
   std::string runtime_dump;             // 非空 = 把内存映像写到该目录，供离线分析/发给我
   bool runtime_auto_install = false;    // 默认只产出候选，不自动对未验证特征下断点
+
+  // 挂起阶段 CreateRemoteThread(LoadLibraryW) 在部分 Windows/加壳客户端上会失败；
+  // 失败时先恢复主线程让 loader/UCRT 初始化完，再重试一次（默认开启）。
+  bool inject_retry = true;
+  int inject_retry_delay_ms = 600;
 };
 
 struct LogSettings {

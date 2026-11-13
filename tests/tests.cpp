@@ -752,6 +752,23 @@ static void test_real_client() {
         "runtimeDump 应相对配置文件解析为绝对路径");
   CHECK(!rc2.hooks.runtime_auto_install, "默认不自动安装未验证 hook");
   CHECK_EQ(rc2.hooks.runtime_modules.size(), size_t(1));
+  CHECK(rc2.hooks.inject_retry, "默认开启注入延迟重试");
+  CHECK_EQ(rc2.hooks.inject_retry_delay_ms, 600);
+  Config rc3 = Config::from_json(rc.to_json(), tmp("real/cfg3.json"));
+  CHECK(rc3.hooks.inject_retry && rc3.hooks.inject_retry_delay_ms == 600, "注入重试配置往返");
+
+  // scanTargets 与导入表里的 DLL 只大小写不同，不应重复读 40MB 两次
+  Config dc;
+  dc.hooks.scan_targets = {"wow_loader.dll"};
+  ClientInfo dci2;
+  dci2.companion_dlls = {"Wow_loader.dll", "WOW_LOADER.DLL"};
+  dci2.game_dir = tmp("real");
+  std::vector<uint8_t> fake_dll(128, 0x90); fake_dll[0] = 'M'; fake_dll[1] = 'Z';
+  put_bytes("real/wow_loader.dll", fake_dll);
+  auto imgs = collect_hook_images(dc, dci2, {}, nullptr);
+  size_t dll_images = 0;
+  for (const auto& im : imgs) if (!im.module.empty()) ++dll_images;
+  CHECK_EQ(dll_images, size_t(1));
 }
 
 int main() {

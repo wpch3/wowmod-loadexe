@@ -95,6 +95,10 @@ bool dump_module_image(const std::string& module, const std::string& out_path,
 void start_runtime_scan() {
   Runtime& rt = runtime();
   if (!rt.ready || !rt.cfg.hooks.runtime_scan) return;
+  // 诊断脚本会在自身进程里 LoadLibraryW + FreeLibrary 探测本 DLL；
+  // 那时不能留下引用已卸载模块的后台线程。
+  auto env_set = [](const wchar_t* n) { return GetEnvironmentVariableW(n, nullptr, 0) != 0; };
+  if (env_set(L"WOWMOD_PROBE") || env_set(L"WOWMOD_RUNTIME_SCAN_OFF")) return;
   // 已经在磁盘上找到唯一 hook 点时，不需要运行时扫描
   if (rt.hooks.mode == "fileid") return;
 

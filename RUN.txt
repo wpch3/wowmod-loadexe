@@ -25,6 +25,8 @@ PowerShell 打开后，提示符应该显示这个文件夹路径。
   .\wowmod.exe version
 
 预期输出：wowmod-loadexe 1.0.0 (通用版本 / version-agnostic)
+（若中文显示成 閫氱敤鐗堟湰 之类乱码：先执行 chcp 65001 并重新下载 exe；
+ 新版 exe 会自动按控制台代码页转码。乱码不影响功能。）
 
 第 2 步：确认游戏路径（很重要）
 ------------------------------------------
@@ -76,6 +78,16 @@ PowerShell 打开后，提示符应该显示这个文件夹路径。
 把这个文件夹发回即可完成最后一条 FileDataID hook 点的确认。
 
 只想干跑不启动：  .\wowmod.exe launch --dry-run --config "examples\12.0.7\wowmod.firestorm.json"
+
+launch 报 LoadLibraryW 返回 NULL 时
+------------------------------------------
+  powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
+
+这个脚本会打印真正的 Win32 错误码（126=缺运行库/依赖，193=位数不符，
+5=Defender/权限，1114=DllMain 失败，0=DLL 本身没问题只是注入时机/策略）。
+加载器现在会自动「恢复主线程 -> 等 600ms -> 重试注入」一次。
+仍失败就把 wowmod.exe + wowmod_hook.dll 移到 D:\wowmod\ 之类的简单目录，
+并以管理员运行 PowerShell、给该目录加 Defender 排除项。
 
 排错速查
 ------------------------------------------

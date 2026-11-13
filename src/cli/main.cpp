@@ -6,9 +6,15 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
+#include <streambuf>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "wowmod/config.hpp"
 #include "wowmod/discover.hpp"
@@ -22,6 +28,87 @@
 
 namespace fs = std::filesystem;
 using namespace wowmod;
+
+#ifdef _WIN32
+namespace {
+
+// 程序统一输出 UTF-8；Windows 控制台默认多为 936(GBK)，PowerShell 会把 UTF-8
+// 按 936 解码成乱码。这里在「确实是控制台」且不是 --json 时，按当前控制台
+// 代码页做一次 UTF-8 -> ACP 转换；重定向到文件/管道时保持 UTF-8 原样。
+class ConsoleUtf8Buf : public std::streambuf {
+ public:
+  ConsoleUtf8Buf(std::streambuf* sink, UINT cp) : sink_(sink), cp_(cp) {}
+
+ protected:
+  std::streamsize xsputn(const char* s, std::streamsize n) override {
+    pending_.append(s, static_cast<size_t>(n));
+    size_t complete = complete_prefix(pending_);
+    if (complete) {
+      emit(pending_.substr(0, complete));
+      pending_.erase(0, complete);
+    }
+    return n;
+  }
+  int overflow(int c) override {
+    if (c == EOF) { sync(); return 0; }
+    char ch = static_cast<char>(c);
+    return xsputn(&ch, 1) == 1 ? c : EOF;
+  }
+  int sync() override {
+    if (!pending_.empty()) { emit(pending_); pending_.clear(); }
+    sink_->pubsync();
+    return 0;
+  }
+
+ private:
+  static size_t complete_prefix(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+      unsigned char c = static_cast<unsigned char>(s[i]);
+      size_t len = c < 0x80 ? 1 : (c >= 0xC2 && c <= 0xDF) ? 2
+                                                            : (c >= 0xE0 && c <= 0xEF) ? 3
+                                                                                       : (c >= 0xF0 && c <= 0xF4) ? 4 : 1;
+      if (i + len > s.size()) break;
+      i += len;
+    }
+    return i;
+  }
+  void emit(const std::string& src) {
+    if (src.empty()) return;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, src.data(), static_cast<int>(src.size()), nullptr, 0);
+    if (wlen <= 0) { sink_->sputn(src.data(), static_cast<std::streamsize>(src.size())); return; }
+    std::wstring w(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, src.data(), static_cast<int>(src.size()), w.data(), wlen);
+    int mlen = WideCharToMultiByte(cp_, 0, w.data(), wlen, nullptr, 0, nullptr, nullptr);
+    if (mlen <= 0) { sink_->sputn(src.data(), static_cast<std::streamsize>(src.size())); return; }
+    std::string out(static_cast<size_t>(mlen), '\0');
+    WideCharToMultiByte(cp_, 0, w.data(), wlen, out.data(), mlen, nullptr, nullptr);
+    sink_->sputn(out.data(), static_cast<std::streamsize>(out.size()));
+  }
+  std::streambuf* sink_;
+  UINT cp_;
+  std::string pending_;
+};
+
+bool stdout_is_console() {
+  DWORD mode = 0;
+  return GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode) != 0;
+}
+
+struct ConsoleGuard {
+  std::unique_ptr<ConsoleUtf8Buf> out, err;
+  std::streambuf* old_out = nullptr;
+  std::streambuf* old_err = nullptr;
+  ~ConsoleGuard() {
+    if (out) std::cout.flush();
+    if (err) std::cerr.flush();
+    if (old_out) std::cout.rdbuf(old_out);
+    if (old_err) std::cerr.rdbuf(old_err);
+  }
+};
+
+}  // namespace
+#endif
 
 namespace {
 
@@ -529,6 +616,20 @@ int cmd_init(const Args& a) {
 
 int main(int argc, char** argv) {
   Args a = parse_args(argc, argv);
+
+#ifdef _WIN32
+  ConsoleGuard console_guard;
+  if (!a.json && stdout_is_console()) {
+    UINT cp = GetConsoleOutputCP();
+    if (cp != 0 && cp != CP_UTF8) {
+      console_guard.out.reset(new ConsoleUtf8Buf(std::cout.rdbuf(), cp));
+      console_guard.err.reset(new ConsoleUtf8Buf(std::cerr.rdbuf(), cp));
+      console_guard.old_out = std::cout.rdbuf(console_guard.out.get());
+      console_guard.old_err = std::cerr.rdbuf(console_guard.err.get());
+    }
+  }
+#endif
+
   if (a.help || a.command.empty()) { std::cout << kBanner << "\n" << help_text(); return 0; }
   if (a.command == "version" || a.command == "--version" || a.command == "-v") {
     std::cout << "wowmod-loadexe 1.0.0 (通用版本 / version-agnostic)\n";

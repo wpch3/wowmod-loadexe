@@ -19,6 +19,7 @@ cp examples/12.0.7/mappings/listfile.txt "$STAGE/mappings/"
 cp examples/12.0.7/mods/models/README.md "$STAGE/mods/models/"
 cp docs/WINDOWS-QUICKSTART.md "$STAGE/WINDOWS-QUICKSTART.md"
 cp docs/X64DBG.md "$STAGE/X64DBG.md"
+cp scripts/diagnose-load.ps1 "$STAGE/diagnose-load.ps1"
 
 cat > "$STAGE/RUN.txt" <<'TXT'
 wowmod 12.0.7 — 直接解压到游戏目录的版本
@@ -32,7 +33,7 @@ wowmod 12.0.7 — 直接解压到游戏目录的版本
   wowmod_hook.dll
   wowmod.firestorm.json
   hooks\  mappings\  mods\
-  RUN.txt  WINDOWS-QUICKSTART.md  X64DBG.md
+  RUN.txt  WINDOWS-QUICKSTART.md  X64DBG.md  diagnose-load.ps1
 
 然后在这个目录打开 PowerShell（地址栏输 powershell 回车），依次执行：
 
@@ -51,6 +52,12 @@ wowmod 12.0.7 — 直接解压到游戏目录的版本
 4. 把模型替换文件放进 mods\models\；12.0.7 listfile 放 mappings\listfile.txt。
 5. launch 成功后，本目录下 runtime-dumps\ 会生成解密内存映像和候选特征，
    把这个文件夹发回即可完成最后一条 FileDataID hook 点的确认。
+6. 若提示 LoadLibraryW 返回 NULL，运行诊断脚本看具体 Win32 错误码：
+
+   powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
+
+   常见原因：Defender/ASR 拦截（文件在 Downloads 目录）、缺少 VC++ 运行库、
+   或挂起阶段 loader 未就绪（加载器会自动延迟重试一次）。
 
 仅用于你有权修改/调试的私服或离线环境。
 TXT

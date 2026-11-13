@@ -201,8 +201,11 @@ std::vector<HookImage> collect_hook_images(const Config& cfg, const ClientInfo& 
   std::vector<HookImage> images;
   if (!exe_bytes.empty()) images.push_back({"", exe_bytes});
   std::vector<std::string> names = cfg.hooks.scan_targets;
+  auto has = [&](const std::string& n) {
+    return std::any_of(names.begin(), names.end(), [&](const std::string& x) { return iequals(x, n); });
+  };
   for (const auto& d : ci.companion_dlls) {
-    if (std::find(names.begin(), names.end(), d) == names.end()) names.push_back(d);
+    if (!has(d)) names.push_back(d);  // Windows 文件名大小写不敏感，避免同一 DLL 扫两遍
   }
   // exe 尚未落盘（跨机预览配置）时 detect 会把 game_dir 设成 exe 路径本身，这里兜一层。
   std::string dir = ci.game_dir;

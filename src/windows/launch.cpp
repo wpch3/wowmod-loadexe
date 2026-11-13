@@ -11,6 +11,7 @@ LaunchResult launch_game(const Config&, const ClientInfo&, const Vfs&, const Hoo
 
 #include <windows.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -125,10 +126,31 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
     return r;
   }
 
+  std::wstring dll_w = utf8_to_wide(to_native_path(dll));
   std::string inject_err;
-  bool injected = win::inject_dll(pi.hProcess, utf8_to_wide(to_native_path(dll)), &inject_err);
-  if (injected) ResumeThread(pi.hThread);
-  else TerminateProcess(pi.hProcess, 1);  // 不注入就不要启动，避免无覆盖层运行
+  bool injected = win::inject_dll(pi.hProcess, dll_w, &inject_err);
+  bool resumed = false;
+  // 部分加壳客户端在 CREATE_SUSPENDED 阶段 loader / UCRT 还没初始化完，
+  // LoadLibraryW 会返回 NULL。回退：先恢复主线程，等一小会儿再注入一次。
+  if (!injected && cfg.hooks.inject_retry) {
+    std::string first_err = inject_err;
+    ResumeThread(pi.hThread);
+    resumed = true;
+    Sleep(static_cast<DWORD>(std::max(0, std::min(10000, cfg.hooks.inject_retry_delay_ms))));
+    std::string retry_err;
+    if (win::inject_dll(pi.hProcess, dll_w, &retry_err)) {
+      injected = true;
+      inject_err = "挂起阶段注入失败，已在进程初始化后重试成功；" + retry_err +
+                   "\n  首次失败: " + first_err;
+    } else {
+      inject_err = "挂起阶段注入失败: " + first_err + "\n延迟重试仍失败: " + retry_err;
+    }
+  }
+  if (injected) {
+    if (!resumed) ResumeThread(pi.hThread);
+  } else {
+    TerminateProcess(pi.hProcess, 1);  // 不注入就不要启动，避免无覆盖层运行
+  }
 
   r.pid = pi.dwProcessId;
   CloseHandle(pi.hThread);
