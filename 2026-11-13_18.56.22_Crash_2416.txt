@@ -1,0 +1,1543 @@
+﻿================================================================================
+World of Warcraft: Retail Build (build 68974)
+
+Exe:      D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe
+Command:  "D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe"
+Time:     Nov 13, 2026  6:56:22.140 PM
+--------------------------------------------------------------------------------
+
+==============================================================================
+Exception: ACCESS_VIOLATION - The instruction at "0x00007ffd9a48a814" referenced memory at "0x000000002ad20000".
+The memory could not be "read".
+ProcessID: 2416
+ThreadID: 26048
+------------------------------------------------------------------------------
+
+<Exception.IssueType> Exception
+<ExceptionType> Crash
+<Exception.Summary:>
+ACCESS_VIOLATION - The instruction at "0x00007ffd9a48a814" referenced memory at "0x000000002ad20000".
+The memory could not be "read".
+(DBG-OPTIONS<FunctionsOnly SingleLine> DBG-ADDR<00007ffd9921c45d>("WS2_32.dll") <- DBG-ADDR<0000000141a1bbbf>("WoW 12.0.7 - Firestorm.exe") <- DBG-ADDR<0000000141a17c38>("WoW 12.0.7 - Firestorm.exe") DBG-OPTIONS<>)
+<:Exception.Summary>
+<Exception.Assertion:>
+DBG-ADDR<00007ffd9921c45d>("WS2_32.dll")
+DBG-ADDR<0000000141a1bbbf>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141a17c38>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b8898>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b4e4c>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142599f6a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014258a5f3>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014198667e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141bba615>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141bba714>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bbfd1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bfc23>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bb7f7>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433b8280>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bc56d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bb9f1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433b9989>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140559d7d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055a46e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055d377>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055de6a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055cf94>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001432653a1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014325e934>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140504bc4>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401e8250>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401eb604>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140227712>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140226c98>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd994d52c6>("USER32.dll")
+DBG-ADDR<00007ffd994d5d9d>("USER32.dll")
+DBG-ADDR<00000001402292b6>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140228e7c>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401df39e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401dd4d4>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402bdd7a>("WoW 12.0.7 - Firestorm.exe")
+<:Exception.Assertion>
+<Exception.HashBlock:>
+DBG-OPTIONS<NoImage NoAddress NoFileLine NoFuncOffset NoDbgAddr>
+ERROR #132
+WS2_32.dll
+DBG-ADDR<0000000141a1bbbf>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141a17c38>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b8898>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b4e4c>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142599f6a>("WoW 12.0.7 - Firestorm.exe")
+DBG-OPTIONS<>
+<:Exception.HashBlock>
+<EstimatedTrace> No
+<Jira.JiraProjectId> 12300
+<Jira.JiraProjectKey> WOW12
+<Exception.ProjectId> 10
+
+------------------------------------------------------------------------------
+<Version> 12.0.7.68974
+<Exception.BuildNumber> 68974
+<Exception.Branch> 12.0.7
+<Exception.WowProject> Mainline
+<Application> World of Warcraft
+<ApplicationType> Client
+
+----------------------------------------
+    Lua Stack
+----------------------------------------
+#1 [C]: in function 'Login'
+ (*temporary)="3533571945@qq.com", (*temporary)=EditBox <AccountLogin.xml:136>
+#2 ...ce/AddOns/Blizzard_GlueXML/Mainline/AccountLogin.lua:183: in function 'AccountLogin_Login'
+ username="3533571945@qq.com"
+#3 [string "*AccountLogin.xml:155_OnEnterPressed"]:2: in function <[string "*AccountLogin.xml:155_OnEnterPressed"]:1>
+ self=EditBox <AccountLogin.xml:136>
+
+<Config> Retail
+Type: WoW
+<Executable> WoW 12.0.7 - Firestorm.exe
+<Wow.Platform> X64
+<Exception.Platform> Win 11 (x86 64-bit)
+Free Disk Space: 76.24 GB
+Exe Built: Jul 27 2026 18:11:49
+<InitFlags> 0000003F 00001FFF 00000400
+App Up Time: 0 days, 0 hours, 7 minutes, 32 seconds
+System Up Time: 1 days, 6 hours, 47 minutes, 14 seconds
+Current Frame: 21858
+Current Time: 110835621
+Current Tick: 17
+<SystemResumes> 0
+<CharLogins> 0
+Number of thread pool threads: 5/5/5 (High/Mid/Low)
+<LauncherName> wowmod.exe
+<Locale.Text> zhCN
+<Locale.Audio> zhCN
+Session Time(hh:mm:ss): 00:07:21
+<SessionTime.Grouping> 00:00:00 - 00:14:59
+Time in World(hh:mm:ss): 00:00:00
+<TimeInWorld.Grouping> 00:00:00 - 00:00:00
+Total Time in World(hh:mm:ss): 00:00:00
+<TotalTimeInWorld.Grouping> 00:00:00 - 00:00:00
+<UsingBlizzardErrorOverrideUrl> No
+<CNBuild> No
+Total lua memory: 30781KB
+<Addons.Current> (null)
+<Addons.Current.Function> Login
+<Addons.Current.Object> EditBox
+<Addons.HasAny.Loading> No
+<Addons.HasAny.Loaded> No
+<UIReloads> 0
+<LuaErrors> 0
+<BGDLEnabled> No
+<SoundSystem.Restarts> 0
+<LoadingScreen.Enabled> No
+<CombatLogEntry.Current> CombatLogEntry::PushEvent(casterGuidType, targetGuidType): 0, 0
+Number of successful WoWConnections: 0
+Battle Tag: n/a
+Last Known Player: 0000000000000000, (0, 0, 0, 0)
+Selected Player: 0000000000000000
+<Character.Info.Race> 0
+<Character.Info.Class> 0
+
+CVar Settings: 
+<CVar.RAIDspellClutter> 1
+<CVar.raidGraphicsTextureResolution> 1
+<CVar.plunderstormRealm> 0
+<CVar.terrainLodDist> 250
+<CVar.raidGraphicsProjectedTextures> 1
+<CVar.seenAlliedRaceUnlocks> Bad Character 0
+<CVar.RAIDreflectionMode> 0
+<CVar.reflectionMode> 0
+<CVar.Sound_EnableAmbience> 0
+<CVar.RAIDparticleMTDensity> 20
+<CVar.graphicsDepthEffects> 0
+<CVar.lodObjectCullSize> 27
+<CVar.RAIDparticleDensity> 10
+<CVar.particleMTDensity> 20
+<CVar.portal> EU
+<CVar.raidGraphicsEnvironmentDetail> 2
+<CVar.graphicsQuality> 2
+<CVar.RAIDdoodadLodScale> 75
+<CVar.installLocale> zhCN
+<CVar.lastSelectedDelvesTier> 11
+<CVar.lastCharacterIndex> 2
+<CVar.KioskLobbyKickSeconds> 30
+<CVar.raidGraphicsGroundClutter> 2
+<CVar.graphicsProjectedTextures> 1
+<CVar.lastRenownForMajorFaction2507> 2
+<CVar.waterDetail> 1
+<CVar.raidGraphicsDepthEffects> 0
+<CVar.RAIDlodObjectMinSize> 0
+<CVar.raidGraphicsSpellDensity> 0
+<CVar.lodObjectFadeScale> 80
+<CVar.nameplateMotion> 1
+<CVar.NameplatePersonalHideDelayAlpha> 1
+<CVar.audioLocale> zhCN
+<CVar.RAIDgraphicsQuality> 2
+<CVar.lastRenownForMajorFaction2590> 14
+<CVar.raidGraphicsViewDistance> 2
+<CVar.graphicsTextureResolution> 1
+<CVar.lastRenownForMajorFaction2570> 9
+<CVar.projectedTextures> 1
+<CVar.RAIDfarclip> 3000
+<CVar.TerrainLodDiv> 384
+<CVar.lastLockedDelvesCompanionAbilities> 104041 
+<CVar.RAIDWaterDetail> 1
+<CVar.graphicsGroundClutter> 2
+<CVar.farclip> 3000
+<CVar.graphicsLiquidDetail> 1
+<CVar.doodadLodScale> 75
+<CVar.textLocale> zhCN
+<CVar.raidGraphicsComputeEffects> 1
+<CVar.graphicsShadowQuality> 0
+<CVar.worldBaseMip> 1
+<CVar.NamePlateHorizontalScale> 1
+<CVar.RAIDwmoLodDist> 300
+<CVar.componentTextureLevel> 1
+<CVar.NamePlateClassificationScale> 1
+<CVar.RAIDVolumeFog> 1
+<CVar.mouseSpeed> 1.000000
+<CVar.engineSurveyPatch> 120007
+<CVar.raidGraphicsParticleDensity> 1
+<CVar.graphicsSpellDensity> 0
+<CVar.alwaysShowActionBars> 1
+<CVar.hwDetect> 0
+<CVar.videoOptionsVersion> 49
+<CVar.raidGraphicsLiquidDetail> 1
+<CVar.vsync> 1
+<CVar.showPhotosensitivityWarning> 11
+<CVar.graphicsEnvironmentDetail> 2
+<CVar.NameplatePersonalHideDelaySeconds> 0.2
+<CVar.GxApi> D3D12
+<CVar.nameplateLargeTopInset> 0.085
+<CVar.graphicsComputeEffects> 1
+<CVar.volumeFogLevel> 0
+<CVar.unlockedExpansionLandingPages> Bad Character 0
+<CVar.nameplateOtherTopInset> 0.085
+<CVar.nameplateShowFriends> 1
+<CVar.raidGraphicsOutlineMode> 0
+<CVar.terrainMipLevel> 1
+<CVar.RAIDentityLodDist> 5
+<CVar.gameTip> 14
+<CVar.spellClutter> 1
+<CVar.RAIDlodObjectFadeScale> 80
+<CVar.lastVoidStorageTutorial> 3
+<CVar.RAIDcomponentTextureLevel> 1
+<CVar.RAIDterrainMipLevel> 1
+<CVar.RAIDrippleDetail> 0
+<CVar.RAIDTerrainLodDiv> 384
+<CVar.RAIDworldBaseMip> 1
+<CVar.raidGraphicsSSAO> 0
+<CVar.engineSurvey> 8
+<CVar.currentGameMode> 8
+<CVar.advJournalLastOpened> 1776773632
+<CVar.hideFastLoginLoadingScreen> 0
+<CVar.RAIDhorizonClip> 3000
+<CVar.RAIDDepthBasedOpacity> 0
+<CVar.spellVisualDensityFilterSetting> 1
+<CVar.particleDensity> 10
+<CVar.graphicsParticleDensity> 1
+<CVar.entityLodDist> 5
+<CVar.RAIDVolumeFogLevel> 0
+<CVar.rippleDetail> 0
+<CVar.entityShadowFadeScale> 10
+<CVar.horizonClip> 3000
+<CVar.graphicsViewDistance> 2
+<CVar.RAIDlodObjectCullSize> 27
+<CVar.NamePlateVerticalScale> 1
+<CVar.lastRenownForMajorFaction2600> 7
+<CVar.RAIDweatherDensity> 0
+<CVar.KioskCharacterTemplateSet> 0
+<CVar.highestUnlockedDelvesTier> 11
+<CVar.weatherDensity> 0
+<CVar.GxMaximize> 1
+<CVar.graphicsOutlineMode> 0
+<CVar.nameplateLargerScale> 1.1
+<CVar.volumeFog> 1
+<CVar.raidGraphicsShadowQuality> 0
+<CVar.RAIDprojectedTextures> 1
+<CVar.DepthBasedOpacity> 0
+<CVar.lodObjectMinSize> 0
+<CVar.graphicsSSAO> 0
+<CVar.RAIDterrainLodDist> 250
+<CVar.KioskCanSessionExpire> 1
+
+----------------------------------------
+Installation settings:
+----------------------------------------
+UID:  
+Expansion Level: 11
+PTR: 0
+Beta: 0
+ProductCode: 'WoW'
+
+----------------------------------------
+               GxInfo
+----------------------------------------
+<GxApi> D3D12
+<ForegroundApp> 1
+<Graphics.ShaderModel> dx_5_0
+<PresentModificationState> Unmodified
+<WarnedPresentModified> No
+<Graphics.UMDVersion> 32.0.0016.1742
+<Graphics.DriverDate> 2026-09-30
+<Graphics.VendorID> 0x10DE
+<Graphics.PCIIdentifier> VID=0x10DE,DID=0x1F97,REV=0xA1,SSID=0x00003A4C
+Graphics.DeviceID 0x1F97
+<Graphics.DeviceName> NVIDIA GeForce MX450
+<Graphics.VideoMemory> 1906 MB
+<GxRestarts> 0
+<GxFailedFrameStartRestarts> 0
+<GxDeviceLostCount> 0
+<RTShadows> 0
+<BlocklistedDriverWarningShown> No
+
+----------------------------------------
+Streaming diagnostics (Errors):
+----------------------------------------
+----------------------------------------
+
+Streaming Errors Count: 0
+<Streaming.Errors> No
+
+----------------------------------------
+Streaming diagnostics (Info):
+----------------------------------------
+Adding server node 0. Server '57.129.6.7' | Address '57.129.6.7'
+DNS resolution completed in 0ms.
+Downloading config with key 3ca57fe7319a297346440e4d2a03a0cd. Existing file is missing or invalid.
+Scanning for KMT sequence numbers.
+DNS resolution completed in 0ms.
+----------------------------------------
+
+Locally overridden files
+     -8 : D:\Midnight Open Beta\_midnight_\Fonts\615974.slugo
+     -7 : D:\Midnight Open Beta\_midnight_\Fonts\615974.slug
+     -6 : D:\Midnight Open Beta\_midnight_\Fonts\615970.slug
+----------------------------------------
+
+-----------------------------------------
+DBG-DATA<
+
+>
+----------------------------------------
+
+
+000000014485a8b0 - 28397176
+0000000144852840 - 8192
+0000000144452800 - 4194304
+
+
+----------------------------------------
+Info stack for thread with exception (26048)
+waEventType: 10
+----------------------------------------
+
+----------------------------------------
+Recent Allocation Failures
+------------------------------------------------------------------------------
+
+----------------------------------------
+Registers
+----------------------------------------
+
+RAX=000000002AD20000  RCX=0000000000000000  RDX=000000002AD20000  RBX=000000000015C6C0
+RSP=000000000015C648  RBP=000000000015C6D0  RSI=0000000000000000  RDI=0000000000000000
+R8 =000000002AD20000  R9 =0000000000000000  R10=0000000000000000  R11=000000000015C768
+R12=0000000000000400  R13=0000000000000000  R14=000000000AA6EE90  R15=0000000000000498
+RIP=00007FFD9A48A814  CSR=00001FA0          FLG=00010246
+CS =0033      DS =002B      ES =002B      SS =002B      FS =0053      GS =002B
+
+XMM0 =00000000000000000000000000000000  XMM1 =00000000000000000000000000000000
+XMM2 =00000000000000000000000000000000  XMM3 =00000000000000000000000000000000
+XMM4 =00000000000000000000000000000000  XMM5 =00000000000000000000000000000000
+XMM6 =00000000000000008000000000000000  XMM7 =00000000000000000000000000000000
+XMM8 =00000000000000000000000000000000  XMM9 =00000000000000000000000000000000
+XMM10=00000000000000000000000000000000  XMM11=00000000000000000000000000000000
+XMM12=00000000000000000000000000000000  XMM13=00000000000000000000000000000000
+XMM14=00000000000000000000000000000000  XMM15=00000000000000000000000000000000
+CSR=00001FA0  MSK=0002FFFF
+
+----------------------------------------
+Stack Trace (Manual)
+----------------------------------------
+
+--- Thread ID: 26048 [Current Thread] ---
+DBG-ADDR<00007ffd9a48a814>("ntdll.dll")
+DBG-ADDR<00007ffd9a417951>("ntdll.dll")
+DBG-ADDR<00007ffd975d11bc>("KERNELBASE.dll")
+DBG-ADDR<00007ffd9a36e993>("ntdll.dll")
+DBG-ADDR<00007ffd9a4c4cce>("ntdll.dll")
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd9681951a>("mswsock.dll")
+DBG-ADDR<00007ffd9682b246>("mswsock.dll")
+DBG-ADDR<00007ffd99205d80>("WS2_32.dll")
+DBG-ADDR<00007ffd992052d0>("WS2_32.dll")
+DBG-ADDR<00007ffd9921c9cf>("WS2_32.dll")
+DBG-ADDR<00007ffd9921c45d>("WS2_32.dll")
+DBG-ADDR<0000000141a1bbbf>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141a17c38>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b8898>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001425b4e4c>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142599f6a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014258a5f3>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014198667e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141bba615>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141bba714>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bbfd1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bfc23>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bb7f7>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433b8280>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bc56d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433bb9f1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001433b9989>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140559d7d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055a46e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055d377>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055de6a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014055cf94>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001432653a1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014325e934>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140504bc4>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401e8250>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401eb604>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140227712>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140226c98>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd994d52c6>("USER32.dll")
+DBG-ADDR<00007ffd994d5d9d>("USER32.dll")
+DBG-ADDR<00000001402292b6>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000140228e7c>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401df39e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001401dd4d4>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402bdd7a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014338443e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd3147cce9>("<unknown>")
+DBG-ADDR<00000001401d8262>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 26544 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd2ff910fe>("<unknown>")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 23568 ---
+DBG-ADDR<00007ffd9a4c1444>("ntdll.dll")
+DBG-ADDR<00007ffd9a433924>("ntdll.dll")
+DBG-ADDR<00007ffd9763bb01>("KERNELBASE.dll")
+DBG-ADDR<00007ffd30c9aff0>("<unknown>")
+DBG-ADDR<00007ffd30b8afc7>("<unknown>")
+DBG-ADDR<00007ffd31787775>("<unknown>")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 28336 ---
+DBG-ADDR<00007ffd9a40cac0>("ntdll.dll")
+
+--- Thread ID: 19396 ---
+DBG-ADDR<00007ffd9a40cac0>("ntdll.dll")
+
+--- Thread ID: 9420 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd3103ecce>("<unknown>")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 27432 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd314126d4>("<unknown>")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 12976 ---
+DBG-ADDR<00007ffd9a4c1224>("ntdll.dll")
+DBG-ADDR<00007ffd9767d800>("KERNELBASE.dll")
+DBG-ADDR<00007ffd30ae34c3>("<unknown>")
+DBG-ADDR<00007ffd3116b389>("<unknown>")
+DBG-ADDR<00007ffd313ce7d4>("<unknown>")
+DBG-ADDR<00007ffd308db3cd>("<unknown>")
+DBG-ADDR<00007ffd308c3291>("<unknown>")
+DBG-ADDR<00007ffd2fda39db>("<unknown>")
+DBG-ADDR<00007ffd301015b7>("<unknown>")
+DBG-ADDR<00007ffd317d00a5>("<unknown>")
+DBG-ADDR<00007ffd3136d1fd>("<unknown>")
+DBG-ADDR<00007ffd3184c259>("<unknown>")
+DBG-ADDR<00007ffd307cd2a6>("<unknown>")
+DBG-ADDR<00007ffd976b3110>("KERNELBASE.dll")
+DBG-ADDR<00007ffd9a40caa9>("ntdll.dll")
+
+--- Thread ID: 20512 ---
+DBG-ADDR<00007ffd9a4c0ee4>("ntdll.dll")
+DBG-ADDR<00007ffd96826b1f>("mswsock.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 19252, Name: WowConnWork 0 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<0000000141a1b961>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141a1b2ec>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 23792, Name: WowConnMain ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd9681951a>("mswsock.dll")
+DBG-ADDR<00007ffd968191f2>("mswsock.dll")
+DBG-ADDR<00007ffd992119b1>("WS2_32.dll")
+DBG-ADDR<0000000141a19bf8>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141a1b31d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 5132, Name: NetThread 0 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<000000014271ec38>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014271e368>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 26512, Name: bs Network ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd9681951a>("mswsock.dll")
+DBG-ADDR<00007ffd968191f2>("mswsock.dll")
+DBG-ADDR<00007ffd992119b1>("WS2_32.dll")
+DBG-ADDR<000000014271d4aa>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014271e38d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 18536, Name: bs Resolver ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<000000014271f93f>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014271f85d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 18712, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 9316, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 7292, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 19536, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 26540, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 19276, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 16420, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 26192, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 10124, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 15292, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 7096, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 17760, Name: cxplat_worker ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<00000001427249b0>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 26212 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 24000 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 25996 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 25128 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 16820 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 24916 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 18484 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 20816 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 21996 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 6744 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 14440 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 18928 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 25460 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 23488 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 4692 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a3f8273>("ntdll.dll")
+DBG-ADDR<00007ffd9768e298>("KERNELBASE.dll")
+DBG-ADDR<00000001402c300a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8925>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142ef8cff>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000142d1757b>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 10524, Name: WowDownloadDispatcher 1 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd9681951a>("mswsock.dll")
+DBG-ADDR<00007ffd968191f2>("mswsock.dll")
+DBG-ADDR<00007ffd992119b1>("WS2_32.dll")
+DBG-ADDR<0000000143437654>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 24560 ---
+DBG-ADDR<00007ffd9a4c4a74>("ntdll.dll")
+DBG-ADDR<00007ffd9a37a65e>("ntdll.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 26912, Name: AIO Thread ---
+DBG-ADDR<00007ffd9a4c3d94>("ntdll.dll")
+DBG-ADDR<00007ffd9767147f>("KERNELBASE.dll")
+DBG-ADDR<0000000142ceec42>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 16196, Name: TACT Task Thread ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<0000000142c52eb9>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 11808, Name: TACT Task Thread ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<0000000142c52eb9>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 24316, Name: TACT Curl Downloader Thread ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<0000000142c8151e>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 13808, Name: WatchdogThread ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<000000014023b24a>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 23068, Name: Disk Queue 0 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00000001433fc9cc>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 8488, Name: Net Queue 0 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00000001433fcb1d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 2608, Name: Net Queue 1 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00000001433fcb1d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 6360, Name: Net Queue 2 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00000001433fcb1d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 7860, Name: Async Pending ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00000001433fce11>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 14856 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<0000000143359704>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 19600 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd26a0a521>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 684 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd261fc546>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 25200 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd26a5574f>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 24476 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd267c9ee6>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd267c9e99>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 5352, Name: D3D Background Thread 0 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<00007ffd979e3d2d>("msvcp_win.dll")
+DBG-ADDR<00007ffd979df4a9>("msvcp_win.dll")
+DBG-ADDR<00007ffd6569e07a>("D3D12Core.dll")
+DBG-ADDR<00007ffd6573e964>("D3D12Core.dll")
+DBG-ADDR<00007ffd97b7cd30>("ucrtbase.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 21488, Name: D3D Background Thread 1 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<00007ffd979e3d2d>("msvcp_win.dll")
+DBG-ADDR<00007ffd979df4a9>("msvcp_win.dll")
+DBG-ADDR<00007ffd6569e07a>("D3D12Core.dll")
+DBG-ADDR<00007ffd6573e964>("D3D12Core.dll")
+DBG-ADDR<00007ffd97b7cd30>("ucrtbase.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 17656, Name: D3D Background Thread 2 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<00007ffd979e3d2d>("msvcp_win.dll")
+DBG-ADDR<00007ffd979df4a9>("msvcp_win.dll")
+DBG-ADDR<00007ffd6569e07a>("D3D12Core.dll")
+DBG-ADDR<00007ffd6573e964>("D3D12Core.dll")
+DBG-ADDR<00007ffd97b7cd30>("ucrtbase.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 10024, Name: D3D Background Thread 3 ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<00007ffd979e3d2d>("msvcp_win.dll")
+DBG-ADDR<00007ffd979df4a9>("msvcp_win.dll")
+DBG-ADDR<00007ffd6569e07a>("D3D12Core.dll")
+DBG-ADDR<00007ffd6573e964>("D3D12Core.dll")
+DBG-ADDR<00007ffd97b7cd30>("ucrtbase.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 24708 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd261fc546>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 3604 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd261fc546>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 6768 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd261fc546>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 7844 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd8d5d2532>("atidxx64.dll")
+DBG-ADDR<00007ffd8d5d20b9>("atidxx64.dll")
+DBG-ADDR<00007ffd8e0a7dfe>("atidxx64.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 16720 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd8df15881>("atidxx64.dll")
+DBG-ADDR<00007ffd8df15758>("atidxx64.dll")
+DBG-ADDR<00007ffd8df159ef>("atidxx64.dll")
+DBG-ADDR<00007ffd8df09a39>("atidxx64.dll")
+DBG-ADDR<00007ffd8e0a7dfe>("atidxx64.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 27212 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<0000000141af307d>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141af4dfe>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141ae2d61>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 27228 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<0000000141a9b587>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141ae2d41>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 14496 ---
+DBG-ADDR<00007ffd9a4c1444>("ntdll.dll")
+DBG-ADDR<00007ffd9a433924>("ntdll.dll")
+DBG-ADDR<00007ffd9763bb01>("KERNELBASE.dll")
+DBG-ADDR<0000000141ae2d7b>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 9180 ---
+DBG-ADDR<00007ffd9a4c1444>("ntdll.dll")
+DBG-ADDR<00007ffd9a433924>("ntdll.dll")
+DBG-ADDR<00007ffd9763bb01>("KERNELBASE.dll")
+DBG-ADDR<00000001402b59d6>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141b4b679>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00000001402c0fa1>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 20252, Name: VoiceSpeakThread ---
+DBG-ADDR<00007ffd9a4c4a14>("ntdll.dll")
+DBG-ADDR<00007ffd9a40298e>("ntdll.dll")
+DBG-ADDR<00007ffd975d2a58>("KERNELBASE.dll")
+DBG-ADDR<00000001424fe907>("WoW 12.0.7 - Firestorm.exe")
+
+--- Thread ID: 27528 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<0000000141a9b587>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<0000000141ae2d41>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 21048 ---
+DBG-ADDR<00007ffd9a4c1444>("ntdll.dll")
+DBG-ADDR<00007ffd9a433924>("ntdll.dll")
+DBG-ADDR<00007ffd9763bb01>("KERNELBASE.dll")
+DBG-ADDR<0000000141ae2d7b>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<000000014339f088>("WoW 12.0.7 - Firestorm.exe")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 15056 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd261fc546>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 132 ---
+DBG-ADDR<00007ffd9a4c0e44>("ntdll.dll")
+DBG-ADDR<00007ffd975cbe9f>("KERNELBASE.dll")
+DBG-ADDR<00007ffd26800c02>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd26f7d94a>("nvwgf2umx.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 12688 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd8ca74fcc>("amdihk64.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 21600 ---
+DBG-ADDR<00007ffd9a4c1914>("ntdll.dll")
+DBG-ADDR<00007ffd975d2773>("KERNELBASE.dll")
+DBG-ADDR<00007ffd975d2641>("KERNELBASE.dll")
+DBG-ADDR<00007ffd8ca76415>("amdihk64.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+--- Thread ID: 13148 ---
+DBG-ADDR<00007ffd9a4c4a74>("ntdll.dll")
+DBG-ADDR<00007ffd9a37a65e>("ntdll.dll")
+DBG-ADDR<00007ffd996ccd87>("KERNEL32.DLL")
+DBG-ADDR<00007ffd308f6ef4>("<unknown>")
+DBG-ADDR<00007ffd9a40caec>("ntdll.dll")
+
+----------------------------------------
+Loaded Modules
+----------------------------------------
+
+<Exception.DebugModules:>
+DBG-MODULE<0000000063880000 069A8000 "nvgpucomp64.dll" "nvgpucomp64.pdb" 0 {bc1ed290-f888-40dc-93bc1d38a0ac4f1a} 1 1790800481>
+DBG-MODULE<0000000140000000 06C4E000 "WoW 12.0.7 - Firestorm.exe" "Wow.pdb" 0 {69b303e9-db78-4344-9c81571b18a4e0e5} 1 1785201470>
+DBG-MODULE<0000000180000000 00003000 "sfc.dll" "sfc.pdb" 0 {987527c0-a59d-b349-3666a2893b0696bb} 1 14688905>
+DBG-MODULE<00007ffd17280000 00727000 "nvppex.dll" "nvppex.pdb" 0 {3d43ebce-36fd-48c0-a8690e3a933fc577} 1 1790800291>
+DBG-MODULE<00007ffd260b0000 0561A000 "nvwgf2umx.dll" "nvwgf2umx.pdb" 0 {372b13a8-e0c4-4866-83149d12a4a8cc4b} 1 1790801607>
+DBG-MODULE<00007ffd2f9d0000 026B0000 "Wow_loader.dll" "loader.pdb" 0 {b469f3c0-1c46-6159-4c4c44205044422e} 1 1778267483>
+DBG-MODULE<00007ffd3d020000 0004B000 "icm32.dll" "icm32.pdb" 0 {e3988bb2-031e-e90d-b648577450fd08aa} 1 905015230>
+DBG-MODULE<00007ffd3df90000 00037000 "winmmbase.dll" "WINMMBASE.pdb" 0 {507dec78-775a-45ea-97cffdd64bccd5bc} 1 4159462350>
+DBG-MODULE<00007ffd430c0000 00023000 "d3d12.dll" "d3d12.pdb" 0 {391dd6dc-bc5d-4c7f-782684f5ecb3985b} 1 115991057>
+DBG-MODULE<00007ffd470c0000 0015B000 "NvMemMapStoragex.dll" "NvMemMapStoragex.pdb" 0 {32225bed-f482-441e-bda6bb0a6d76ec69} 1 1790800536>
+DBG-MODULE<00007ffd47990000 000CE000 "nvldumdx.dll" "nvldumdx.pdb" 0 {e3ea3aac-f64f-4a1b-adf58436f435c3aa} 1 1790800287>
+DBG-MODULE<00007ffd4a490000 00170000 "nvspcap64.dll" "nvspcap64.pdb" 0 {697d7d62-a33f-4f36-b779f61b892ab912} 34 1793023842>
+DBG-MODULE<00007ffd65610000 0035B000 "D3D12Core.dll" "d3d12core.pdb" 0 {08edbeeb-7cbf-a2b3-445a31ebab581079} 1 4260529899>
+DBG-MODULE<00007ffd733e0000 0004C000 "wdmaud.drv" "wdmaud.pdb" 0 {77f1971b-f72d-a045-ea502c5b7736d414} 1 2099350810>
+DBG-MODULE<00007ffd73f60000 001B7000 "AUDIOSES.DLL" "audioses.pdb" 0 {f188ca8b-c383-a28a-e82934a3f525fb46} 1 2646899618>
+DBG-MODULE<00007ffd761a0000 00048000 "ncryptsslp.dll" "ncryptsslp.pdb" 0 {1170877b-f3bb-44c5-25be545909cbda7f} 1 1259946681>
+DBG-MODULE<00007ffd7b970000 00290000 "COMCTL32.dll" "comctl32.pdb" 0 {8592c3f5-2253-049d-ab5e6274ca4e384d} 1 4255066635>
+DBG-MODULE<00007ffd7e150000 00142000 "textinputframework.dll" "TextInputFramework.pdb" 0 {34a2c0a7-da23-212e-70024181adfb5b3c} 1 360785011>
+DBG-MODULE<00007ffd803d0000 00026000 "wdmaud2.drv" "wdmaud2.pdb" 0 {5c0590c5-37ee-682a-3c1d40a78b4c60dc} 1 1950339854>
+DBG-MODULE<00007ffd80550000 00021000 "MSACM32.dll" "msacm32.pdb" 0 {0f7f24ee-2ca6-4b36-b76647b8e10a5b77} 1 2705859800>
+DBG-MODULE<00007ffd80ea0000 00019000 "tbs.dll" "tbs.pdb" 0 {2d374a8b-a58d-e9e3-f6037926931cad67} 1 203832161>
+DBG-MODULE<00007ffd83900000 00592000 "nvapi64_impl.dll" "nvapi64_impl.pdb" 0 {3857472d-614b-4e38-8f2d42ebe089838c} 1 1790800075>
+DBG-MODULE<00007ffd83ee0000 00089000 "nvapi64.dll" "nvapi64.pdb" 0 {9685c81c-74d3-4514-b87d1050164e338a} 1 1790800067>
+DBG-MODULE<00007ffd843f0000 0003B000 "dbgcore.DLL" "dbgcore.pdb" 0 {f03c9107-01f6-1f94-6ffb4606ffd8958e} 1 811737392>
+DBG-MODULE<00007ffd86010000 000A5000 "MMDevApi.dll" "MMDevAPI.pdb" 0 {9fc6b20b-b2e0-d767-8028c01bf707ed54} 1 247280673>
+DBG-MODULE<00007ffd88b30000 0003B000 "cryptnet.dll" "cryptnet.pdb" 0 {14b383b3-f799-ac5d-390068cac4943572} 1 887507683>
+DBG-MODULE<00007ffd8a7b0000 000DF000 "D3DSCache.dll" "D3DSCache.pdb" 0 {7c6e3a50-d818-6a96-991d43f1458eee10} 1 38721473>
+DBG-MODULE<00007ffd8bad0000 0000F000 "msacm32.drv" "msacm32.pdb" 0 {ba07ec63-4c80-6cc8-bb8a4eb45e7d350a} 1 2763227619>
+DBG-MODULE<00007ffd8bc30000 0000C000 "midimap.dll" "midimap.pdb" 0 {c7b0877f-e26d-569a-c7627fdc73bdc2e1} 1 4166834399>
+DBG-MODULE<00007ffd8c750000 0017A000 "drvstore.dll" "drvstore.pdb" 0 {6f28eedd-cb2e-e6a0-372820952d9e1d2c} 1 756374459>
+DBG-MODULE<00007ffd8c920000 0000A000 "sfc_os.DLL" "sfc_os.pdb" 0 {afa675fa-ca02-3c05-680f533b8a7f2c04} 1 3024352412>
+DBG-MODULE<00007ffd8ca70000 00030000 "amdihk64.dll" "shell32.pdb" 0 {011de059-cf3d-0b81-74fa9b5324ea7654} 1 1660804995>
+DBG-MODULE<00007ffd8d510000 0000B000 "rasadhlp.dll" "rasadhlp.pdb" 0 {46810fdd-ef4a-c3b5-31e89259f2d94a0c} 1 158316011>
+DBG-MODULE<00007ffd8d5b0000 01F37000 "atidxx64.dll" "atidxx64.pdb" 0 {9b0ed5dc-5fe9-43da-9338022b15a55aea} 1 1660806049>
+DBG-MODULE<00007ffd8f760000 00039000 "atiuxp64.dll" "atiuxp64.pdb" 0 {bde12c00-c416-44e8-80503caf14075211} 2 1660805137>
+DBG-MODULE<00007ffd8fb20000 00036000 "WINMM.dll" "winmm.pdb" 0 {004b1e80-61be-fde5-a0e1f421b384246e} 1 2251690161>
+DBG-MODULE<00007ffd8fb60000 0000B000 "VERSION.dll" "version.pdb" 0 {440dd63b-e2b0-21f8-0fd0c78ef0aecef2} 1 2275202464>
+DBG-MODULE<00007ffd8fb70000 001B8000 "aticfx64.dll" "aticfx64.pdb" 0 {b850cf42-17e6-4753-94b66e2aae18d38d} 1 1660805260>
+DBG-MODULE<00007ffd90850000 000BF000 "mscms.dll" "mscms.pdb" 0 {17cc3219-f36f-24c0-2d2dd371dec7f981} 1 2852211675>
+DBG-MODULE<00007ffd90920000 0012A000 "WINHTTP.dll" "winhttp.pdb" 0 {0b998b55-bd53-57b7-79887c5dc5badaaf} 1 3456803258>
+DBG-MODULE<00007ffd90c20000 00025000 "dhcpcsvc.DLL" "dhcpcsvc.pdb" 0 {51b42bfc-ac67-b058-cb57e186944a825a} 1 1124682484>
+DBG-MODULE<00007ffd90c50000 0001D000 "dhcpcsvc6.DLL" "dhcpcsvc6.pdb" 0 {da04b0e1-5e4e-f325-f719581dde901c22} 1 4218805422>
+DBG-MODULE<00007ffd90e80000 0016A000 "wintypes.dll" "WinTypes.pdb" 0 {12a281f1-73a6-db45-e2a1c389f1072c3a} 1 3666530298>
+DBG-MODULE<00007ffd911d0000 002E4000 "CoreUIComponents.dll" "CoreUIComponents.pdb" 0 {b405e11d-b9f2-d4c5-6129f644c02687c7} 1 222445461>
+DBG-MODULE<00007ffd91760000 00086000 "fwpuclnt.dll" "fwpuclnt.pdb" 0 {7bfc378b-554f-1fef-ca263f6e159abd9b} 1 245929549>
+DBG-MODULE<00007ffd917f0000 0000B000 "AVRT.dll" "avrt.pdb" 0 {58fb2648-7ff2-661c-c5a0d5b568216e87} 1 2310781783>
+DBG-MODULE<00007ffd91ab0000 0005E000 "directxdatabasehelper.dll" "directxdatabasehelper.pdb" 0 {9747aaf5-67dc-615c-a025165f35b52ff1} 1 2273281722>
+DBG-MODULE<00007ffd92810000 0001A000 "Microsoft.Internal.WarpPal.dll" "Microsoft.Internal.WarpPal.pdb" 0 {e2af68f0-610e-e4e5-0d7cdf8163c8a9cf} 1 1689278011>
+DBG-MODULE<00007ffd93350000 00260000 "d3d11.dll" "d3d11.pdb" 0 {69dd4774-b442-adfc-c7ed384d7c231d80} 1 2497598362>
+DBG-MODULE<00007ffd935c0000 00225000 "dcomp.dll" "dcomp.pdb" 0 {40ba7c80-8366-c1d6-852c19509b2155d3} 1 398972969>
+DBG-MODULE<00007ffd93d30000 0012B000 "CoreMessaging.dll" "CoreMessaging.pdb" 0 {46238a8b-3f58-b1b4-dfe8cf4cb68533c0} 1 974823412>
+DBG-MODULE<00007ffd94090000 0000D000 "Secur32.dll" "secur32.pdb" 0 {4086d48d-454c-b5a5-5d7006fdff298d3c} 1 3076803899>
+DBG-MODULE<00007ffd940d0000 0009F000 "apphelp.dll" "apphelp.pdb" 0 {a83cbc70-3f6d-fc6d-d8907f70c41790a0} 1 958601479>
+DBG-MODULE<00007ffd941e0000 000A8000 "uxtheme.dll" "uxtheme.pdb" 0 {e2bbbda0-30fb-0fca-f20fa485d62a7a56} 1 734920565>
+DBG-MODULE<00007ffd942c0000 00044000 "dxcore.dll" "DXCore.pdb" 0 {bdf563bb-bdef-88cc-c1479c0552714a2c} 1 1771679452>
+DBG-MODULE<00007ffd94310000 0013B000 "dxgi.dll" "dxgi.pdb" 0 {7ac009cc-e236-6a45-d1510090c3276d89} 1 2734512402>
+DBG-MODULE<00007ffd94470000 0002F000 "dwmapi.dll" "dwmapi.pdb" 0 {0e66c8dc-2bad-e510-db2339870eedd5df} 1 1534219485>
+DBG-MODULE<00007ffd947e0000 00014000 "resourcepolicyclient.dll" "ResourcePolicyClient.pdb" 0 {184339a5-bd82-d718-8563a99a73a663cf} 1 306439316>
+DBG-MODULE<00007ffd94af0000 0024C000 "dbghelp.dll" "dbghelp.pdb" 0 {0ac121db-e64f-be20-dcc0054d5dc14165} 1 2384527248>
+DBG-MODULE<00007ffd95070000 008AE000 "windows.storage.dll" "Windows.Storage.pdb" 0 {ef42e52b-ba15-cefd-a22cb070b2fb6988} 1 890365058>
+DBG-MODULE<00007ffd95c60000 00033000 "IPHLPAPI.DLL" "iphlpapi.pdb" 0 {23648dda-4c96-dccc-e139dc2340f3030b} 1 2286535387>
+DBG-MODULE<00007ffd95d50000 00158000 "DNSAPI.dll" "dnsapi.pdb" 0 {50dd7074-162a-7a95-9e3e4d82c49e3cbe} 1 2199532320>
+DBG-MODULE<00007ffd960d0000 000C6000 "schannel.DLL" "schannel.pdb" 0 {25746d35-b390-3fac-c7d34a0cedd87b4b} 1 556608590>
+DBG-MODULE<00007ffd96200000 00039000 "rsaenh.dll" "rsaenh.pdb" 0 {c1cbdcff-3d39-0da0-721fdd1fe5f444de} 1 1744229608>
+DBG-MODULE<00007ffd962a0000 0001B000 "kernel.appcore.dll" "Kernel.Appcore.pdb" 0 {6e8ea6dd-53e1-2966-620c37875551e6f6} 1 246514534>
+DBG-MODULE<00007ffd963d0000 00036000 "ntmarta.dll" "ntmarta.pdb" 0 {a1e053a1-582c-2346-3f30df9cec4fb869} 1 3598506564>
+DBG-MODULE<00007ffd96550000 00049000 "SSPICLI.DLL" "sspicli.pdb" 0 {3edd48ff-bfd3-ae1f-dde522ab7c3f659d} 1 1263343596>
+DBG-MODULE<00007ffd96630000 0000D000 "DSPARSE.dll" "dsparse.pdb" 0 {8fa49081-bbe4-3d8c-bff3d9797d087db2} 1 3779774972>
+DBG-MODULE<00007ffd96810000 0006C000 "mswsock.dll" "mswsock.pdb" 0 {a3e5c0ba-2810-b53b-2646fe9284927d82} 1 2853914095>
+DBG-MODULE<00007ffd968b0000 00034000 "USERENV.dll" "userenv.pdb" 0 {68b1c8d1-7b22-fe9e-7d6e5a28ff763527} 1 1246422943>
+DBG-MODULE<00007ffd96a60000 0000C000 "cryptbase.dll" "cryptbase.pdb" 0 {d796d145-0e6c-390a-e346f535748b7f60} 1 3727022991>
+DBG-MODULE<00007ffd96b00000 0006A000 "wldp.dll" "wldp.pdb" 0 {4a20ef5f-b6bd-17d1-06dbf1e769fd77ec} 1 1777933762>
+DBG-MODULE<00007ffd96c00000 0001B000 "CRYPTSP.dll" "cryptsp.pdb" 0 {45b42b6a-d9a5-ca49-c5f18ca4042f9666} 1 421397379>
+DBG-MODULE<00007ffd96c70000 00013000 "MSASN1.dll" "msasn1.pdb" 0 {bf21e504-3be9-355a-c195fc29148e9cb9} 1 180739746>
+DBG-MODULE<00007ffd96d20000 0003F000 "NTASN1.dll" "ntasn1.pdb" 0 {5858845a-c890-e5f0-cb04f2303dd78b3e} 1 2667946327>
+DBG-MODULE<00007ffd96d70000 00030000 "ncrypt.dll" "ncrypt.pdb" 0 {4b53b035-33da-42b4-b095438af1c14380} 1 570619639>
+DBG-MODULE<00007ffd970d0000 0002F000 "DEVOBJ.dll" "devobj.pdb" 0 {7d956111-a463-9de7-537e122c350d3bf7} 1 1316201479>
+DBG-MODULE<00007ffd97110000 00052000 "cfgmgr32.DLL" "cfgmgr32.pdb" 0 {c1d2bd65-5ada-b3e7-46b89d6ebd417a4b} 1 712946775>
+DBG-MODULE<00007ffd971a0000 000FE000 "ServicingCommon.dll" "ServicingCommon.pdb" 0 {53e0d993-79ae-8f4d-2695c3b2b10530da} 1 2232338586>
+DBG-MODULE<00007ffd97410000 00015000 "UMPDC.dll" "UMPDC.pdb" 0 {550f2f22-934b-186c-699cf195cfe5e5ad} 1 3847741064>
+DBG-MODULE<00007ffd97430000 0005E000 "powrprof.dll" "powrprof.pdb" 0 {4c3ca276-1b95-af4f-1653318f5e717999} 1 2858637235>
+DBG-MODULE<00007ffd974a0000 0002A000 "bcrypt.dll" "bcrypt.pdb" 0 {5f1077ed-8d3a-bc83-ad7d378f94ea4190} 1 1159279676>
+DBG-MODULE<00007ffd974d0000 00029000 "profapi.dll" "profapi.pdb" 0 {4b07c0cd-d420-c2b2-1ab58f272cce3b6d} 1 3813789498>
+DBG-MODULE<00007ffd975b0000 00402000 "KERNELBASE.dll" "kernelbase.pdb" 0 {72cce506-944d-e026-7c172ad64287f9bd} 1 677407521>
+DBG-MODULE<00007ffd979c0000 000A3000 "msvcp_win.dll" "msvcp_win.pdb" 0 {f7d54e93-0c80-bfb0-8820802872942811} 1 801462590>
+DBG-MODULE<00007ffd97a70000 00027000 "win32u.dll" "win32u.pdb" 0 {6295787d-0b7e-537e-98f77f31f4426d1c} 1 2922534025>
+DBG-MODULE<00007ffd97aa0000 000AC000 "bcryptprimitives.dll" "bcryptprimitives.pdb" 0 {e63663f3-6c3a-bfbf-74eacd102dc13dbb} 1 3672939517>
+DBG-MODULE<00007ffd97b50000 0014C000 "ucrtbase.dll" "ucrtbase.pdb" 0 {158f9f38-cc49-2128-fe8c9354a209cfb5} 1 733937011>
+DBG-MODULE<00007ffd97ca0000 0017E000 "CRYPT32.dll" "crypt32.pdb" 0 {aab4dc21-32d0-67ed-d58ea7ac1c4e6db7} 1 861530059>
+DBG-MODULE<00007ffd97ef0000 00082000 "WINTRUST.dll" "wintrust.pdb" 0 {79420ca7-ba8d-140b-549434332a96709a} 1 1553879383>
+DBG-MODULE<00007ffd97f80000 00129000 "gdi32full.dll" "gdi32full.pdb" 0 {a6245e4f-5c78-eb06-438ea4820f1f6eb4} 1 890656319>
+DBG-MODULE<00007ffd980b0000 000D9000 "OLEAUT32.dll" "oleaut32.pdb" 0 {2bfbdef3-a64d-b819-445a236ea5943e20} 1 62109679>
+DBG-MODULE<00007ffd98190000 00798000 "SHELL32.dll" "shell32.pdb" 0 {011de059-cf3d-0b81-74fa9b5324ea7654} 1 138090267>
+DBG-MODULE<00007ffd989c0000 0002B000 "GDI32.dll" "gdi32.pdb" 0 {92c6ec2a-be47-8836-c99bc83c2f3ae355} 1 1557283195>
+DBG-MODULE<00007ffd989f0000 000A9000 "sechost.dll" "sechost.pdb" 0 {0e8bac43-6697-4479-88fb72c706d1f163} 1 2925099912>
+DBG-MODULE<00007ffd98aa0000 000A9000 "msvcrt.dll" "msvcrt.pdb" 0 {3d6633e0-2a7a-1306-a00d36101110a822} 1 2222928953>
+DBG-MODULE<00007ffd98b50000 00487000 "SETUPAPI.dll" "setupapi.pdb" 0 {ad406bec-9710-ecde-c3cc156f0cc21577} 1 3676286105>
+DBG-MODULE<00007ffd991d0000 00020000 "imagehlp.dll" "imagehlp.pdb" 0 {86e106e3-755a-abc5-008bf69644e7efcf} 1 2156568970>
+DBG-MODULE<00007ffd99200000 00080000 "WS2_32.dll" "ws2_32.pdb" 0 {38723397-6bd4-22d1-39f79cc741880825} 1 536873802>
+DBG-MODULE<00007ffd99360000 0015B000 "msctf.dll" "msctf.pdb" 0 {c53c99be-cadf-b830-1612a532743a5988} 1 848042006>
+DBG-MODULE<00007ffd994c0000 001CF000 "USER32.dll" "user32.pdb" 0 {cdb947d1-b96b-8797-7915de04cf54279c} 1 1277537702>
+DBG-MODULE<00007ffd996a0000 000CB000 "KERNEL32.DLL" "kernel32.pdb" 0 {ae9e9d8f-7ac1-467a-645320fdc23235d0} 1 1053609746>
+DBG-MODULE<00007ffd99770000 00118000 "RPCRT4.dll" "rpcrt4.pdb" 0 {0204a8a1-37c4-2b7d-f1f0811a3a8277b2} 1 3146881180>
+DBG-MODULE<00007ffd99990000 00066000 "shlwapi.dll" "shlwapi.pdb" 0 {6cad183d-3c25-e609-3bb4b2f3a01d8164} 1 3184337242>
+DBG-MODULE<00007ffd99a10000 00385000 "combase.dll" "combase.pdb" 0 {da1dc0c4-f35c-ee58-f672cbb20460d11d} 1 2349147981>
+DBG-MODULE<00007ffd99dc0000 000BC000 "ADVAPI32.dll" "advapi32.pdb" 0 {43ec8dcd-3f9c-b692-fe88343843c32820} 1 736674132>
+DBG-MODULE<00007ffd99e80000 00031000 "IMM32.dll" "imm32.pdb" 0 {fce5e7a9-b450-4eb0-8bf6492a4ad1e07b} 1 2376539079>
+DBG-MODULE<00007ffd99ec0000 0019A000 "ole32.dll" "ole32.pdb" 0 {8dca42cc-7139-634d-36cdbda769bfa179} 1 2028696108>
+DBG-MODULE<00007ffd9a060000 0000A000 "NSI.dll" "nsi.pdb" 0 {662a028f-57a7-c702-b11f583ce15a8e63} 1 206955086>
+DBG-MODULE<00007ffd9a100000 000AE000 "clbcatq.dll" "CLBCatQ.pdb" 0 {d74dc830-9d90-ec91-79ac107c6a32b0aa} 1 2564454094>
+DBG-MODULE<00007ffd9a220000 000FB000 "SHCORE.dll" "shcore.pdb" 0 {c04498be-c5b5-bae9-744b1db825bc9c04} 1 3129514382>
+DBG-MODULE<00007ffd9a360000 00267000 "ntdll.dll" "ntdll.pdb" 0 {c3093720-177d-a685-1519dcffe8df53fe} 1 1809777610>
+<:Exception.DebugModules>
+
+----------------------------------------
+System Info
+----------------------------------------
+
+<CPU Vendor> AuthenticAMD
+<BaseBoardManufacturer> LENOVO
+<BaseBoardProduct> LNVNB161216
+<BaseBoardVersion> SDK0T76479 WIN
+<BiosMajorRelease> 1
+<BiosMinorRelease> 29
+<BIOSReleaseDate> 01/12/2022
+<BIOSVendor> LENOVO
+<BIOSVersion> GECN29WW(V1.13)
+
+<AppDriveType> Solid State
+<AppDriveBusProtocol> NVMe
+<AppDriveLogicalSectorSize> 512
+<AppDrivePhysicalSectorSize> 4096
+
+------------------------------------------------------------------------------
+Percent memory used:    60
+Total physical memory:  14877257728 (13.86G)
+Free physical memory:   5886132224 (5.48G)
+Total Page file:        45483155456 (42.36G)
+Free Page file:         27260801024 (25.39G)
+Total virtual memory:   140737488224256 (128.00T)
+Free virtual memory:    140727665942528 (127.99T)
+<Memory.HighLoad> No
+<Memory.LowPageFile> No
+--------------------------------------------------------------------------------
+Working Set Size:       1535193088 (1.43G)
+Peak Working Set Size:  1540026368 (1.43G)
+Pagefile Usage:         2469330944 (2.30G)
+Peak Pagefile Usage:    2489167872 (2.32G)
+Page Fault Count:       762108
+Quota Paged Pool Usage:           1845472 (1.76M)
+Quota Peak Paged Pool Usage:      1862096 (1.78M)
+Quota Non-Paged Pool Usage:       102928 (100.52K)
+Quota Peak Non-Paged Pool Usage:  185784 (181.43K)
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+Module [nvgpucomp64.dll               ] (105.66M)
+Module [WoW 12.0.7 - Firestorm.exe    ] (108.30M)
+Module [sfc.dll                       ] (12.00K)
+Module [nvppex.dll                    ] (7.15M)
+Module [nvwgf2umx.dll                 ] (86.10M)
+Module [Wow_loader.dll                ] (38.69M)
+Module [icm32.dll                     ] (300.00K)
+Module [winmmbase.dll                 ] (220.00K)
+Module [d3d12.dll                     ] (140.00K)
+Module [NvMemMapStoragex.dll          ] (1.36M)
+Module [nvldumdx.dll                  ] (824.00K)
+Module [nvspcap64.dll                 ] (1.44M)
+Module [D3D12Core.dll                 ] (3.36M)
+Module [wdmaud.drv                    ] (304.00K)
+Module [AUDIOSES.DLL                  ] (1.71M)
+Module [ncryptsslp.dll                ] (288.00K)
+Module [COMCTL32.dll                  ] (2.56M)
+Module [textinputframework.dll        ] (1.26M)
+Module [wdmaud2.drv                   ] (152.00K)
+Module [MSACM32.dll                   ] (132.00K)
+Module [tbs.dll                       ] (100.00K)
+Module [nvapi64_impl.dll              ] (5.57M)
+Module [nvapi64.dll                   ] (548.00K)
+Module [dbgcore.DLL                   ] (236.00K)
+Module [MMDevApi.dll                  ] (660.00K)
+Module [cryptnet.dll                  ] (236.00K)
+Module [D3DSCache.dll                 ] (892.00K)
+Module [msacm32.drv                   ] (60.00K)
+Module [midimap.dll                   ] (48.00K)
+Module [drvstore.dll                  ] (1.48M)
+Module [sfc_os.DLL                    ] (40.00K)
+Module [amdihk64.dll                  ] (192.00K)
+Module [rasadhlp.dll                  ] (44.00K)
+Module [atidxx64.dll                  ] (31.21M)
+Module [atiuxp64.dll                  ] (228.00K)
+Module [WINMM.dll                     ] (216.00K)
+Module [VERSION.dll                   ] (44.00K)
+Module [aticfx64.dll                  ] (1.72M)
+Module [mscms.dll                     ] (764.00K)
+Module [WINHTTP.dll                   ] (1.16M)
+Module [dhcpcsvc.DLL                  ] (148.00K)
+Module [dhcpcsvc6.DLL                 ] (116.00K)
+Module [wintypes.dll                  ] (1.41M)
+Module [CoreUIComponents.dll          ] (2.89M)
+Module [fwpuclnt.dll                  ] (536.00K)
+Module [AVRT.dll                      ] (44.00K)
+Module [directxdatabasehelper.dll     ] (376.00K)
+Module [Microsoft.Internal.WarpPal.dll] (104.00K)
+Module [d3d11.dll                     ] (2.38M)
+Module [dcomp.dll                     ] (2.14M)
+Module [CoreMessaging.dll             ] (1.17M)
+Module [Secur32.dll                   ] (52.00K)
+Module [apphelp.dll                   ] (636.00K)
+Module [uxtheme.dll                   ] (672.00K)
+Module [dxcore.dll                    ] (272.00K)
+Module [dxgi.dll                      ] (1.23M)
+Module [dwmapi.dll                    ] (188.00K)
+Module [resourcepolicyclient.dll      ] (80.00K)
+Module [dbghelp.dll                   ] (2.30M)
+Module [windows.storage.dll           ] (8.68M)
+Module [IPHLPAPI.DLL                  ] (204.00K)
+Module [DNSAPI.dll                    ] (1.34M)
+Module [schannel.DLL                  ] (792.00K)
+Module [rsaenh.dll                    ] (228.00K)
+Module [kernel.appcore.dll            ] (108.00K)
+Module [ntmarta.dll                   ] (216.00K)
+Module [SSPICLI.DLL                   ] (292.00K)
+Module [DSPARSE.dll                   ] (52.00K)
+Module [mswsock.dll                   ] (432.00K)
+Module [USERENV.dll                   ] (208.00K)
+Module [cryptbase.dll                 ] (48.00K)
+Module [wldp.dll                      ] (424.00K)
+Module [CRYPTSP.dll                   ] (108.00K)
+Module [MSASN1.dll                    ] (76.00K)
+Module [NTASN1.dll                    ] (252.00K)
+Module [ncrypt.dll                    ] (192.00K)
+Module [DEVOBJ.dll                    ] (188.00K)
+Module [cfgmgr32.DLL                  ] (328.00K)
+Module [ServicingCommon.dll           ] (1016.00K)
+Module [UMPDC.dll                     ] (84.00K)
+Module [powrprof.dll                  ] (376.00K)
+Module [bcrypt.dll                    ] (168.00K)
+Module [profapi.dll                   ] (164.00K)
+Module [KERNELBASE.dll                ] (4.01M)
+Module [msvcp_win.dll                 ] (652.00K)
+Module [win32u.dll                    ] (156.00K)
+Module [bcryptprimitives.dll          ] (688.00K)
+Module [ucrtbase.dll                  ] (1.30M)
+Module [CRYPT32.dll                   ] (1.49M)
+Module [WINTRUST.dll                  ] (520.00K)
+Module [gdi32full.dll                 ] (1.16M)
+Module [OLEAUT32.dll                  ] (868.00K)
+Module [SHELL32.dll                   ] (7.59M)
+Module [GDI32.dll                     ] (172.00K)
+Module [sechost.dll                   ] (676.00K)
+Module [msvcrt.dll                    ] (676.00K)
+Module [SETUPAPI.dll                  ] (4.53M)
+Module [imagehlp.dll                  ] (128.00K)
+Module [WS2_32.dll                    ] (512.00K)
+Module [msctf.dll                     ] (1.36M)
+Module [USER32.dll                    ] (1.81M)
+Module [KERNEL32.DLL                  ] (812.00K)
+Module [RPCRT4.dll                    ] (1.09M)
+Module [shlwapi.dll                   ] (408.00K)
+Module [combase.dll                   ] (3.52M)
+Module [ADVAPI32.dll                  ] (752.00K)
+Module [IMM32.dll                     ] (196.00K)
+Module [ole32.dll                     ] (1.60M)
+Module [NSI.dll                       ] (40.00K)
+Module [clbcatq.dll                   ] (696.00K)
+Module [SHCORE.dll                    ] (1004.00K)
+Module [ntdll.dll                     ] (2.40M)
+Loaded Module Total: 478.37M
+Debug Tracking Total: 0.00B
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+    Compatibility Info
+--------------------------------------------------------------------------------
+
+<HasCompatibilitySettings> No
+<Set.VirusScanners> 火绒安全软件
+<Set.VirusScanners> Microsoft Defender 防病毒
+<Set.VirusScanners> Lenovo Anti-Virus powered by Huorong Security
+
+--------------------------------------------------------------------------------
+    Module Usage
+--------------------------------------------------------------------------------
+
+Unloaded Module: 00007ffd3a190000 00164000 "dxilconv.dll"
+Unloaded Module: 0000000063880000 02BF8000 "amdxc64.dll"
+Unloaded Module: 00007ffd8ca70000 00030000 "amdihk64.dll"
+Unloaded Module: 00007ffd470b0000 00164000 "dxilconv.dll"
+Unloaded Module: 00007ffd8fb70000 001B8000 "aticfx64.dll"
+Unloaded Module: 00007ffd8f760000 00039000 "atiuxp64.dll"
+Unloaded Module: 00007ffd8d5b0000 01F37000 "atidxx64.dll"
+Unloaded Module: 00007ffd8ca70000 00030000 "amdihk64.dll"
+Unloaded Module: 00007ffd47990000 000CE000 "nvldumdx.dll"
+Unloaded Module: 00007ffd470c0000 0015B000 "NvMemMapStoragex.dll"
+Unloaded Module: 0000000063880000 069A8000 "nvgpucomp64.dll"
+Unloaded Module: 00007ffd260b0000 0561A000 "nvwgf2umx.dll"
+Unloaded Module: 00007ffd3a190000 00164000 "dxilconv.dll"
+Unloaded Module: 00007ffd47990000 000CE000 "nvldumdx.dll"
+Unloaded Module: 00007ffd470c0000 0015B000 "NvMemMapStoragex.dll"
+Unloaded Module: 0000000063880000 069A8000 "nvgpucomp64.dll"
+Unloaded Module: 00007ffd260b0000 0561A000 "nvwgf2umx.dll"
+Unloaded Module: 00007ffd733f0000 0003A000 "nvdlistx.dll"
+Unloaded Module: 00007ffd733f0000 0003A000 "nvdlistx.dll"
+Unloaded Module: 00007ffd947e0000 00014000 "resourcepolicyclient.dll"
+Unloaded Module: 00007ffd97410000 00015000 "UMPDC.dll"
+Unloaded Module: 00007ffd97430000 0005E000 "powrprof.dll"
+<Set.NotableModules> nvspcap64.dll
+<Set.HookModules> amdihk64.dll
+<Set.UnloadedHookModules> amdihk64.dll
+<Set.UnloadedHookModules> amdihk64.dll
+<HookModuleFound> Yes
+Last Guard Dispatch Func[0]: 0x00007ffd97662270
+Last Guard Dispatch Func[1]: 0x0000000141b3f580
+Last Guard Dispatch Func[2]: 0x0000000141b3f580
+Last Guard Dispatch Func[3]: 0x0000000141b3f580
+Last Guard Dispatch Func[4]: 0x0000000141b3f580
+Last Guard Dispatch Func[5]: 0x0000000141b3f580
+Last Guard Dispatch Func[6]: 0x0000000141b3f580
+Last Guard Dispatch Func[7]: 0x0000000141b3f580
+Last Guard Dispatch Func[8]: 0x0000000141b3f580
+Last Guard Dispatch Func[9]: 0x0000000141b3f580
+Last Guard Dispatch Func[10]: 0x0000000141b3f580
+Last Guard Dispatch Func[11]: 0x0000000141b3f580
+Last Guard Dispatch Func[12]: 0x0000000141b3f580
+Last Guard Dispatch Func[13]: 0x0000000141b3f580
+Last Guard Dispatch Func[14]: 0x0000000141b3f580
+Last Guard Dispatch Func[15]: 0x0000000141b3f580
+
+--------------------------------------------------------------------------------
+    Memory Dump
+--------------------------------------------------------------------------------
+
+Code: 32 bytes starting at (RIP = 00007ffd9a48a814 - 10)
+
+00007ffd9a48a804: 3B D2 0F 85  A6 00 00 00  49 8D 14 50  C5 E9 EF D2  ;.......I..P....
+* = addr          **                                                  *               
+00007ffd9a48a814: C5 ED 75 0A  C5 FD D7 C1  85 C0 75 06  48 83 C2 20  ..u.......u.H.. 
+
+
+Stack: 1024 bytes starting at (RSP = 000000000015c648 - 20)
+
+000000000015c620: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c630: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c640: 00 00 00 00  00 00 00 00  51 79 41 9A  FD 7F 00 00  ........QyA.....
+* = addr                                    **                                *       
+000000000015c640: 00 00 00 00  00 00 00 00  51 79 41 9A  FD 7F 00 00  ........QyA.....
+000000000015c650: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c660: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c670: 00 00 00 00  00 00 00 00  BC 11 5D 97  FD 7F 00 00  ..........].....
+000000000015c680: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c690: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c6a0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c6b0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c6c0: 00 00 00 00  00 00 00 00  00 00 D2 2A  00 00 00 00  ...........*....
+000000000015c6d0: 00 00 D2 2A  00 00 00 00  30 EE 6D 99  FD 7F 00 00  ...*....0.m.....
+000000000015c6e0: 30 CD 15 00  00 00 00 00  93 E9 36 9A  FD 7F 00 00  0.........6.....
+000000000015c6f0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c700: 90 EE A6 0A  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c710: 48 00 00 00  00 00 00 00  01 00 00 00  00 00 00 00  H...............
+000000000015c720: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c730: 30 00 00 00  00 00 00 00  FF FF FF FF  FF FF FF FF  0...............
+000000000015c740: FF FF FF FF  FF FF FF FF  87 E9 36 9A  FD 7F 00 00  ..........6.....
+000000000015c750: 00 00 00 00  00 00 00 00  70 C7 15 00  00 00 00 00  ........p.......
+000000000015c760: 00 00 00 00  00 00 00 00  CE 4C 4C 9A  FD 7F 00 00  .........LL.....
+000000000015c770: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c780: 00 00 00 00  00 00 00 00  30 E9 36 9A  FD 7F 00 00  ........0.6.....
+000000000015c790: 01 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c7a0: 1B 00 10 00  A0 1F 00 00  33 00 15 00  00 00 00 00  ........3.......
+000000000015c7b0: 1C 00 2B 00  46 02 00 00  00 00 00 00  00 00 00 00  ..+.F...........
+000000000015c7c0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c7d0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c7e0: 00 00 00 00  00 00 00 00  C0 00 00 00  00 00 00 00  ................
+000000000015c7f0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c800: 00 00 00 00  00 00 00 00  C8 CC 15 00  00 00 00 00  ................
+000000000015c810: 30 CD 15 00  00 00 00 00  00 00 00 00  00 00 00 00  0...............
+000000000015c820: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c830: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c840: 00 00 00 00  00 00 00 00  00 04 00 00  00 00 00 00  ................
+000000000015c850: 00 00 00 00  00 00 00 00  90 EE A6 0A  00 00 00 00  ................
+000000000015c860: 98 04 00 00  00 00 00 00  44 0E 4C 9A  FD 7F 00 00  ........D.L.....
+000000000015c870: 7F 02 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c880: 00 00 00 00  00 00 00 00  A0 1F 00 00  FF FF 02 00  ................
+000000000015c890: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8a0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8b0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8c0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8d0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8e0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c8f0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c900: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c910: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c920: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c930: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c940: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c950: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c960: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c970: 00 00 00 00  00 00 00 80  00 00 00 00  00 00 00 00  ................
+000000000015c980: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c990: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9a0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9b0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9c0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9d0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9e0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015c9f0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015ca00: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015ca10: 00 00 00 00  00 00 00 00  00 00 52 00  00 00 00 00  ..........R.....
+000000000015ca20: 00 00 00 00  00 00 00 00  0B 67 38 9A  FD 7F 00 00  .........g8.....
+000000000015ca30: 02 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  ................
+000000000015ca40: 40 CB 15 00  00 00 00 00  17 00 00 00  00 00 00 00  @...............
+
+
+<FreePageAccessViolation> No
+List of running WoW 12.0.7 - Firestorm.exe processes
+
+Process: D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe; pid: 2416
+
+List of running Agent.exe processes
+
+
