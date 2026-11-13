@@ -92,6 +92,7 @@ std::string help_text() {
       "  --out FILE       adapt 输出的特征文件（默认 hooks/patterns.adapted.json）\n"
       "  --name NAME      adapt 生成的条目名\n"
       "  --id-register R  adapt 生成的 idRegister（默认 rdx）\n"
+      "  --module DLL     特征属于哪个模块（私服壳 exe 时通常是 Wow_loader.dll）\n"
       "  --materialize DIR  plan 时把内存生成文件写到 DIR 便于检查\n"
       "  --json           机器可读输出\n"
       "  --force          init 时覆盖已有文件\n\n"
@@ -252,7 +253,11 @@ int cmd_scan(const Args& a, Session& s) {
     auto part = load_hook_patterns(pf, &s.diag);
     ds.insert(ds.end(), part.begin(), part.end());
   }
-  Json report = scan_report(exe, ds, &s.diag);
+  std::vector<uint8_t> main_bytes;
+  std::string rerr;
+  read_binary_file(exe, &main_bytes, &rerr);
+  auto images = collect_hook_images(s.cfg, s.ci, main_bytes, &s.diag);
+  Json report = images.size() > 1 ? scan_report(images, ds, &s.diag) : scan_report(exe, ds, &s.diag);
   if (a.json) {
     std::cout << report.dump(2) << "\n";
     return 0;
@@ -263,7 +268,9 @@ int cmd_scan(const Args& a, Session& s) {
   for (const auto& r : results) {
     long long n = r.at("matches").as_int(0);
     std::cout << "  " << (n == 1 ? "[唯一]  " : n == 0 ? "[无匹配]" : "[多匹配]") << " "
-              << r.at("name").as_string() << " -> " << n << " 处";
+              << r.at("name").as_string();
+    if (r.has("module")) std::cout << " [" << r.at("module").as_string() << "]";
+    std::cout << " -> " << n << " 处";
     for (const auto& off : r.at("offsets").as_array()) {
       std::cout << " 0x" << to_hex(static_cast<uint64_t>(off.at("fileOffset").as_int(0)));
       if (off.has("rva")) std::cout << "(rva 0x" << to_hex(static_cast<uint64_t>(off.at("rva").as_int(0))) << ")";
@@ -305,7 +312,7 @@ int cmd_adapt(const Args& a, Session& s) {
   std::string name = a.opt("name");
   if (name.empty()) name = "adapted-" + file_stem(exe);
   std::string err;
-  AdaptFileResult r = adapt_pattern_file(exe, pattern, out, name, a.opt("id-register", "rdx"), &err);
+  AdaptFileResult r = adapt_pattern_file(exe, pattern, out, name, a.opt("id-register", "rdx"), &err, a.opt("module", ""));
 
   if (a.json) {
     Json j = r.to_json();
@@ -366,7 +373,8 @@ int cmd_discover(const Args& a, Session& s) {
     const auto& best = rep.candidates.front();
     std::string werr;
     if (write_pattern_descriptor(out, name, best.pattern, rep.arch, a.opt("id-register", "rdx"),
-                                 "由 wowmod discover 自动发现的候选点；必须用调试器核实函数返回值是路径指针", &werr))
+                                 "由 wowmod discover 自动发现的候选点；必须用调试器核实函数返回值是路径指针", &werr,
+                                 a.opt("module", "")))
       emitted = out;
     else
       s.diag.error("discover", werr);
@@ -380,6 +388,7 @@ int cmd_discover(const Args& a, Session& s) {
   }
   std::cout << "本地自动发现: " << exe << " (" << (rep.pe ? rep.arch : "非 PE") << ")\n";
   std::cout << "锚点命中: " << (rep.anchors_found.empty() ? "无" : join(rep.anchors_found, ", ")) << "\n";
+  std::cout << "目标 " << rep.target_count << " 个 / 代码引用 " << rep.xref_count << " 处\n";
   std::cout << "候选 hook 点: " << rep.candidates.size() << " 个\n\n";
   for (size_t i = 0; i < rep.candidates.size(); ++i) {
     const auto& c = rep.candidates[i];

@@ -236,6 +236,9 @@ $('addPatternBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, true); }
 });
 
+const DISCOVER_NOTE = '真实 12.0.7 Firestorm 客户端的 exe 是启动壳（只导入 Wow_loader.dll）。'
+  + '若 xrefCount=0，请对 wow_loader.dll 单独运行 discover/adapt，而不是对 exe。';
+
 $('discoverBtn').addEventListener('click', async () => {
   const out = $('discoverOut');
   out.textContent = '正在扫描本地 exe …';
@@ -244,6 +247,7 @@ $('discoverBtn').addEventListener('click', async () => {
     const lines = [
       'exe: ' + (r.exe || '—') + '  ' + (r.arch || ''),
       '锚点命中: ' + ((r.anchorsFound || []).join(', ') || '无'),
+      '目标 ' + (r.targetCount || 0) + ' 个 / 代码引用 ' + (r.xrefCount || 0) + ' 处',
       '候选: ' + (r.candidates || []).length + ' 个'
     ];
     (r.candidates || []).forEach((c, i) => {
@@ -252,6 +256,7 @@ $('discoverBtn').addEventListener('click', async () => {
       lines.push('    ' + c.reason);
     });
     lines.push('', '⚠ ' + (r.note || ''));
+    if (!(r.candidates || []).length) lines.push('', '提示: ' + DISCOVER_NOTE);
     out.textContent = lines.join('\n');
     toast('本地自动发现完成');
   } catch (e) { out.textContent = '错误: ' + e.message; toast(e.message, true); }

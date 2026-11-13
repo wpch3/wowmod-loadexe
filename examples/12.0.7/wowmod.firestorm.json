@@ -1,0 +1,46 @@
+// WoW 12.0.7.68974 / Midnight / Firestorm 私服 —— 按真实截图路径填好
+// 真实路径: D:\Midnight Open Beta\_midnight_\WoW 12.0.7 - Firestorm.exe
+// 把本目录整个复制到 _midnight_ 下（或改 client.exe / client.gameDir）。
+//
+// ⚠ 这个客户端的 exe 是「壳」：导入表里只有 Wow_loader.dll (ordinal #1)，
+//   真正的游戏代码和 CASC 文件读取逻辑在那个 38 MB 的 DLL 里。
+//   已实测：exe 的 .text 里能找到 DBFilesClient / "FileData ID %d %s" 等字符串，
+//   但没有任何指向它们的 RIP 相对代码引用 —— 所以 hook 特征要在 wow_loader.dll 上找。
+//   没有该 DLL 时本配置仍能以纯 VFS 模式启动，路径型覆盖照常生效。
+{
+  "version": 1,
+  "client": {
+    "exe": "D:/Midnight Open Beta/_midnight_/WoW 12.0.7 - Firestorm.exe",
+    "gameDir": "D:/Midnight Open Beta/_midnight_",
+    "version": "12.0.7.68974",     // 仅展示；实际由 exe 资源自动读出，不是支持性判断
+    "build": 68974,                 // 仅用于 when 过滤
+    "portal": "",                   // ← 填你的私服地址（或让我从 WTF/Config.wtf 读）
+    "realmlist": "",
+    "args": [],
+    "clearCache": false
+  },
+  "mods": [
+    {
+      "name": "12.0.7 模型替换",
+      "path": "mods/models",
+      "root": "",
+      "enabled": true,
+      "priority": 10,
+      "when": {}
+    }
+  ],
+  "mappings": ["mappings/listfile.txt"],
+  "rules": [],
+  "hooks": {
+    "mode": "auto",
+    "patterns": [
+      "hooks/patterns.json",
+      "hooks/patterns.adapted.json"
+    ],
+    // 附加扫描模块：会自动把导入表里的 Wow_loader.dll 也扫进来。
+    // 拿到 DLL 后用 --module Wow_loader.dll 生成/adapt 特征即可。
+    "scanTargets": ["Wow_loader.dll"],
+    "allowFallback": true
+  },
+  "log": { "file": "wowmod.log", "verbose": true }
+}

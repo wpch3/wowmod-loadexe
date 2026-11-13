@@ -124,6 +124,9 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
     if (!p.empty()) c.hooks.pattern_files.push_back(p);
   }
   c.hooks.patterns = c.hooks.pattern_files.empty() ? "" : c.hooks.pattern_files.front();
+  for (const auto& s : h.at("scanTargets").as_string_array()) {
+    if (!s.empty()) c.hooks.scan_targets.push_back(s);
+  }
   c.hooks.allow_fallback = h.at("allowFallback").as_bool(true);
 
   const Json& lg = j.at("log");
@@ -183,6 +186,11 @@ Json Config::to_json() const {
     h.set("patterns", arr);
   }
   h.set("allowFallback", Json::make_bool(hooks.allow_fallback));
+  if (!hooks.scan_targets.empty()) {
+    Json st = Json::make_array();
+    for (const auto& t : hooks.scan_targets) st.push(Json::make_string(t));
+    h.set("scanTargets", st);
+  }
   j.set("hooks", h);
   Json lg = Json::make_object();
   lg.set("file", Json::make_string(log.file));
@@ -226,12 +234,29 @@ bool validate_config(const Config& cfg, Diagnostics* diag) {
     else diag->info(where, msg);
   };
   bool ok = true;
+#ifndef _WIN32
+  // 在非 Windows 平台上校验一份 Windows 配置（如 12.0.7 Firestorm 的真实路径）时，
+  // D:/... 不可能存在。这是跨机预览，不该报成配置错误。
+  auto win_path = [](const std::string& p) {
+    return p.size() >= 3 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':' && p[2] == '/';
+  };
+  const bool cross_os = win_path(cfg.client.exe) || win_path(cfg.client.game_dir);
+  if (cross_os)
+    d(Level::Info, "client", "检测到 Windows 盘符路径；当前在非 Windows 平台上做校验，跳过路径存在性检查（到 Windows 上直接可用）");
+  if (!cross_os && !cfg.client.exe.empty() && !file_exists(cfg.client.exe)) {
+    d(Level::Error, "client.exe", "文件不存在: " + cfg.client.exe); ok = false;
+  }
+  if (!cross_os && !cfg.client.game_dir.empty() && !dir_exists(cfg.client.game_dir)) {
+    d(Level::Error, "client.gameDir", "目录不存在: " + cfg.client.game_dir); ok = false;
+  }
+#else
   if (!cfg.client.exe.empty() && !file_exists(cfg.client.exe)) {
     d(Level::Error, "client.exe", "文件不存在: " + cfg.client.exe); ok = false;
   }
   if (!cfg.client.game_dir.empty() && !dir_exists(cfg.client.game_dir)) {
     d(Level::Error, "client.gameDir", "目录不存在: " + cfg.client.game_dir); ok = false;
   }
+#endif
   if (cfg.client.exe.empty() && cfg.client.game_dir.empty()) {
     d(Level::Warn, "client", "未指定 exe / gameDir；将使用启动器所在目录自动发现客户端");
   }

@@ -47,7 +47,8 @@ struct AdaptFileResult {
 
 AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::string& pattern_text,
                                    const std::string& out_path, const std::string& name,
-                                   const std::string& id_register, std::string* err = nullptr);
+                                   const std::string& id_register, std::string* err = nullptr,
+                                   const std::string& module = "");
 
 // ---- 本地自动发现：不需要上传任何文件，直接在用户自己的 exe 上找候选 hook 点 ----
 struct HookCandidate {
@@ -70,6 +71,8 @@ struct DiscoveryReport {
   std::vector<std::string> anchors;
   std::vector<std::string> anchors_found;
   std::vector<HookCandidate> candidates;
+  size_t xref_count = 0;    // 找到的字符串/指针表引用数（0 往往意味着代码在别的模块里）
+  size_t target_count = 0;  // 参与匹配的目标 RVA 数
   std::string note;
   Json to_json() const;
 };
@@ -78,7 +81,7 @@ struct DiscoveryReport {
 bool write_pattern_descriptor(const std::string& out_path, const std::string& name,
                               const std::string& pattern, const std::string& arch,
                               const std::string& id_register, const std::string& note,
-                              std::string* err = nullptr);
+                              std::string* err = nullptr, const std::string& module = "");
 
 std::vector<std::string> default_anchors();
 DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe_bytes,

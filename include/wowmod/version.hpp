@@ -27,6 +27,7 @@ struct ClientInfo {
   std::string storage = "unknown";  // casc / mpq / hybrid / unknown
   std::string portal;         // WTF/Config.wtf 里的 SET portal
   std::string realmlist;      // realmlist.wtf 内容（老客户端）
+  std::vector<std::string> companion_dlls;  // exe 导入表里的非系统 DLL（私服常见的加载层）
   std::vector<std::string> notes;
 
   Json to_json() const;

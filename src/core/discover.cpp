@@ -5,6 +5,7 @@
 #include <cctype>
 #include <utility>
 #include <sstream>
+#include <unordered_map>
 
 #include "wowmod/json.hpp"
 #include "wowmod/util.hpp"
@@ -282,7 +283,8 @@ Json AdaptResult::to_json() const {
 
 AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::string& pattern_text_in,
                                    const std::string& out_path, const std::string& name,
-                                   const std::string& id_register, std::string* err) {
+                                   const std::string& id_register, std::string* err,
+                                   const std::string& module) {
   AdaptFileResult out;
   if (err) err->clear();
   std::vector<uint8_t> bytes;
@@ -303,7 +305,7 @@ AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::strin
   if (!write_pattern_descriptor(out_path, name, out.adapted.pattern,
                                 out.adapted.arch.empty() ? "x64" : out.adapted.arch,
                                 id_register.empty() ? "rdx" : id_register,
-                                "由 wowmod adapt 自动放宽得到；请用调试器确认该函数返回值是路径指针", &werr)) {
+                                "由 wowmod adapt 自动放宽得到；请用调试器确认该函数返回值是路径指针", &werr, module)) {
     out.reason = werr;
     if (err) *err = werr;
     return out;
@@ -327,7 +329,7 @@ Json AdaptFileResult::to_json() const {
 bool write_pattern_descriptor(const std::string& out_path, const std::string& name,
                               const std::string& pattern, const std::string& arch,
                               const std::string& id_register, const std::string& note,
-                              std::string* err) {
+                              std::string* err, const std::string& module) {
   if (err) err->clear();
   Json doc;
   std::string existing;
@@ -348,6 +350,7 @@ bool write_pattern_descriptor(const std::string& out_path, const std::string& na
   d.set("name", Json::make_string(name));
   d.set("kind", Json::make_string("fileId"));
   d.set("arch", Json::make_string(arch.empty() ? "x64" : arch));
+  if (!module.empty()) d.set("module", Json::make_string(module));
   d.set("pattern", Json::make_string(pattern));
   d.set("offset", Json::make_number(0));
   d.set("idRegister", Json::make_string(id_register.empty() ? "rdx" : id_register));
@@ -366,6 +369,8 @@ bool write_pattern_descriptor(const std::string& out_path, const std::string& na
 
 std::vector<std::string> default_anchors() {
   return {
+      "DBFilesClient", "FileData ID %d %s", "addons.txt", "WTF/Config.wtf", "Data/",
+      "wow_loader.dll", "Unable to initialize CAS", "addons.txt",
       "DBFilesClient\\", "Interface\\AddOns\\", "World\\Model\\", "World\\Textures\\",
       "realmlist.wtf", "Unable to open", "FileDataID", "CascOpen", "patch-",
       "World of Warcraft usage", "Interface\\FrameXML\\", ".build.info"};
@@ -448,7 +453,30 @@ DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std:
     }
   }
 
-  // 2) 可执行节区里找 RIP 相对 LEA 引用（REX + 8D + ModRM(mod=00,rm=101)）
+  // 2) 现代 MSVC 客户端通常不直接 LEA 字符串，而是 LEA 到 .rdata 里的一张
+  //    8 字节 VA 指针表。先把「字符串 VA」在整份文件里找出来，把指针槽也当作目标。
+  std::vector<std::pair<uint32_t, std::string>> targets;  // (RVA, 锚点名)
+  for (const auto& a : found) targets.emplace_back(a.rva, a.text);
+  if (rep.pe && pe.image_base) {
+    std::unordered_map<uint64_t, std::string> vas;
+    for (const auto& a : found) vas.emplace(pe.image_base + a.rva, a.text);
+    for (size_t off = 0; off + 8 <= exe.size(); off += 4) {
+      uint64_t v = 0;
+      for (int k = 0; k < 8; ++k) v |= static_cast<uint64_t>(exe[off + k]) << (8 * k);
+      auto it = vas.find(v);
+      if (it == vas.end()) continue;
+      auto sr = pe.offset_to_rva(static_cast<uint32_t>(off));
+      if (!sr) continue;
+      targets.emplace_back(*sr, it->second + " [指针表]");
+      if (targets.size() > 4000) break;
+    }
+  }
+  std::sort(targets.begin(), targets.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  targets.erase(std::unique(targets.begin(), targets.end(), [](const auto& a, const auto& b) {
+    return a.first == b.first && a.second == b.second; }), targets.end());
+  rep.target_count = targets.size();
+
+  // 3) 可执行节区里找 RIP 相对 LEA / MOV 引用（REX + 8D|8B + ModRM(mod=00,rm=101)）
   auto ranges = rep.pe ? pe_ranges(pe, exe.size()) : std::vector<std::pair<size_t, size_t>>{};
   if (ranges.empty()) ranges.emplace_back(0, exe.size());
   std::vector<std::pair<size_t, std::string>> xrefs;  // (指令文件偏移, 锚点名)
@@ -458,19 +486,21 @@ DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std:
     size_t end = std::min(rg.first + rg.second, exe.size()) - 7;
     for (size_t off = rg.first; off < end; ++off) {
       uint8_t rex = exe[off];
-      if (rex < 0x40 || rex > 0x4F || exe[off + 1] != 0x8D) continue;
+      if (rex < 0x40 || rex > 0x4F || (exe[off + 1] != 0x8D && exe[off + 1] != 0x8B)) continue;
       uint8_t modrm = exe[off + 2];
       if ((modrm & 0xC7) != 0x05) continue;  // RIP 相对
       uint32_t instr_rva = 0;
       if (rep.pe) { auto r = pe.offset_to_rva(static_cast<uint32_t>(off)); if (!r) continue; instr_rva = *r; }
       int32_t disp = static_cast<int32_t>(read32(exe, off + 3));
       uint32_t target = static_cast<uint32_t>(static_cast<int64_t>(instr_rva) + 7 + disp);
-      for (const auto& a : found) {
-        // 允许指向字符串开头附近（编译器常引用字符串前几个字节/结构体里的指针）
-        if (target >= a.rva && target - a.rva <= 24) {
-          xrefs.emplace_back(off, a.text);
+      // 二分找到落在 [target-24, target] 的目标 RVA（字符串附近 / 指针槽）
+      auto it = std::upper_bound(targets.begin(), targets.end(), target,
+                                 [](uint32_t v, const auto& a) { return v < a.first; });
+      if (it != targets.begin()) {
+        --it;
+        if (target >= it->first && target - it->first <= 24) {
+          xrefs.emplace_back(off, it->second);
           ++seen;
-          break;
         }
       }
       if (seen >= 400) break;
@@ -509,9 +539,13 @@ DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std:
     return a.fixed_bytes > b.fixed_bytes;
   });
   if (rep.candidates.size() > 20) rep.candidates.resize(20);
-  if (xrefs.empty())
-    rep.note = "未找到指向这些锚点的 RIP 相对引用。可用 --anchors 传入你自己的字符串（例如某个模型路径），"
-               "或直接用 wowmod adapt 从邻近版本的特征推导";
+  rep.xref_count = xrefs.size();
+  if (xrefs.empty()) {
+    rep.note = "未找到指向这些锚点的 RIP 相对引用（目标 " + std::to_string(rep.target_count) + " 个）。"
+               "私服壳 exe 的游戏代码通常在导入的加载层 DLL 里 —— "
+               "请对那个 DLL 单独运行本命令（--exe 指向 DLL），或传入你自己的 --anchors 字符串，"
+               "也可用 wowmod adapt 从邻近版本的特征推导";
+  }
   return rep;
 }
 
@@ -540,6 +574,8 @@ Json DiscoveryReport::to_json() const {
   j.set("anchorsFound", f);
   Json c = Json::make_array(); for (const auto& x : candidates) c.push(x.to_json());
   j.set("candidates", c);
+  j.set("xrefCount", Json::make_number(static_cast<double>(xref_count)));
+  j.set("targetCount", Json::make_number(static_cast<double>(target_count)));
   j.set("note", Json::make_string(note));
   return j;
 }

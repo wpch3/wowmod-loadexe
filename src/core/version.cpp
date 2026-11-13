@@ -38,6 +38,53 @@ std::string section_name(const std::vector<uint8_t>& b, size_t off) {
   return s;
 }
 
+// 私服客户端经常改写 VS_FIXEDFILEINFO 的四元组（例如本仓库上传的 12.0.7 Firestorm
+// 写成 1200.7.6897.4），但 StringFileInfo 里的 FileVersion 仍是真实的 12.0.7.68974。
+// 因此优先读字符串版本资源：它是给人看的，通常最可信。
+std::string read_utf16(const std::vector<uint8_t>& b, size_t off, size_t wchars) {
+  std::string out;
+  for (size_t i = 0; i < wchars && off + i * 2 + 1 < b.size(); ++i) {
+    uint16_t c = static_cast<uint16_t>(b[off + i * 2] | (b[off + i * 2 + 1] << 8));
+    if (!c) break;
+    out.push_back(c < 128 ? static_cast<char>(c) : '?');
+  }
+  return trim(out);
+}
+
+bool read_string_version(const std::vector<uint8_t>& b, size_t v, uint32_t data_size, ClientInfo* out) {
+  size_t limit = std::min<size_t>(v + data_size, b.size());
+  auto make_key = [](const char* s) {
+    std::vector<uint8_t> k;
+    for (const char* p = s; *p; ++p) { k.push_back(static_cast<uint8_t>(*p)); k.push_back(0); }
+    k.push_back(0); k.push_back(0);
+    return k;
+  };
+  for (const char* key_name : {"FileVersion", "ProductVersion"}) {
+    const auto key = make_key(key_name);
+    for (size_t p = v + 40; p + key.size() < limit; ++p) {
+      if (p < 6 || b[p] != key[0] || b[p + 1] != key[1]) continue;
+      if (!std::equal(key.begin(), key.end(), b.begin() + static_cast<ptrdiff_t>(p))) continue;
+      size_t head = p - 6;  // String 结构: wLength wValueLength wType szKey
+      if (head < v) continue;
+      bool ok = true;
+      uint16_t wlen = rd16(b, head, &ok), vlen = rd16(b, head + 2, &ok), wtype = rd16(b, head + 4, &ok);
+      (void)wtype;
+      if (!ok || vlen == 0 || vlen > 256 || wlen < key.size() + 6 || wlen > 4096) continue;
+      size_t val = (p + key.size() + 3) & ~static_cast<size_t>(3);
+      std::string s = read_utf16(b, val, vlen);
+      if (s.empty()) continue;
+      ClientInfo tmp;
+      if (!parse_version_string(s, &tmp.major, &tmp.minor, &tmp.patch, &tmp.build)) continue;
+      if (tmp.major <= 0 || tmp.major > 100) continue;  // 明显不是 WoW 版本号
+      out->major = tmp.major; out->minor = tmp.minor; out->patch = tmp.patch; out->build = tmp.build;
+      out->version_string = s;
+      out->notes.push_back("版本号取自 exe 的 StringFileInfo/" + std::string(key_name) + "（私服常改写二进制版本字段）");
+      return true;
+    }
+  }
+  return false;
+}
+
 // 遍历 PE 资源树，寻找 RT_VERSION (16) 并解析 VS_FIXEDFILEINFO。
 bool read_version_resource(const PeImage& pe, uint32_t resource_rva, ClientInfo* out) {
   auto root = pe.rva_to_offset(resource_rva);
@@ -94,6 +141,8 @@ bool read_version_resource(const PeImage& pe, uint32_t resource_rva, ClientInfo*
         if (fixed + 52 > b.size()) continue;
         uint32_t sig = rd32(b, fixed, &ok);
         if (!ok || sig != 0xFEEF04BDu) continue;
+        // 字符串版本优先：私服把 VS_FIXEDFILEINFO 改成 1200.7.6897.4 时仍能得到 12.0.7.68974
+        if (read_string_version(b, v, data_size, out)) return true;
         uint32_t ms = rd32(b, fixed + 8, &ok);
         uint32_t ls = rd32(b, fixed + 12, &ok);
         if (!ok) continue;
@@ -290,9 +339,43 @@ bool parse_build_info(const std::string& text, ClientInfo* out, std::string* err
   return true;
 }
 
+// 读取 PE 导入表里的 DLL 名。私服客户端常常把整个游戏包一层 "Wow_loader.dll"，
+// 这类加载层 DLL 是必须一起分析的（hook 点可能在 DLL 里而不是 exe 里）。
+std::vector<std::string> read_import_dlls(const PeImage& pe) {
+  std::vector<std::string> out;
+  const auto& b = pe.bytes;
+  auto u32 = [&](size_t o) -> uint32_t {
+    if (o + 4 > b.size()) return 0;
+    return static_cast<uint32_t>(b[o]) | (static_cast<uint32_t>(b[o + 1]) << 8) |
+           (static_cast<uint32_t>(b[o + 2]) << 16) | (static_cast<uint32_t>(b[o + 3]) << 24);
+  };
+  size_t pe_off = b.size() > 0x40 ? u32(0x3C) : 0;
+  if (pe_off + 24 > b.size() || u32(pe_off) != 0x00004550u) return out;
+  uint16_t opt_size = static_cast<uint16_t>(b[pe_off + 20] | (b[pe_off + 21] << 8));
+  size_t opt = pe_off + 24;
+  uint16_t magic = static_cast<uint16_t>(b[opt] | (b[opt + 1] << 8));
+  size_t dir_off = magic == 0x10B ? opt + 96 : opt + 112;
+  uint32_t num_dirs = u32(magic == 0x10B ? opt + 92 : opt + 108);
+  if (num_dirs < 2 || dir_off + 16 > b.size()) return out;
+  uint32_t imp_rva = u32(dir_off + 8), imp_size = u32(dir_off + 12);
+  auto io = pe.rva_to_offset(imp_rva);
+  if (!io) return out;
+  for (size_t o = *io; o + 20 <= b.size() && o + 20 <= *io + imp_size; o += 20) {
+    uint32_t name_rva = u32(o + 12);
+    if (!name_rva) break;
+    auto no = pe.rva_to_offset(name_rva);
+    if (!no) continue;
+    std::string name;
+    for (size_t p = *no; p < b.size() && b[p] && name.size() < 128; ++p) name.push_back(static_cast<char>(b[p]));
+    if (!name.empty()) out.push_back(name);
+  }
+  return out;
+}
+
 bool parse_pe_metadata(const std::vector<uint8_t>& bytes, ClientInfo* out, std::string* err) {
   PeImage pe;
   if (!pe.load(bytes, err)) return false;
+  out->companion_dlls = read_import_dlls(pe);
   switch (pe.machine) {
     case 0x014C: out->arch = "x86"; break;
     case 0x8664: out->arch = "x64"; break;
@@ -302,6 +385,8 @@ bool parse_pe_metadata(const std::vector<uint8_t>& bytes, ClientInfo* out, std::
   }
   bool got = false;
   if (pe.resource_rva_ != 0) got = read_version_resource(pe, pe.resource_rva_, out);
+  // 资源目录被改写时，scan_version_signature 仍能从固定字段拿到架构/版本；
+  // StringFileInfo 只在正常资源树中读取，避免全文件误匹配。
   if (!got) got = scan_version_signature(bytes, out);
   return got;
 }
@@ -316,6 +401,16 @@ std::string detect_storage_layout(const std::string& game_dir, std::string* data
         std::string candidate = join_path(normalize_path(it->path().string()), "Data");
         if (dir_exists(candidate)) { data = candidate; break; }
       }
+    }
+  }
+  if (!dir_exists(data)) {
+    // 私服常见布局：D:/Midnight Open Beta/_midnight_/Wow.exe，Data 在父目录。
+    // 向上找两层，仍然不写死任何目录名。
+    std::string p = parent_path(game_dir);
+    for (int i = 0; i < 2 && !p.empty(); ++i) {
+      std::string candidate = join_path(p, "Data");
+      if (dir_exists(candidate)) { data = candidate; break; }
+      p = parent_path(p);
     }
   }
   if (data_dir) *data_dir = data;
@@ -377,7 +472,8 @@ std::vector<std::string> discover_client_exes(const std::string& root, int max_d
 
 ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector<uint8_t>* exe_bytes_out) {
   ClientInfo ci;
-  std::string input = absolute_path(path);
+  // Windows 盘符路径（D:/...）在 Linux 上做 dry-run 校验时不能再被 fs::absolute 拼到 cwd 上。
+  std::string input = is_absolute_path(path) ? normalize_path(path) : absolute_path(path);
   std::string exe;
   if (file_exists(input) && iequals(file_extension(input), ".exe")) exe = input;
   else if (dir_exists(input)) {
@@ -400,7 +496,14 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector
       if (parse_pe_metadata(bytes, &pe_info, &pe_err)) {
         ci.major = pe_info.major; ci.minor = pe_info.minor; ci.patch = pe_info.patch; ci.build = pe_info.build;
         ci.version_string = pe_info.version_string; ci.arch = pe_info.arch;
+        ci.companion_dlls = pe_info.companion_dlls;
       } else if (diag) diag->warn("detect", "PE 版本资源读取失败: " + pe_err + "（不影响启动）");
+      // 私服的 "Wow_loader.dll" 这类加载层：exe 只是壳，特征扫描要覆盖到 DLL。
+      for (const auto& dll : ci.companion_dlls) {
+        std::string lp = join_path(ci.game_dir, dll);
+        if (file_exists(lp)) ci.notes.push_back("检测到加载层 DLL: " + dll +
+            " — 若 hook 点在 DLL 里，请对它单独运行 wowmod discover/scan（--exe 指向该 DLL）");
+      }
     } else if (diag) diag->warn("detect", err);
   }
 
@@ -458,6 +561,9 @@ Json ClientInfo::to_json() const {
   j.set("storage", Json::make_string(storage));
   j.set("portal", Json::make_string(portal));
   j.set("supported", Json::make_bool(true));
+  Json dll_arr = Json::make_array();
+  for (const auto& d : companion_dlls) dll_arr.push(Json::make_string(d));
+  j.set("companionDlls", dll_arr);
   Json notes_arr = Json::make_array();
   for (const auto& n : notes) notes_arr.push(Json::make_string(n));
   j.set("notes", notes_arr);
@@ -484,8 +590,9 @@ std::string ClientInfo::display() const {
      << "exe: " << (exe_path.empty() ? "(未指定)" : exe_path) << "\n"
      << "游戏目录: " << game_dir << "\n"
      << "Data: " << data_dir << "\n"
-     << "portal: " << (portal.empty() ? "(未设置)" : portal) << "\n"
-     << "支持状态: 已支持（无版本白名单）";
+     << "portal: " << (portal.empty() ? "(未设置)" : portal) << "\n";
+  if (!companion_dlls.empty()) os << "加载层 DLL: " << join(companion_dlls, ", ") << "\n";
+  os << "支持状态: 已支持（无版本白名单）";
   return os.str();
 }
 

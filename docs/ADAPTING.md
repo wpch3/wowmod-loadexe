@@ -53,6 +53,24 @@ hook 模式: fileid — 通过实际二进制能力探测选中 hook 点: my-ser
 
 `vfs` 不是错误，客户端照常启动。想让按 ID 读取的文件也生效，加一条特征。
 
+## -1. 先确认你要扫的是哪个模块（12.0.7 Firestorm 必读）
+
+`WoW 12.0.7 - Firestorm.exe` 的导入表**只有 `Wow_loader.dll` 的一个 ordinal** —— exe 是启动壳，
+游戏代码在那个 38 MB DLL 里。对它直接跑 discover 会得到 `xrefCount=0`，这是正确结论，不是失败。
+
+```bash
+# 看导入表里的加载层 DLL
+wowmod detect --exe "D:/Midnight Open Beta/_midnight_/WoW 12.0.7 - Firestorm.exe"
+
+# 对 DLL 跑（注意 --module，生成的特征会被限定在该模块）
+wowmod discover --exe "D:/Midnight Open Beta/_midnight_/wow_loader.dll" \
+                --emit hooks/patterns.discovered.json --module Wow_loader.dll
+```
+
+配置里加 `"hooks": {"scanTargets": ["Wow_loader.dll"]}`（或直接依赖 `detect` 自动从导入表收集），
+`plan` 会同时扫描主 exe 与 DLL；特征命中 DLL 时，Windows 注入层用
+`GetModuleHandleW(L"Wow_loader.dll") + rva` 下硬件断点，而不是误加到主 exe 基址上。
+
 ## 0. 先试试「零上传」的本地自动发现
 
 如果你手上一个参考特征都没有，也不想上传 exe 给任何人：

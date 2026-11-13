@@ -133,6 +133,7 @@ HookDescriptor hook_from_json(const Json& j, Diagnostics* diag) {
   d.name = j.at("name").as_string();
   d.kind = j.at("kind").as_string("fileId");
   d.arch = j.at("arch").as_string();
+  d.module = j.at("module").as_string();
   d.result = j.at("result").as_string("rax=pathPtr");
   d.id_register = j.at("idRegister").as_string("rdx");
   d.path_register = j.at("pathRegister").as_string();
@@ -181,6 +182,7 @@ Json HookMatch::to_json() const {
   j.set("reason", Json::make_string(reason));
   j.set("arch", Json::make_string(descriptor.arch));
   j.set("idRegister", Json::make_string(descriptor.id_register));
+  j.set("module", Json::make_string(module));
   return j;
 }
 
@@ -194,7 +196,34 @@ Json HookPlan::to_json() const {
   return j;
 }
 
-HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<uint8_t>& exe_bytes, Diagnostics* diag) {
+std::vector<HookImage> collect_hook_images(const Config& cfg, const ClientInfo& ci,
+                                           const std::vector<uint8_t>& exe_bytes, Diagnostics* diag) {
+  std::vector<HookImage> images;
+  if (!exe_bytes.empty()) images.push_back({"", exe_bytes});
+  std::vector<std::string> names = cfg.hooks.scan_targets;
+  for (const auto& d : ci.companion_dlls) {
+    if (std::find(names.begin(), names.end(), d) == names.end()) names.push_back(d);
+  }
+  // exe 尚未落盘（跨机预览配置）时 detect 会把 game_dir 设成 exe 路径本身，这里兜一层。
+  std::string dir = ci.game_dir;
+  if (iequals(file_extension(dir), ".exe") || iequals(file_extension(dir), ".dll")) dir = parent_path(dir);
+  for (const auto& n : names) {
+    if (n.empty()) continue;
+    std::string p = file_exists(n) ? n : join_path(dir, n);
+    std::vector<uint8_t> bytes;
+    std::string rerr;
+    if (!read_binary_file(p, &bytes, &rerr)) {
+      if (diag) diag->info("hooks", "附加扫描模块未找到: " + n + "（" + rerr + "）");
+      continue;
+    }
+    if (bytes.size() < 0x40 || bytes[0] != 'M' || bytes[1] != 'Z') continue;
+    images.push_back({file_name(p), std::move(bytes)});
+    if (diag) diag->info("hooks", "附加扫描模块: " + file_name(p) + " (" + std::to_string(images.back().bytes.size()) + " 字节)");
+  }
+  return images;
+}
+
+HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<HookImage>& images, Diagnostics* diag) {
   HookPlan plan;
   std::string mode = to_lower(cfg.hooks.mode);
   if (mode == "off") { plan.mode = "off"; plan.reason = "配置里 hooks.mode=off"; return plan; }
@@ -214,35 +243,42 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<u
     if (diag) diag->info("hooks", plan.reason);
     return plan;
   }
-  PeImage pe;
-  std::string peerr;
-  bool have_image = pe.load(exe_bytes, &peerr);
 
-  for (const auto& d : ds) {
-    if (!d.arch.empty() && !iequals(d.arch, ci.arch)) continue;
-    if (!d.when.matches(ci)) continue;
-    if (!d.storage.empty() && std::none_of(d.storage.begin(), d.storage.end(), [&](const std::string& s) { return iequals(s, ci.storage); })) continue;
-    auto all = d.pattern.find_all(exe_bytes);
-    if (all.empty()) {
-      if (diag) diag->info("hooks", "特征 [" + d.name + "] 未匹配当前客户端");
-      continue;
+  for (const auto& img : images) {
+    PeImage pe;
+    std::string peerr;
+    bool have_image = pe.load(img.bytes, &peerr);
+    for (const auto& d : ds) {
+      if (!d.arch.empty() && !iequals(d.arch, ci.arch)) continue;
+      if (!d.module.empty() && !iequals(d.module, img.module) &&
+          !iequals(d.module, file_name(img.module))) continue;
+      if (!d.when.matches(ci)) continue;
+      if (!d.storage.empty() && std::none_of(d.storage.begin(), d.storage.end(), [&](const std::string& s) { return iequals(s, ci.storage); })) continue;
+      auto all = d.pattern.find_all(img.bytes);
+      if (all.empty()) {
+        if (diag) diag->info("hooks", "特征 [" + d.name + "] 未匹配 " + (img.module.empty() ? "主 exe" : img.module));
+        continue;
+      }
+      if (all.size() > 1 && !d.allow_multiple) {
+        if (diag) diag->warn("hooks", "特征 [" + d.name + "] 在 " + (img.module.empty() ? "主 exe" : img.module) +
+                                 " 匹配 " + std::to_string(all.size()) + " 处，不唯一，跳过（避免误 hook）");
+        continue;
+      }
+      size_t off = all.front() + static_cast<size_t>(d.offset >= 0 ? d.offset : 0);
+      if (off >= img.bytes.size()) continue;
+      HookMatch m;
+      m.descriptor = d;
+      m.module = img.module;
+      m.file_offset = off;
+      m.match_count = all.size();
+      m.reason = "唯一匹配" + std::string(all.size() > 1 ? "（取第一处）" : "") +
+                 (img.module.empty() ? "" : " @ " + img.module);
+      if (have_image) {
+        auto rva = pe.offset_to_rva(static_cast<uint32_t>(off));
+        if (rva) m.rva = *rva;
+      }
+      plan.matches.push_back(std::move(m));
     }
-    if (all.size() > 1 && !d.allow_multiple) {
-      if (diag) diag->warn("hooks", "特征 [" + d.name + "] 匹配 " + std::to_string(all.size()) + " 处，不唯一，跳过（避免误 hook）");
-      continue;
-    }
-    size_t off = all.front() + static_cast<size_t>(d.offset >= 0 ? d.offset : 0);
-    if (off >= exe_bytes.size()) continue;
-    HookMatch m;
-    m.descriptor = d;
-    m.file_offset = off;
-    m.match_count = all.size();
-    m.reason = "唯一匹配" + std::string(all.size() > 1 ? "（取第一处）" : "");
-    if (have_image) {
-      auto rva = pe.offset_to_rva(static_cast<uint32_t>(off));
-      if (rva) m.rva = *rva;
-    }
-    plan.matches.push_back(std::move(m));
   }
   if (plan.matches.empty()) {
     plan.reason = "没有任何特征能唯一匹配这个客户端；" +
@@ -258,6 +294,50 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<u
   plan.reason = "通过实际二进制能力探测选中 hook 点: " + plan.matches.front().descriptor.name;
   if (diag) diag->info("hooks", plan.reason);
   return plan;
+}
+
+HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<uint8_t>& exe_bytes, Diagnostics* diag) {
+  return plan_hooks(cfg, ci, collect_hook_images(cfg, ci, exe_bytes, diag), diag);
+}
+
+Json scan_report(const std::vector<HookImage>& images, const std::vector<HookDescriptor>& ds, Diagnostics* diag) {
+  Json j = Json::make_object();
+  j.set("modules", Json::make_number(static_cast<double>(images.size())));
+  Json mods = Json::make_array();
+  Json results = Json::make_array();
+  // 直接对内存做扫描，不需要临时文件。
+  for (const auto& img : images) {
+    std::string label = img.module.empty() ? "主 exe" : img.module;
+    mods.push(Json::make_string(label));
+    PeImage pe;
+    std::string peerr;
+    bool have_pe = pe.load(img.bytes, &peerr);
+    for (const auto& d : ds) {
+      if (!d.module.empty() && !iequals(d.module, img.module)) continue;
+      auto all = d.pattern.find_all(img.bytes);
+      Json o = Json::make_object();
+      o.set("name", Json::make_string(d.name));
+      o.set("module", Json::make_string(label));
+      o.set("matches", Json::make_number(static_cast<double>(all.size())));
+      Json offs = Json::make_array();
+      for (size_t off : all) {
+        Json x = Json::make_object();
+        x.set("fileOffset", Json::make_number(static_cast<double>(off)));
+        if (have_pe) {
+          auto rva = pe.offset_to_rva(static_cast<uint32_t>(off));
+          if (rva) x.set("rva", Json::make_number(static_cast<double>(*rva)));
+        }
+        offs.push(x);
+        if (offs.as_array().size() >= 16) break;
+      }
+      o.set("offsets", offs);
+      results.push(o);
+    }
+  }
+  j.set("moduleNames", mods);
+  j.set("results", results);
+  if (diag) diag->info("scan", "扫描 " + std::to_string(images.size()) + " 个模块 / " + std::to_string(ds.size()) + " 条特征");
+  return j;
 }
 
 Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& ds, Diagnostics* diag) {

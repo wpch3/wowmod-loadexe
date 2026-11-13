@@ -56,6 +56,7 @@ struct HookSettings {
   std::string mode = "auto";     // auto | vfs | fileid | off
   std::string patterns;          // 兼容单文件写法（= pattern_files[0]）
   std::vector<std::string> pattern_files;  // 支持多个特征文件，新增适配不必改原文件
+  std::vector<std::string> scan_targets;   // 额外要扫描的模块（私服常见的 Wow_loader.dll 之类）
   bool allow_fallback = true;    // 找不到 hook 点时允许仅 VFS 启动
 };
 

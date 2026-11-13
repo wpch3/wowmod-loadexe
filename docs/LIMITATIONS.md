@@ -19,6 +19,7 @@
 | 动态 `GetProcAddress` 取得的函数指针绕过 IAT | 少数模块的文件调用不被拦截 | 已 hook `LoadLibraryW/ExW` 给新模块补装；必要时可扩展 EAT hook |
 | 特征必须**唯一匹配** | 太短的特征被跳过 | 用 `wowmod scan` 验证，补固定字节 |
 | `wowmod discover` / `adapt` 是启发式 | 唯一匹配不等于函数语义正确 | 首次进游戏前用调试器 / `wowmod.log` 核实该函数返回值是路径指针 |
+| 部分私服 exe 是启动壳（如 12.0.7 Firestorm 只导入 `Wow_loader.dll`） | 对 exe 扫描 `xrefCount=0`，找不到 FileDataID hook 点 | 对导入的 DLL 单独跑 `discover --exe wow_loader.dll --module Wow_loader.dll` |
 | 描述符的 `idRegister`/`result` 需要人工确认 | 填错则按 ID 覆盖不生效 | 调试器观察函数入口；数据与代码分离，改 JSON 即可 |
 | 生成文件落在 `%TEMP%/wowmod-<pid>/` | 会在临时目录留下小文件 | 不污染游戏目录；可手动清理 |
 | 注入依赖 `LoadLibraryW` 远程线程 | 有反注入保护的客户端可能失败 | `launch` 检测失败并终止客户端，不会无覆盖运行 |

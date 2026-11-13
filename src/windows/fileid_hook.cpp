@@ -185,7 +185,19 @@ bool install_fileid_hook(const HookPlan& plan, std::string* err) {
     if (err) *err = "特征匹配位置不在 PE 节区内，无法确定内存地址";
     return false;
   }
-  HMODULE base = GetModuleHandleW(nullptr);
+  HMODULE base = nullptr;
+  if (!m.module.empty()) {
+    // 私服壳 exe 只导入 Wow_loader.dll；hook 点可能在 DLL 里。
+    // 该 DLL 是静态导入的，进程启动时已加载，GetModuleHandleW 可直接取得基址。
+    std::wstring w = utf8_to_wide(m.module);
+    base = GetModuleHandleW(w.c_str());
+    if (!base) {
+      if (err) *err = "无法取得模块基址: " + m.module + "（DLL 尚未加载或名字不匹配）";
+      return false;
+    }
+  } else {
+    base = GetModuleHandleW(nullptr);
+  }
   if (!base) { if (err) *err = "无法取得客户端模块基址"; return false; }
   g_hook_addr = reinterpret_cast<uint8_t*>(base) + m.rva;
   g_id_register = to_lower(m.descriptor.id_register);
@@ -207,7 +219,8 @@ bool install_fileid_hook(const HookPlan& plan, std::string* err) {
   if (g_stop) g_watcher = CreateThread(nullptr, 0, watcher, nullptr, 0, nullptr);
 
   if (err) *err = "硬件断点已设在 0x" + to_hex(reinterpret_cast<uintptr_t>(g_hook_addr)) +
-                  " (rva 0x" + to_hex(m.rva) + ", " + m.descriptor.name + ", id=" + g_id_register + ")";
+                  " (模块 " + (m.module.empty() ? "主 exe" : m.module) + ", rva 0x" + to_hex(m.rva) +
+                  ", " + m.descriptor.name + ", id=" + g_id_register + ")";
   dlog("fileid hook installed: " + *err);
   return true;
 }

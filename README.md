@@ -66,6 +66,31 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 ---
 
+## 真实客户端：12.0.7 Firestorm（已验证）
+
+仓库 `main` 分支上上传的 `WoW 12.0.7 - Firestorm.exe`（73,463,504 字节）已在本地真实跑过：
+
+```
+版本: 12.0.7.68974 (build 68974)   ← 私服把 VS_FIXEDFILEINFO 改成 1200.7.6897.4，
+架构: x64 | 加载层 DLL: Wow_loader.dll   加载器改从 StringFileInfo/FileVersion 读取
+支持状态: 已支持（无版本白名单）
+```
+
+三个分卷（`.7z.001~003`）解压出的 exe 与完整文件 SHA-256 完全一致，不用重复上传。
+
+**关键发现**：这个 exe 是**启动壳** —— 导入表只有 `Wow_loader.dll` 的一个 ordinal。
+`wowmod discover` 在 56 MB `.text` 里能找到 `DBFilesClient`、`FileData ID %d %s` 等
+字符串，但 `xrefCount=0`（没有任何指向这些字符串的代码引用），因为游戏代码在那个
+38 MB 的 DLL 里。因此：
+
+- `hooks.scanTargets` / `--module Wow_loader.dll` 支持多模块扫描，
+  命中 DLL 时用 `GetModuleHandleW(L"Wow_loader.dll") + rva` 下断点；
+- 上传 `wow_loader.dll` 后对它跑 `discover` / `adapt` 即可完成最后一步；
+- 没上传之前，纯 VFS 模式照常启动、路径型覆盖照常生效。
+
+完整清单见 [examples/12.0.7/UPLOAD-CHECKLIST.md](examples/12.0.7/UPLOAD-CHECKLIST.md)，
+按真实路径填好的配置见 [examples/12.0.7/wowmod.firestorm.json](examples/12.0.7/wowmod.firestorm.json)。
+
 ## WoW 12.0.7 能用吗？能
 
 [`examples/12.0.7/`](examples/12.0.7/README.md) 是这个版本的可直接运行起始包。
@@ -218,6 +243,7 @@ node web/server.js        # http://localhost:3000
   "hooks": {
     "mode": "auto",            // auto | vfs | fileid | off
     "patterns": ["hooks/patterns.json", "hooks/patterns.adapted.json"],  // 可写单个字符串或多个文件
+    "scanTargets": ["Wow_loader.dll"],  // 私服壳 exe：连同导入的加载层 DLL 一起扫描
     "allowFallback": true      // 找不到 hook 点仍以 VFS 启动
   },
   "log": { "file": "wowmod.log", "verbose": false }
@@ -238,7 +264,7 @@ node web/server.js        # http://localhost:3000
 | `wowmod plan [--json] [--materialize DIR]` | 干跑：覆盖表 + hook 选择 |
 | `wowmod scan --exe FILE [--patterns] [--json]` | 在真实 exe 上报告特征匹配 |
 | `wowmod adapt --exe FILE --pattern TEXT [--out]` | 把邻近 build 的特征自动放宽成该 exe 上唯一匹配的特征 |
-| `wowmod discover --exe FILE [--anchors] [--emit]` | 只用自己的 exe 找候选 hook 点（字符串引用 + RIP 相对 LEA），无需上传 |
+| `wowmod discover --exe FILE [--anchors] [--emit] [--module]` | 找候选 hook 点（字符串 + 指针表 + RIP 相对引用），`--exe` 也可指向 DLL |
 | `wowmod launch [--dry-run]` | Windows 启动并注入 |
 | `wowmod version` | 版本 |
 

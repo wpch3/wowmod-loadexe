@@ -560,6 +560,135 @@ static void test_discover() {
   CHECK_EQ(load_hook_patterns(tmp("adapt/hooks/discovered.json"), nullptr).size(), size_t(1));
 }
 
+
+// 模拟真实私服客户端：VS_FIXEDFILEINFO 被改成 1200.7.6897.4，
+// 但 StringFileInfo/FileVersion 写着真实的 12.0.7.68974；导入表只有 Wow_loader.dll。
+static std::vector<uint8_t> make_private_server_pe() {
+  auto b = make_pe(4);
+  b.resize(0x700, 0);
+  const size_t opt = 0x80 + 24;
+  const size_t sec = opt + 0xF0;
+  w32(b, sec + 8, 0x600); w32(b, sec + 16, 0x600);  // 扩大 .rsrc，避开版本资源区
+  // 导入表目录（PE32+ 的 dir_off = opt+112，索引 1）；放在 rva 0x1200 -> file 0x400
+  w32(b, opt + 112 + 8, 0x1200);
+  w32(b, opt + 112 + 12, 20);
+  w32(b, 0x400 + 12, 0x1280);                    // IMAGE_IMPORT_DESCRIPTOR.Name
+  const char dll[] = "Wow_loader.dll";
+  std::memcpy(b.data() + 0x480, dll, sizeof(dll));
+
+  // 版本资源数据：@ file 0x280 (rva 0x1080)
+  size_t v = 0x280;
+  auto key16 = [&](size_t off, const char* s) {
+    size_t n = 0;
+    for (const char* p = s; *p; ++p, ++n) w16(b, off + n * 2, static_cast<uint16_t>(*p));
+    w16(b, off + n * 2, 0);
+    return off + (n + 1) * 2;
+  };
+  auto val16 = [&](size_t off, const char* s) {
+    size_t n = 0;
+    for (const char* p = s; *p; ++p, ++n) w16(b, off + n * 2, static_cast<uint16_t>(*p));
+    w16(b, off + n * 2, 0);
+    return off + (n + 1) * 2;
+  };
+  auto align4 = [](size_t x) { return (x + 3) & ~static_cast<size_t>(3); };
+  w16(b, v + 2, 52); w16(b, v + 4, 0);
+  size_t k = key16(v + 6, "VS_VERSION_INFO");
+  size_t fixed = align4(k);
+  w32(b, fixed, 0xFEEF04BDu);
+  w32(b, fixed + 8, (1200u << 16) | 7u);
+  w32(b, fixed + 12, (6897u << 16) | 4u);        // 四元组被改坏
+  size_t sfi = align4(fixed + 52);
+  w16(b, sfi + 2, 0); w16(b, sfi + 4, 1);
+  size_t k2 = key16(sfi + 6, "StringFileInfo");
+  size_t tbl = align4(k2);
+  w16(b, tbl + 2, 0); w16(b, tbl + 4, 1);
+  size_t k3 = key16(tbl + 6, "040904b0");
+  size_t str = align4(k3);
+  w16(b, str + 2, 13); w16(b, str + 4, 1);       // "12.0.7.68974" 12 字符 + NUL
+  size_t k4 = key16(str + 6, "FileVersion");
+  size_t val = align4(k4);
+  size_t end = val16(val, "12.0.7.68974");
+  w16(b, str, static_cast<uint16_t>(align4(end - str)));
+  w16(b, tbl, static_cast<uint16_t>(align4(end - tbl)));
+  w16(b, sfi, static_cast<uint16_t>(align4(end - sfi)));
+  w16(b, v, static_cast<uint16_t>(align4(end - v)));
+  w32(b, 0x260 + 4, static_cast<uint32_t>(align4(end - v)));  // data_size
+  return b;
+}
+
+static void test_real_client() {
+  group("real-client(12.0.7 Firestorm)");
+  auto b = make_private_server_pe();
+  ClientInfo ci;
+  std::string err;
+  CHECK(parse_pe_metadata(b, &ci, &err), "解析私服 PE: " + err);
+  CHECK_EQ(ci.version_string, "12.0.7.68974");   // 优先用字符串资源
+  CHECK_EQ(ci.major, 12);
+  CHECK_EQ(ci.build, 68974);
+  CHECK_EQ(ci.arch, "x64");
+  CHECK_EQ(ci.companion_dlls.size(), size_t(1));
+  if (!ci.companion_dlls.empty()) CHECK_EQ(ci.companion_dlls[0], "Wow_loader.dll");
+
+  // 配置：多模块扫描目标
+  Config cfg;
+  cfg.hooks.scan_targets = {"Wow_loader.dll"};
+  CHECK_EQ(Config::from_json(cfg.to_json(), tmp("real/cfg.json")).hooks.scan_targets.size(), size_t(1));
+
+  // 特征只属于 DLL：两个映像一起扫描，应该只在 DLL 里命中
+  std::vector<uint8_t> exe(256, 0xCC), dll(256, 0x90);
+  const uint8_t sig[] = {0x48, 0x8B, 0xD1, 0xE8, 0x11, 0x22, 0x33, 0x44};
+  std::memcpy(dll.data() + 0x40, sig, sizeof(sig));
+  std::vector<HookImage> images = {{"", exe}, {"Wow_loader.dll", dll}};
+  Json d = Json::make_object();
+  d.set("name", Json::make_string("dll-hook"));
+  d.set("arch", Json::make_string("x64"));
+  d.set("module", Json::make_string("Wow_loader.dll"));
+  d.set("pattern", Json::make_string(sig_pattern(sig, sizeof(sig))));
+  std::string perr;
+  HookDescriptor hd = hook_from_json(Json::parse(d.dump(2), &perr));
+  CHECK_EQ(hd.module, "Wow_loader.dll");
+  cfg.hooks.mode = "auto";
+  cfg.hooks.pattern_files = {};
+  // 直接用多映像 plan_hooks：手工构造 ds 不方便，改测 scan_report
+  Json rep = scan_report(images, {hd}, nullptr);
+  CHECK_EQ(rep.at("modules").as_int(0), 2);
+  const auto& rs = rep.at("results").as_array();
+  CHECK_EQ(rs.size(), size_t(1));
+  if (!rs.empty()) {
+    CHECK_EQ(rs[0].at("matches").as_int(0), 1);
+    CHECK_EQ(rs[0].at("module").as_string(), "Wow_loader.dll");
+  }
+
+  // descriptor 的 module 字段可被写回并读回
+  std::string werr;
+  CHECK(write_pattern_descriptor(tmp("real/hooks/module.json"), "m", sig_pattern(sig, sizeof(sig)),
+                                 "x64", "rdx", "测试", &werr, "Wow_loader.dll"), "写出: " + werr);
+  auto back = load_hook_patterns(tmp("real/hooks/module.json"), nullptr);
+  CHECK_EQ(back.size(), size_t(1));
+  if (!back.empty()) CHECK_EQ(back[0].module, "Wow_loader.dll");
+
+  // plan_hooks 多模块：把 descriptor 放进临时特征文件
+  Json doc = Json::make_object();
+  Json arr = Json::make_array(); arr.push(d);
+  doc.set("patterns", arr);
+  put("real/hooks/p.json", doc.dump(2));
+  Config c2;
+  c2.hooks.mode = "auto";
+  c2.hooks.pattern_files = {tmp("real/hooks/p.json")};
+  ClientInfo ci2; ci2.arch = "x64";
+  HookPlan hp = plan_hooks(c2, ci2, images, nullptr);
+  CHECK_EQ(hp.mode, "fileid");
+  CHECK_EQ(hp.matches.size(), size_t(1));
+  if (!hp.matches.empty()) {
+    CHECK_EQ(hp.matches[0].module, "Wow_loader.dll");
+    CHECK_EQ(hp.matches[0].file_offset, size_t(0x40));
+  }
+  // 单特征同时存在于主 exe 时不应重复命中（module 过滤生效）
+  std::memcpy(exe.data() + 0x40, sig, sizeof(sig));
+  HookPlan hp2 = plan_hooks(c2, ci2, {{"", exe}, {"Wow_loader.dll", dll}}, nullptr);
+  CHECK_EQ(hp2.matches.size(), size_t(1));
+}
+
 int main() {
   std::cout << "wowmod 核心测试\n";
   std::cout << std::string(50, '-') << "\n";
@@ -572,6 +701,7 @@ int main() {
   test_vfs();
   test_hooks();
   test_discover();
+  test_real_client();
   teardown();
   std::cout << std::string(50, '-') << "\n";
   std::cout << g_total << " 项检查, " << g_failed << " 项失败\n";

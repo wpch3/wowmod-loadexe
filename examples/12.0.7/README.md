@@ -1,5 +1,13 @@
 # WoW 12.0.7 专用起始包
 
+> **真实客户端已上传并验证**：`WoW 12.0.7 - Firestorm.exe` = `12.0.7.68974` / x64 PE32+，
+> 路径 `D:\Midnight Open Beta\_midnight_\`。按真实路径填好的配置见
+> [`wowmod.firestorm.json`](wowmod.firestorm.json)，还缺哪些文件见
+> [`UPLOAD-CHECKLIST.md`](UPLOAD-CHECKLIST.md)。
+>
+> ⚠ 该 exe 是启动壳（导入表里只有 `Wow_loader.dll` ordinal #1），真正的游戏代码在那个
+> 38 MB DLL 里。**请上传 `wow_loader.dll`** —— 有了它才能定位 CASC 的 FileDataID hook 点。
+
 **能。** 这套配置本身就是给 12.0.7 准备的，但里面**没有任何版本号判断**：
 把 `client.portal` 改成你的私服地址、把模型放进 `mods/models/`，就能直接跑。
 换成 12.1.5 / 3.3.5 / 1.12.1 也一样，不需要换加载器。

@@ -32,6 +32,7 @@ struct HookDescriptor {
   std::string name;
   std::string kind = "fileId";      // fileId | filePath
   std::string arch;                 // x64 / x86 / arm64，空 = 任意
+  std::string module;               // 只在该模块里找（私服壳 exe + Wow_loader.dll 时很有用），空 = 全部
   std::string result = "rax=pathPtr";
   std::string id_register = "rdx";  // 存放 FileDataID 的寄存器（由数据指定）
   std::string path_register;        // filePath 模式使用的寄存器
@@ -46,11 +47,19 @@ struct HookDescriptor {
 
 struct HookMatch {
   HookDescriptor descriptor;
+  std::string module;       // 命中所在的模块名（空 = 主 exe）
   size_t file_offset = 0;
   uint32_t rva = 0;
   size_t match_count = 0;
   std::string reason;
   Json to_json() const;
+};
+
+// 一个待扫描的二进制映像。私服常见结构：壳 exe 只导入 Wow_loader.dll，
+// 真正的游戏代码（以及 FileDataID hook 点）在 DLL 里，必须一起扫描。
+struct HookImage {
+  std::string module;              // 空 = 主 exe；否则为 DLL 文件名
+  std::vector<uint8_t> bytes;
 };
 
 struct HookPlan {
@@ -64,10 +73,20 @@ struct HookPlan {
 std::vector<HookDescriptor> load_hook_patterns(const std::string& path, Diagnostics* diag = nullptr);
 HookDescriptor hook_from_json(const Json& j, Diagnostics* diag = nullptr);
 
+// 收集要扫描的映像：主 exe + 配置里 hooks.scanTargets + 导入表里的加载层 DLL。
+// 找不到附加 DLL 时只返回主 exe（不影响纯 VFS 模式）。
+std::vector<HookImage> collect_hook_images(const Config& cfg, const ClientInfo& ci,
+                                           const std::vector<uint8_t>& exe_bytes,
+                                           Diagnostics* diag = nullptr);
+
 // 在实际客户端二进制上做能力探测：谁的特征能唯一匹配，就用谁。
+// 单映像版本（兼容旧调用）；多映像版本供壳 exe + 加载层 DLL 的客户端使用。
 HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<uint8_t>& exe_bytes, Diagnostics* diag = nullptr);
+HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<HookImage>& images, Diagnostics* diag = nullptr);
 
 // 扫描并报告所有特征的匹配情况（wowmod scan 用）。
 Json scan_report(const std::string& exe_path, const std::vector<HookDescriptor>& descriptors, Diagnostics* diag = nullptr);
+// 多模块版本：壳 exe + 加载层 DLL 一起报告。
+Json scan_report(const std::vector<HookImage>& images, const std::vector<HookDescriptor>& descriptors, Diagnostics* diag = nullptr);
 
 }  // namespace wowmod
