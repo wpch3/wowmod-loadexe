@@ -1,7 +1,6 @@
 # 构建
 
-> 仓库附带的 x64 `wowmod.exe` / `wowmod_hook.dll` 是此前版本的预编译文件，可能不包含本分支的 `arctium-plan`。
-> 请按本页从当前源码重新构建。即使编译成功，Firestorm 12.0.7 的 Arctium 运行时 hook 仍未实现/验证；见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。
+> 当前分支根目录的 x64 `wowmod.exe` / `wowmod_hook.dll` 已用本分支源码交叉编译。要采集 Firestorm 转储，无需安装 CMake：双击仓库根目录的 `collect-firestorm-runtime.cmd` 即可自动启动并打包。只有自行修改源码后才需要按本页重新构建。运行时 hook 仍未在 Firestorm 12.0.7 实机验证，见 [ARCTIUM-STYLE.md](ARCTIUM-STYLE.md)。
 
 ## 依赖
 

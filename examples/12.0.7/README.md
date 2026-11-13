@@ -44,4 +44,4 @@
 
 配置建议：`runtimeScan: true`、`runtimeDelayMs: 15000`、`runtimeAutoInstall: false`。若扫描 DLL 没有成功进入游戏进程，请同时保留完整注入诊断；不要打开自动 hook。
 
-也可替代为 x64dbg 记录已解密模块名、目标 RVA、入口前后 24–32 字节、FileDataID 所在寄存器/栈槽和宽度，以及返回值的实际含义。当前沙箱没有 Windows 交叉编译器或 Wine，无法替代这一步做 Windows 进程验证。
+也可替代为 x64dbg 记录已解密模块名、目标 RVA、入口前后 24–32 字节、FileDataID 所在寄存器/栈槽和宽度，以及返回值的实际含义。当前已交叉编译 Windows x64 二进制，但没有 Wine 或 Firestorm 进程，无法替代 Windows 客户端运行验证。可双击仓库根目录的 `collect-firestorm-runtime.cmd` 自动运行并打包资料。

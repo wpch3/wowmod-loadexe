@@ -33,7 +33,7 @@
 
 ## 环境限制
 
-本次开发环境是 Linux，未安装 Windows 交叉编译器或 Wine。可移植 C++17 核心与预检 CLI 已通过本地编译/测试，但没有完成 Windows 二进制构建、Firestorm 进程注入或游戏内验证。完整状态见 [`ARCTIUM-STYLE.md`](ARCTIUM-STYLE.md)。
+本次开发环境是 Linux。可移植 C++17 核心测试已通过，且已用 Zig 交叉编译 Windows x64 PE 并检查架构/导出符号；没有 Wine 或 Firestorm 进程，所以未能在 Windows 客户端中运行、验证进程注入或游戏内替换。根目录的 `collect-firestorm-runtime.cmd` 可由用户双击运行并自动打包运行时资料。完整状态见 [`ARCTIUM-STYLE.md`](ARCTIUM-STYLE.md)。
 
 ## 合法与道德边界
 

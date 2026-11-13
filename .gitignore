@@ -24,6 +24,8 @@ CMakeCache.txt
 node_modules/
 *.log
 wowmod.log
+firestorm-runtime-dumps.zip
+firestorm-launch-output.txt
 *.preview.json
 examples/demo/.preview.json
 examples/demo/client/
