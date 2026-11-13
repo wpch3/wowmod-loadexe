@@ -1,0 +1,27 @@
+# 构建产物
+build/
+out/
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Web / 运行期生成物
+node_modules/
+*.log
+wowmod.log
+*.preview.json
+examples/demo/.preview.json
+examples/demo/client/
+__pycache__/
+.DS_Store
+.idea/
+.vs/

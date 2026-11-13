@@ -1,0 +1,30 @@
+// 文件 API detour 实现：路径替换 / 屏蔽 / 目录枚举叠加。
+// SPDX-License-Identifier: MIT
+#pragma once
+#ifdef _WIN32
+
+#include "windows/iat_hook.hpp"
+
+namespace wowmod {
+namespace win {
+
+void fs_hooks_init();
+
+HANDLE WINAPI DetourCreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+HANDLE WINAPI DetourCreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+DWORD WINAPI DetourGetFileAttributesW(LPCWSTR);
+DWORD WINAPI DetourGetFileAttributesA(LPCSTR);
+BOOL WINAPI DetourGetFileAttributesExW(LPCWSTR, GET_FILEEX_INFO_LEVELS, LPVOID);
+HANDLE WINAPI DetourFindFirstFileW(LPCWSTR, LPWIN32_FIND_DATAW);
+HANDLE WINAPI DetourFindFirstFileExW(LPCWSTR, FINDEX_INFO_LEVELS, LPVOID, FINDEX_SEARCH_OPS, LPVOID, DWORD);
+BOOL WINAPI DetourFindNextFileW(HANDLE, LPWIN32_FIND_DATAW);
+BOOL WINAPI DetourFindClose(HANDLE);
+HMODULE WINAPI DetourLoadLibraryW(LPCWSTR);
+HMODULE WINAPI DetourLoadLibraryExW(LPCWSTR, HANDLE, DWORD);
+NTSTATUS NTAPI DetourNtCreateFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                                  PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+NTSTATUS NTAPI DetourNtOpenFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
+
+}  // namespace win
+}  // namespace wowmod
+#endif
