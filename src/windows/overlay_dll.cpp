@@ -71,5 +71,11 @@ __declspec(dllexport) const char* WINAPI wowmod_hook_mode() {
   return runtime().ready ? runtime().hooks.mode.c_str() : "not-initialized";
 }
 
+// 供 SetWindowsHookEx 注入机制使用：user32 会在目标 GUI 线程收到消息时
+// 自动把本 DLL 加载进那个进程（不经过 CreateRemoteThread / LoadLibraryW 远程调用）。
+__declspec(dllexport) LRESULT CALLBACK wowmod_hook_proc(int code, WPARAM w, LPARAM l) {
+  return CallNextHookEx(nullptr, code, w, l);
+}
+
 }  // extern "C"
 #endif

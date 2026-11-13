@@ -758,6 +758,13 @@ static void test_real_client() {
   Config rc3 = Config::from_json(rc.to_json(), tmp("real/cfg3.json"));
   CHECK(rc3.hooks.inject_retry && rc3.hooks.inject_retry_delay_ms == 1000 &&
         rc3.hooks.inject_retry_attempts == 3, "注入重试配置往返");
+  CHECK(rc3.hooks.inject_windows_hook, "默认启用 Windows 钩子注入");
+  Config rc4;
+  rc4.hooks.inject_methods = {"loadlibrary", "ntcreatethreadex", "apc"};
+  rc4.hooks.inject_windows_hook = false;
+  Config rc5 = Config::from_json(rc4.to_json(), tmp("real/cfg5.json"));
+  CHECK_EQ(rc5.hooks.inject_methods.size(), size_t(3));
+  CHECK(!rc5.hooks.inject_windows_hook, "注入机制配置往返");
 
   // scanTargets 与导入表里的 DLL 只大小写不同，不应重复读 40MB 两次
   Config dc;

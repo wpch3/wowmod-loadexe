@@ -83,13 +83,14 @@ launch 报 LoadLibraryW 返回 NULL 时
 ------------------------------------------
   powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
 
-这个脚本会打印真正的 Win32 错误码（126=缺运行库/依赖，193=位数不符，
-5=Defender/权限，1114=DllMain 失败，0=DLL 本身没问题只是注入时机/策略）。
-加载器现在会：直接读取目标进程里的 GetLastError 并在失败信息里打印出来，
-自动「恢复主线程 -> 等 1s/2s/3s -> 重试注入」共 3 次，还会枚举目标进程
-模块表确认 DLL 是否其实已经加载（避免 32 位退出码误判）。
-仍失败就把 wowmod.exe + wowmod_hook.dll 移到 D:\wowmod\ 之类的简单目录，
-并以管理员运行 PowerShell、给该目录加 Defender 排除项。
+这个脚本会打印本进程侧的 Win32 错误码。
+最新真机结论：目标进程 GetLastError=0 且「本进程完整加载成功」= DLL 本身
+完全正常，是客户端加载层拒绝远程注入。换目录/管理员/Defender 排除项都没用。
+加载器现在自动轮换 4 种注入机制：
+  loadlibrary / ntcreatethreadex / apc / windowshook(SetWindowsHookEx)
+并用「目标进程模块表里有没有 wowmod_hook.dll」做最终判定，重试 3 次。
+windowshook 成功后 wowmod.exe 会等游戏退出才返回命令行，这是正常的。
+完整说明见 docs\INJECTION.md；四种都失败时按该文档把输出发回。
 
 排错速查
 ------------------------------------------

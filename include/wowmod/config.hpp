@@ -71,6 +71,8 @@ struct HookSettings {
   bool inject_retry = true;
   int inject_retry_attempts = 3;      // 恢复主线程后最多再试几次
   int inject_retry_delay_ms = 1000;   // 第 i 次等待 i * delay 毫秒
+  std::vector<std::string> inject_methods;  // 空 = loadlibrary, ntcreatethreadex(+apc)
+  bool inject_windows_hook = true;   // 额外用 SetWindowsHookEx 让 user32 把 DLL 带进客户端
 };
 
 struct LogSettings {

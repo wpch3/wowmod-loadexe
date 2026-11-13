@@ -19,6 +19,7 @@ cp examples/12.0.7/mappings/listfile.txt "$STAGE/mappings/"
 cp examples/12.0.7/mods/models/README.md "$STAGE/mods/models/"
 cp docs/WINDOWS-QUICKSTART.md "$STAGE/WINDOWS-QUICKSTART.md"
 cp docs/X64DBG.md "$STAGE/X64DBG.md"
+cp docs/INJECTION.md "$STAGE/INJECTION.md"
 cp scripts/diagnose-load.ps1 "$STAGE/diagnose-load.ps1"
 
 cat > "$STAGE/RUN.txt" <<'TXT'
@@ -33,7 +34,7 @@ wowmod 12.0.7 — 直接解压到游戏目录的版本
   wowmod_hook.dll
   wowmod.firestorm.json
   hooks\  mappings\  mods\
-  RUN.txt  WINDOWS-QUICKSTART.md  X64DBG.md  diagnose-load.ps1
+  RUN.txt  WINDOWS-QUICKSTART.md  X64DBG.md  INJECTION.md  diagnose-load.ps1
 
 然后在这个目录打开 PowerShell（地址栏输 powershell 回车），依次执行：
 

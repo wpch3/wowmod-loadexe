@@ -127,35 +127,94 @@ LaunchResult launch_game(const Config& cfg, const ClientInfo& ci, const Vfs& vfs
   }
 
   std::wstring dll_w = utf8_to_wide(to_native_path(dll));
+  std::vector<std::string> methods = cfg.hooks.inject_methods;
+  if (methods.empty()) methods = {"loadlibrary", "ntcreatethreadex"};
+
+  // 机制 4：SetWindowsHookEx(WH_GETMESSAGE)。user32 会在客户端 GUI 线程收消息时
+  // 自动把本 DLL 加载进那个进程，完全不经过 CreateRemoteThread / 远程 LoadLibraryW。
+  // 有些客户端的加载层会静默拒绝远程加载，但对系统自身注入的 DLL 放行。
+  HMODULE self_dll = nullptr;
+  HHOOK win_hook = nullptr;
+  std::string hook_note;
+  if (cfg.hooks.inject_windows_hook) {
+    SetEnvironmentVariableW(L"WOWMOD_PROBE", L"1");
+    self_dll = LoadLibraryW(dll_w.c_str());
+    SetEnvironmentVariableW(L"WOWMOD_PROBE", nullptr);
+    if (!self_dll) {
+      hook_note = "SetWindowsHookEx 机制不可用：本进程 LoadLibraryW 失败 (" +
+                  std::to_string(GetLastError()) + ")";
+    } else {
+      auto proc = reinterpret_cast<HOOKPROC>(GetProcAddress(self_dll, "wowmod_hook_proc"));
+      if (!proc) hook_note = "SetWindowsHookEx 机制不可用：缺少导出 wowmod_hook_proc";
+      else {
+        win_hook = SetWindowsHookExW(WH_GETMESSAGE, proc, self_dll, pi.dwThreadId);
+        hook_note = win_hook ? "WH_GETMESSAGE 钩子已挂到客户端主线程 " + std::to_string(pi.dwThreadId)
+                             : "SetWindowsHookExW 失败 (" + std::to_string(GetLastError()) + ")";
+      }
+    }
+  }
+
+  auto render = [](const win::InjectReport& rp) {
+    std::string out;
+    for (const auto& a : rp.attempts) out += "\n  " + a;
+    return out;
+  };
+  auto poll_hook = [&](int ms) {
+    for (int k = 0; k < ms / 100; ++k) {
+      if (win::is_module_loaded(pi.hProcess, dll_w)) return true;
+      Sleep(100);
+    }
+    return false;
+  };
+
+  bool injected = false, resumed = false;
   std::string inject_err;
-  bool injected = win::inject_dll(pi.hProcess, dll_w, &inject_err);
-  bool resumed = false;
-  // 部分加壳客户端在 CREATE_SUSPENDED 阶段 loader / UCRT 还没初始化完，
-  // LoadLibraryW 会返回 NULL。回退：先恢复主线程，等一小会儿再注入一次。
+  win::InjectReport first = win::inject_dll(pi.hProcess, pi.hThread, false, dll_w, methods);
+  injected = first.success;
+  inject_err = injected ? "注入成功（" + first.method + "）" : "挂起阶段:" + render(first);
+  if (!hook_note.empty()) inject_err += "\n  " + hook_note;
+
   if (!injected && cfg.hooks.inject_retry) {
     std::string first_err = inject_err;
     ResumeThread(pi.hThread);
     resumed = true;
     int attempts = std::max(1, std::min(10, cfg.hooks.inject_retry_attempts));
     int base = std::max(0, std::min(10000, cfg.hooks.inject_retry_delay_ms));
-    std::string all_retries;
+    std::string all;
     for (int i = 1; i <= attempts && !injected; ++i) {
       Sleep(static_cast<DWORD>(static_cast<long long>(base) * i));
-      std::string retry_err;
-      if (win::inject_dll(pi.hProcess, dll_w, &retry_err)) {
+      if (win_hook && poll_hook(1500)) {
         injected = true;
-        inject_err = "挂起阶段注入失败，已在进程初始化后第 " + std::to_string(i) +
-                     " 次重试成功；" + retry_err + "\n  首次失败: " + first_err;
+        inject_err = "Windows 钩子注入成功（user32 已把 wowmod_hook.dll 加载进客户端）\n  " + hook_note +
+                     "\n  首次失败:" + first_err;
+        break;
+      }
+      std::vector<std::string> m2 = methods;
+      if (std::find(m2.begin(), m2.end(), "apc") == m2.end()) m2.push_back("apc");
+      win::InjectReport rp = win::inject_dll(pi.hProcess, pi.hThread, true, dll_w, m2);
+      if (rp.success) {
+        injected = true;
+        inject_err = "第 " + std::to_string(i) + " 次重试注入成功（" + rp.method + "）\n  首次失败:" + first_err;
       } else {
-        all_retries += "\n  第 " + std::to_string(i) + " 次重试: " + retry_err;
+        all += "\n  第 " + std::to_string(i) + " 次重试:" + render(rp);
       }
     }
-    if (!injected) inject_err = "挂起阶段注入失败: " + first_err + all_retries;
+    if (!injected) inject_err = "挂起阶段:" + first_err + all;
   }
   if (injected) {
     if (!resumed) ResumeThread(pi.hThread);
   } else {
     TerminateProcess(pi.hProcess, 1);  // 不注入就不要启动，避免无覆盖层运行
+    if (win_hook) UnhookWindowsHookEx(win_hook);
+    if (self_dll) FreeLibrary(self_dll);
+  }
+
+  // Windows 钩子由本进程持有：必须等客户端退出，否则钩子销毁后 DLL 可能被卸载。
+  bool keep_alive = injected && win_hook != nullptr;
+  if (keep_alive) {
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    UnhookWindowsHookEx(win_hook);
+    if (self_dll) FreeLibrary(self_dll);
   }
 
   r.pid = pi.dwProcessId;

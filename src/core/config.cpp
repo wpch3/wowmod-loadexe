@@ -135,6 +135,10 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
   c.hooks.inject_retry = h.at("injectRetry").as_bool(true);
   c.hooks.inject_retry_attempts = static_cast<int>(h.at("injectRetryAttempts").as_int(3));
   c.hooks.inject_retry_delay_ms = static_cast<int>(h.at("injectRetryDelayMs").as_int(1000));
+  for (const auto& m : h.at("injectMethods").as_string_array()) {
+    if (!m.empty()) c.hooks.inject_methods.push_back(m);
+  }
+  c.hooks.inject_windows_hook = h.at("injectWindowsHook").as_bool(true);
   for (const auto& s : h.at("runtimeModules").as_string_array()) {
     if (!s.empty()) c.hooks.runtime_modules.push_back(s);
   }
@@ -207,6 +211,12 @@ Json Config::to_json() const {
   h.set("injectRetry", Json::make_bool(hooks.inject_retry));
   h.set("injectRetryAttempts", Json::make_number(hooks.inject_retry_attempts));
   h.set("injectRetryDelayMs", Json::make_number(hooks.inject_retry_delay_ms));
+  h.set("injectWindowsHook", Json::make_bool(hooks.inject_windows_hook));
+  if (!hooks.inject_methods.empty()) {
+    Json im = Json::make_array();
+    for (const auto& m : hooks.inject_methods) im.push(Json::make_string(m));
+    h.set("injectMethods", im);
+  }
   if (!hooks.runtime_dump.empty()) h.set("runtimeDump", Json::make_string(hooks.runtime_dump));
   if (!hooks.runtime_modules.empty()) {
     Json rm = Json::make_array();

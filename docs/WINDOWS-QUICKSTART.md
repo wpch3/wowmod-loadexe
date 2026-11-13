@@ -183,6 +183,14 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 `--json` 输出与重定向到文件时**始终**保持 UTF-8（保证 JSON 可解析）。
 
+## `launch` 报 `LoadLibraryW 返回 NULL`（真机实测结论）
+
+> **最新结论见 [docs/INJECTION.md](INJECTION.md)**：`GetLastError=0` +
+> 「本进程完整加载成功」说明 DLL 本身没问题，是客户端加载层**拒绝远程注入**。
+> 换目录、加 Defender 排除项、以管理员运行都解决不了。现在 `launch` 会自动轮换
+> 4 种注入机制（`loadlibrary` / `ntcreatethreadex` / `apc` / `windowshook`），
+> 并统一用目标进程模块表判定成功。
+
 ## `launch` 报 `LoadLibraryW 返回 NULL`
 
 前四条命令都正常、只有 `launch` 失败时，说明**客户端进程里加载
@@ -244,7 +252,7 @@ powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
 | 提示缺 `api-ms-win-crt-*.dll` | 装 [VC++ 2015–2022 x64 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)；Win10/11 一般自带 |
 | SmartScreen / Defender 拦截 | `Unblock-File .\wowmod.exe`、`Unblock-File .\wowmod_hook.dll`，或右键属性 → 解除锁定 |
 | 中文显示成 `閫氱敤鐗堟湰` | 见上面「中文输出乱码」；重新下载 exe 或 `chcp 65001` |
-| `LoadLibraryW 返回 NULL` | 见上面专节；跑 `diagnose-load.ps1` 拿错误码 |
+| `LoadLibraryW 返回 NULL` | 见 [INJECTION.md](INJECTION.md)；`GetLastError=0` 多半是客户端反注入，不是文件问题 |
 | `plan` 显示 `hook 模式: vfs` | **正常**，加密壳客户端的安全回退；路径型覆盖照常生效 |
 | `runtime-dumps` 没生成 | 确认 `hooks.runtimeScan: true`；等 `runtimeDelayMs`（默认 4 秒）之后再看；目录相对配置文件所在目录 |
 
