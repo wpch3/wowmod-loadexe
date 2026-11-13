@@ -64,7 +64,10 @@ wowmod scan     --exe runtime-dumps/main.exe.img --mapped --patterns hooks/patte
 ## 还需要的（不是文件，是一次真机运行）
 
 > 运行命令前先看 **[../../docs/WINDOWS-QUICKSTART.md](../../docs/WINDOWS-QUICKSTART.md)**：
-> 分支 ZIP 里没有编译好的 exe，PowerShell 必须写 `.\wowmod.exe`。
+> 分支 ZIP 里现在已带编译好的 exe，PowerShell 必须写 `.\wowmod.exe`。
+> **最省事**：下载 [`wowmod-12.0.7-game-dir.zip`](https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod-12.0.7-game-dir.zip)
+> 直接解压到 `D:\Midnight Open Beta\_midnight_\`，然后
+> `.\wowmod.exe launch --config ".\wowmod.firestorm.json"`（配置在根目录）。
 > 手工 x64dbg 解密步骤见 **[../../docs/X64DBG.md](../../docs/X64DBG.md)**。
 
 1. **在 Windows 上启动一次游戏**（`wowmod launch --config wowmod.firestorm.json`），

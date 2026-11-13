@@ -16,7 +16,67 @@ PS ...> wowmod launch --config examples/12.0.7/wowmod.firestorm.json
 
 所以 `.\wowmod.exe` 现在也会报"无法识别"——文件不存在。按下面任选一条补齐。
 
-## 方式 A：重新下载分支 ZIP（推荐，不用装编译器）
+### 如果你已经 `cd` 到游戏目录
+
+`PS D:\Midnight Open Beta\_midnight_>` 说明当前目录是**游戏目录**，不是你解压源码的
+`C:\Users\Administrator\Downloads\Compressed\...`。`.\` 永远指"当前目录"，
+所以先确认文件到底在哪：
+
+```powershell
+Get-Location
+Test-Path .\wowmod.exe                       # False 就是没放对地方
+Get-ChildItem -Name wowmod*                   # 看看当前目录有没有
+```
+
+三个选择：
+1. **把预编译文件复制/解压到游戏目录**（方式 0，最省事）；
+2. `cd` 回你解压源码的那个文件夹，再跑 `.\wowmod.exe …`；
+3. 用**绝对路径**调用，不动当前目录：
+
+   ```powershell
+   & "C:\Users\Administrator\Downloads\Compressed\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe\wowmod-loadexe-arena-5a3768a5-wowmod-loadexe\wowmod.exe" version
+   ```
+
+   路径带引号时 PowerShell 要用 `&` 调用运算符。
+
+## 方式 0：解压到游戏目录（最省事，推荐你用这个）
+
+你现在 PowerShell 停在 `D:\Midnight Open Beta\_midnight_>`，所以 `wowmod.exe`
+必须**也在那个目录里**才能写 `.\wowmod.exe`。为这个场景专门做了一个包：
+
+**下载 <https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod-12.0.7-game-dir.zip>**
+
+把里面的内容**直接**解压到 `D:\Midnight Open Beta\_midnight_\`
+（不要再套一层 `wowmod-12.0.7-game-dir\` 子文件夹）。解压后该目录应该能直接看到：
+
+```
+wowmod.exe
+wowmod_hook.dll
+wowmod.firestorm.json     ← 配置文件在根目录，不是 examples\12.0.7\ 下
+hooks\  mappings\  mods\
+RUN.txt  WINDOWS-QUICKSTART.md  X64DBG.md
+```
+
+然后在 `D:\Midnight Open Beta\_midnight_>` 里执行：
+
+```powershell
+Unblock-File .\wowmod.exe, .\wowmod_hook.dll
+.\wowmod.exe version
+.\wowmod.exe detect   --config ".\wowmod.firestorm.json"
+.\wowmod.exe validate --config ".\wowmod.firestorm.json"
+.\wowmod.exe plan     --config ".\wowmod.firestorm.json"
+.\wowmod.exe launch   --config ".\wowmod.firestorm.json"
+```
+
+**注意配置路径变了**：这个包里是 `--config ".\wowmod.firestorm.json"`，
+不是 `examples\12.0.7\wowmod.firestorm.json`（那是源码目录里的位置）。
+`launch` 成功后 `runtime-dumps\` 会生成在游戏目录下。
+
+> 是的，你问的"是不是要把 zip 解压到游戏目录"——**用这个包就是这么做的**，
+> 而且它把所有相对路径（`mods\`、`mappings\`、`hooks\`、日志、转储目录）都按
+> 游戏目录摆好了，不用改配置。当然也可以不解压到游戏目录（见方式 A）。
+
+## 方式 A：重新下载分支 ZIP（不用动游戏目录）
 
 **现在分支里已经带上了预编译的 x64 二进制**（`wowmod.exe` + `wowmod_hook.dll`，
 约 1 MB 各一个）。你截图里那份 ZIP 是旧版本，没有这两个文件。

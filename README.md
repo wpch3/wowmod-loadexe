@@ -80,6 +80,10 @@ ZIP（或单独下这两个文件放到根目录，两者必须同目录）就�
 .\wowmod.exe launch   --config "examples\12.0.7\wowmod.firestorm.json"
 ```
 
+**如果你已经在 `D:\Midnight Open Beta\_midnight_>` 里下命令**，直接下载
+[`wowmod-12.0.7-game-dir.zip`](https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod-12.0.7-game-dir.zip)
+解压到游戏目录，然后 `.\wowmod.exe launch --config ".\wowmod.firestorm.json"`（配置在根目录）。
+
 完整步骤与排错见 **[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
 x64dbg 手工解密/定位见 **[docs/X64DBG.md](docs/X64DBG.md)**。
 
