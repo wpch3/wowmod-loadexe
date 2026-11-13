@@ -63,6 +63,12 @@ def make_pe(version):
 
     # 让特征在 .text 里唯一出现（真实客户端里这就是 "按 FileDataID 读文件" 的函数入口）
     b[0x400:0x400 + len(SIGNATURE)] = SIGNATURE
+    # 再放一个字符串 + 一条指向它的 RIP 相对 LEA，用来演示 wowmod discover
+    anchor = b"DBFilesClient\\"
+    b[0x480:0x480 + len(anchor)] = anchor
+    # LEA 指令在 file 0x450 => RVA 0x1050；字符串 RVA 0x1080
+    disp = 0x1080 - (0x1050 + 7)
+    b[0x450:0x457] = bytes([0x48, 0x8D, 0x0D]) + struct.pack("<i", disp)
 
     # 资源树（RT_VERSION）@ file 0x600 / RVA 0x2000
     w16(b, 0x600 + 14, 1)

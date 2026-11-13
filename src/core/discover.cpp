@@ -2,6 +2,7 @@
 #include "wowmod/discover.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <utility>
 #include <sstream>
 
@@ -298,6 +299,36 @@ AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::strin
     return out;
   }
 
+  std::string werr;
+  if (!write_pattern_descriptor(out_path, name, out.adapted.pattern,
+                                out.adapted.arch.empty() ? "x64" : out.adapted.arch,
+                                id_register.empty() ? "rdx" : id_register,
+                                "由 wowmod adapt 自动放宽得到；请用调试器确认该函数返回值是路径指针", &werr)) {
+    out.reason = werr;
+    if (err) *err = werr;
+    return out;
+  }
+  out.ok = true;
+  out.out_path = out_path;
+  out.reason = "已写入 " + out_path + "；把它加入 hooks.patterns 后运行 wowmod plan 验证";
+  return out;
+}
+
+Json AdaptFileResult::to_json() const {
+  Json j = Json::make_object();
+  j.set("ok", Json::make_bool(ok));
+  j.set("out", Json::make_string(out_path));
+  j.set("reason", Json::make_string(reason));
+  j.set("adapt", adapted.to_json());
+  return j;
+}
+
+
+bool write_pattern_descriptor(const std::string& out_path, const std::string& name,
+                              const std::string& pattern, const std::string& arch,
+                              const std::string& id_register, const std::string& note,
+                              std::string* err) {
+  if (err) err->clear();
   Json doc;
   std::string existing;
   if (read_text_file(out_path, &existing, nullptr)) {
@@ -316,34 +347,200 @@ AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::strin
   Json d = Json::make_object();
   d.set("name", Json::make_string(name));
   d.set("kind", Json::make_string("fileId"));
-  d.set("arch", Json::make_string(out.adapted.arch.empty() ? "x64" : out.adapted.arch));
-  d.set("pattern", Json::make_string(out.adapted.pattern));
+  d.set("arch", Json::make_string(arch.empty() ? "x64" : arch));
+  d.set("pattern", Json::make_string(pattern));
   d.set("offset", Json::make_number(0));
   d.set("idRegister", Json::make_string(id_register.empty() ? "rdx" : id_register));
   d.set("result", Json::make_string("rax=pathPtr"));
   d.set("priority", Json::make_number(10));
-  d.set("note", Json::make_string("由 wowmod adapt 自动放宽得到；请用调试器确认该函数返回值是路径指针"));
+  d.set("note", Json::make_string(note));
   arr.push(d);
   doc.set("patterns", arr);
-
   std::string werr;
   if (!write_text_file(out_path, doc.dump(2) + "\n", &werr)) {
-    out.reason = werr;
     if (err) *err = werr;
-    return out;
+    return false;
   }
-  out.ok = true;
-  out.out_path = out_path;
-  out.reason = "已写入 " + out_path + "；把它加入 hooks.patterns 后运行 wowmod plan 验证";
+  return true;
+}
+
+std::vector<std::string> default_anchors() {
+  return {
+      "DBFilesClient\\", "Interface\\AddOns\\", "World\\Model\\", "World\\Textures\\",
+      "realmlist.wtf", "Unable to open", "FileDataID", "CascOpen", "patch-",
+      "World of Warcraft usage", "Interface\\FrameXML\\", ".build.info"};
+}
+
+namespace {
+
+uint32_t read32(const std::vector<uint8_t>& b, size_t off) {
+  return static_cast<uint32_t>(b[off]) | (static_cast<uint32_t>(b[off + 1]) << 8) |
+         (static_cast<uint32_t>(b[off + 2]) << 16) | (static_cast<uint32_t>(b[off + 3]) << 24);
+}
+
+// 大小写不敏感地在 buffer 中找 ASCII 串
+std::vector<size_t> find_string(const std::vector<uint8_t>& b, const std::string& needle) {
+  std::vector<size_t> out;
+  if (needle.empty() || needle.size() > b.size()) return out;
+  std::string lower = to_lower(needle);
+  for (size_t i = 0; i + needle.size() <= b.size(); ++i) {
+    bool ok = true;
+    for (size_t k = 0; k < needle.size(); ++k) {
+      unsigned char c = b[i + k];
+      if (static_cast<char>(std::tolower(c)) != lower[k]) { ok = false; break; }
+    }
+    if (ok) out.push_back(i);
+  }
   return out;
 }
 
-Json AdaptFileResult::to_json() const {
+// 把一段机器码变成建议特征：相对跳转/调用的 rel32、RIP 相对 disp32 全部通配
+std::string suggest_pattern(const std::vector<uint8_t>& exe, size_t start, size_t len, size_t* fixed_out) {
+  static const char* hx = "0123456789ABCDEF";
+  std::vector<int> bytes;
+  for (size_t i = 0; i < len && start + i < exe.size(); ++i)
+    bytes.push_back(static_cast<int>(exe[start + i]));
+  auto wild = [&](size_t from, size_t count) {
+    for (size_t i = from; i < from + count && i < bytes.size(); ++i) bytes[i] = -1;
+  };
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    if (bytes[i] == 0xE8 || bytes[i] == 0xE9) { wild(i + 1, 4); continue; }
+    if (bytes[i] == 0x0F && i + 1 < bytes.size() &&
+        (static_cast<int>(bytes[i + 1]) & 0xF0) == 0x80) { wild(i + 2, 4); continue; }
+    if (i + 2 < bytes.size() && bytes[i] >= 0x40 && bytes[i] <= 0x4F && bytes[i + 1] == 0x8D &&
+        bytes[i + 2] >= 0 && (bytes[i + 2] & 0xC7) == 0x05) { wild(i + 3, 4); continue; }
+  }
+  size_t fixed = 0;
+  std::string out;
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    if (i) out += ' ';
+    if (bytes[i] < 0) out += "??";
+    else { out += hx[(bytes[i] >> 4) & 0xF]; out += hx[bytes[i] & 0xF]; ++fixed; }
+  }
+  if (fixed_out) *fixed_out = fixed;
+  return out;
+}
+
+}  // namespace
+
+DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe, const std::vector<std::string>& anchors) {
+  DiscoveryReport rep;
+  rep.anchors = anchors;
+  rep.note = "候选由字符串引用自动推导，不等于目标函数；请用调试器/wowmod scan 核实，唯一匹配也不代表语义正确";
+  if (exe.empty()) { rep.note = "exe 字节为空"; return rep; }
+  PeImage pe;
+  std::string peerr;
+  rep.pe = pe.load(exe, &peerr);
+  if (rep.pe) rep.arch = pe.machine == 0x8664 ? "x64" : pe.machine == 0xAA64 ? "arm64"
+                                              : pe.machine == 0x14C ? "x86" : "unknown";
+
+  // 1) 锚点字符串 -> RVA
+  struct AnchorRva { std::string text; uint32_t rva; };
+  std::vector<AnchorRva> found;
+  for (const auto& a : anchors) {
+    auto offsets = find_string(exe, a);
+    if (offsets.empty()) continue;
+    rep.anchors_found.push_back(a);
+    for (size_t off : offsets) {
+      uint32_t rva = 0;
+      if (rep.pe) { auto r = pe.offset_to_rva(static_cast<uint32_t>(off)); if (!r) continue; rva = *r; }
+      found.push_back({a, rva});
+    }
+  }
+
+  // 2) 可执行节区里找 RIP 相对 LEA 引用（REX + 8D + ModRM(mod=00,rm=101)）
+  auto ranges = rep.pe ? pe_ranges(pe, exe.size()) : std::vector<std::pair<size_t, size_t>>{};
+  if (ranges.empty()) ranges.emplace_back(0, exe.size());
+  std::vector<std::pair<size_t, std::string>> xrefs;  // (指令文件偏移, 锚点名)
+  size_t seen = 0;
+  for (const auto& rg : ranges) {
+    if (rg.first + 7 >= exe.size()) continue;
+    size_t end = std::min(rg.first + rg.second, exe.size()) - 7;
+    for (size_t off = rg.first; off < end; ++off) {
+      uint8_t rex = exe[off];
+      if (rex < 0x40 || rex > 0x4F || exe[off + 1] != 0x8D) continue;
+      uint8_t modrm = exe[off + 2];
+      if ((modrm & 0xC7) != 0x05) continue;  // RIP 相对
+      uint32_t instr_rva = 0;
+      if (rep.pe) { auto r = pe.offset_to_rva(static_cast<uint32_t>(off)); if (!r) continue; instr_rva = *r; }
+      int32_t disp = static_cast<int32_t>(read32(exe, off + 3));
+      uint32_t target = static_cast<uint32_t>(static_cast<int64_t>(instr_rva) + 7 + disp);
+      for (const auto& a : found) {
+        // 允许指向字符串开头附近（编译器常引用字符串前几个字节/结构体里的指针）
+        if (target >= a.rva && target - a.rva <= 24) {
+          xrefs.emplace_back(off, a.text);
+          ++seen;
+          break;
+        }
+      }
+      if (seen >= 400) break;
+    }
+    if (seen >= 400) break;
+  }
+
+  // 3) 为每个 xref 生成候选特征，优先保留"唯一匹配"且固定字节多的
+  for (const auto& xr : xrefs) {
+    for (size_t len : {32u, 48u}) {
+      size_t fixed = 0;
+      std::string pat = suggest_pattern(exe, xr.first, len, &fixed);
+      if (fixed < 8) continue;
+      std::string perr;
+      Pattern p = Pattern::parse(pat, &perr);
+      if (!p.valid()) continue;
+      size_t matches = count_matches(p, exe, 3);
+      HookCandidate c;
+      c.anchor = xr.second;
+      c.file_offset = xr.first;
+      c.pattern = pat;
+      c.fixed_bytes = fixed;
+      c.unique_matches = matches;
+      c.executable = true;
+      if (rep.pe) { auto r = pe.offset_to_rva(static_cast<uint32_t>(xr.first)); if (r) c.code_rva = *r; }
+      c.reason = matches == 1 ? "唯一匹配，可作为 adapt/plan 的起点（仍需核实函数语义）"
+                              : "匹配 " + std::to_string(matches) + "+ 处，需增加固定字节或人工收窄";
+      rep.candidates.push_back(c);
+      if (matches == 1) break;  // 已得到唯一匹配，不必再试更长
+    }
+    if (rep.candidates.size() >= 40) break;
+  }
+  std::stable_sort(rep.candidates.begin(), rep.candidates.end(), [](const HookCandidate& a, const HookCandidate& b) {
+    bool au = a.unique_matches == 1, bu = b.unique_matches == 1;
+    if (au != bu) return au;
+    return a.fixed_bytes > b.fixed_bytes;
+  });
+  if (rep.candidates.size() > 20) rep.candidates.resize(20);
+  if (xrefs.empty())
+    rep.note = "未找到指向这些锚点的 RIP 相对引用。可用 --anchors 传入你自己的字符串（例如某个模型路径），"
+               "或直接用 wowmod adapt 从邻近版本的特征推导";
+  return rep;
+}
+
+Json HookCandidate::to_json() const {
   Json j = Json::make_object();
-  j.set("ok", Json::make_bool(ok));
-  j.set("out", Json::make_string(out_path));
+  j.set("anchor", Json::make_string(anchor));
+  j.set("stringRva", Json::make_number(static_cast<double>(string_rva)));
+  j.set("codeRva", Json::make_number(static_cast<double>(code_rva)));
+  j.set("fileOffset", Json::make_number(static_cast<double>(file_offset)));
+  j.set("pattern", Json::make_string(pattern));
+  j.set("fixedBytes", Json::make_number(static_cast<double>(fixed_bytes)));
+  j.set("uniqueMatches", Json::make_number(static_cast<double>(unique_matches)));
+  j.set("executable", Json::make_bool(executable));
   j.set("reason", Json::make_string(reason));
-  j.set("adapt", adapted.to_json());
+  return j;
+}
+
+Json DiscoveryReport::to_json() const {
+  Json j = Json::make_object();
+  j.set("exe", Json::make_string(exe));
+  j.set("pe", Json::make_bool(pe));
+  j.set("arch", Json::make_string(arch));
+  Json a = Json::make_array(); for (const auto& s : anchors) a.push(Json::make_string(s));
+  j.set("anchors", a);
+  Json f = Json::make_array(); for (const auto& s : anchors_found) f.push(Json::make_string(s));
+  j.set("anchorsFound", f);
+  Json c = Json::make_array(); for (const auto& x : candidates) c.push(x.to_json());
+  j.set("candidates", c);
+  j.set("note", Json::make_string(note));
   return j;
 }
 

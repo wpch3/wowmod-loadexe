@@ -125,6 +125,11 @@ async function api(req, res, url) {
     const scan = await cli(['scan', '--config', PREVIEW_CONFIG, '--json']).catch(e => ({ error: e.message }));
     return send(res, 200, { ok: true, plan, scan, patterns: doc.patterns });
   }
+  if (req.method === 'GET' && route === '/api/discover') {
+    // 只读取工作区里的合成客户端，不需要用户上传任何文件
+    const r = await cli(['discover', '--exe', path.join(CLIENT_DIR, 'Wow.exe'), '--json']);
+    return send(res, 200, r);
+  }
   if (req.method === 'GET' && route === '/api/launch') {
     // 在 Windows 上真正启动；其它平台返回 CLI 的提示。
     const r = await cli(['launch', '--config', DEMO_CONFIG, '--json']).catch(e => ({ error: e.message }));

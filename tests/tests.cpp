@@ -532,6 +532,32 @@ static void test_discover() {
   CHECK(ci.to_json().at("supported").as_bool(), "覆盖版本后依然 supported");
   Json dumped = Json::parse(cfg.to_json().dump(2), &err);
   CHECK(err.empty() && dumped.at("hooks").at("patterns").as_array().size() == 2, "多特征文件 JSON 往返");
+
+  // 本地自动发现：字符串 + 指向它的 RIP 相对 LEA
+  auto dex = make_pe_code();
+  std::memcpy(dex.data() + 0x400, kSig, sizeof(kSig));
+  const char anchor[] = "DBFilesClient\\";
+  std::memcpy(dex.data() + 0x480, anchor, sizeof(anchor) - 1);
+  // file 0x450 -> RVA 0x2050；字符串 RVA 0x2080
+  int32_t disp = static_cast<int32_t>(0x2080u - (0x2050u + 7));
+  dex[0x450] = 0x48; dex[0x451] = 0x8D; dex[0x452] = 0x0D;
+  for (int k = 0; k < 4; ++k) dex[0x453 + k] = static_cast<uint8_t>((static_cast<uint32_t>(disp) >> (8 * k)) & 0xFF);
+  DiscoveryReport rep = discover_hook_points(dex, {"DBFilesClient\\", "不存在的锚点"});
+  CHECK(rep.pe, "discover 应识别 PE");
+  CHECK_EQ(rep.arch, "x64");
+  CHECK_EQ(rep.anchors_found.size(), size_t(1));
+  CHECK(!rep.candidates.empty(), "应找到至少一个候选 hook 点");
+  if (!rep.candidates.empty()) {
+    CHECK_EQ(rep.candidates[0].code_rva, 0x2050u);
+    CHECK_EQ(rep.candidates[0].unique_matches, size_t(1));
+    CHECK(rep.candidates[0].pattern.find("48 8D 0D ??") != std::string::npos, "应把 disp32 通配");
+    CHECK(rep.candidates[0].executable, "候选应在可执行节区");
+  }
+  std::string derr;
+  CHECK(write_pattern_descriptor(tmp("adapt/hooks/discovered.json"), "auto-candidate",
+                                 rep.candidates.empty() ? "48 8D 0D ?? ?? ?? ??" : rep.candidates[0].pattern,
+                                 "x64", "rdx", "候选", &derr), "写出候选: " + derr);
+  CHECK_EQ(load_hook_patterns(tmp("adapt/hooks/discovered.json"), nullptr).size(), size_t(1));
 }
 
 int main() {

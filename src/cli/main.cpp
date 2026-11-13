@@ -77,6 +77,7 @@ std::string help_text() {
       "  plan       干跑：输出完整的覆盖表与 hook 选择（不启动游戏）\n"
       "  scan       扫描客户端 exe，报告 hook 特征匹配情况（用于适配新版本）\n"
       "  adapt      把邻近版本的特征自动放宽成你的 exe 上唯一匹配的特征\n"
+      "  discover   只用自己的 exe 自动找出候选 hook 点（无需上传任何文件）\n"
       "  launch     启动客户端并注入覆盖层（Windows；其他平台给出提示）\n"
       "  version    显示加载器版本\n\n"
       "选项:\n"
@@ -86,6 +87,8 @@ std::string help_text() {
       "  --patterns FILE  覆盖 hook 特征文件\n"
       "  --pattern TEXT   adapt 用的原始特征（IDA 风格字节串）\n"
       "  --from FILE      adapt 从某个 patterns.json 的第一条取起点特征\n"
+      "  --anchors A,B,C  discover 用的自定义锚点字符串（逗号分隔）\n"
+      "  --emit FILE      discover 把最佳候选写成 patterns.json\n"
       "  --out FILE       adapt 输出的特征文件（默认 hooks/patterns.adapted.json）\n"
       "  --name NAME      adapt 生成的条目名\n"
       "  --id-register R  adapt 生成的 idRegister（默认 rdx）\n"
@@ -334,6 +337,66 @@ int cmd_adapt(const Args& a, Session& s) {
   return 0;
 }
 
+int cmd_discover(const Args& a, Session& s) {
+  std::string exe = a.has("exe") ? absolute_path(a.opt("exe")) : s.cfg.client.exe;
+  if (exe.empty() || !file_exists(exe)) {
+    std::cerr << "请用 --exe 指定客户端 exe（这条命令只读取你本机的文件，不会上传任何东西）\n";
+    return 1;
+  }
+  std::vector<uint8_t> bytes;
+  std::string rerr;
+  if (!read_binary_file(exe, &bytes, &rerr)) { std::cerr << rerr << "\n"; return 1; }
+
+  std::vector<std::string> anchors;
+  if (a.has("anchors")) {
+    for (const auto& x : split(a.opt("anchors"), ',')) {
+      std::string t = trim(x);
+      if (!t.empty()) anchors.push_back(t);
+    }
+  }
+  if (anchors.empty()) anchors = default_anchors();
+  DiscoveryReport rep = discover_hook_points(bytes, anchors);
+  rep.exe = exe;
+
+  std::string emitted;
+  if (a.has("emit") && !rep.candidates.empty()) {
+    std::string out = absolute_path(a.opt("emit"));
+    std::string name = a.opt("name");
+    if (name.empty()) name = "discovered-" + file_stem(exe);
+    const auto& best = rep.candidates.front();
+    std::string werr;
+    if (write_pattern_descriptor(out, name, best.pattern, rep.arch, a.opt("id-register", "rdx"),
+                                 "由 wowmod discover 自动发现的候选点；必须用调试器核实函数返回值是路径指针", &werr))
+      emitted = out;
+    else
+      s.diag.error("discover", werr);
+  }
+
+  if (a.json) {
+    Json j = rep.to_json();
+    j.set("emitted", Json::make_string(emitted));
+    std::cout << j.dump(2) << "\n";
+    return 0;
+  }
+  std::cout << "本地自动发现: " << exe << " (" << (rep.pe ? rep.arch : "非 PE") << ")\n";
+  std::cout << "锚点命中: " << (rep.anchors_found.empty() ? "无" : join(rep.anchors_found, ", ")) << "\n";
+  std::cout << "候选 hook 点: " << rep.candidates.size() << " 个\n\n";
+  for (size_t i = 0; i < rep.candidates.size(); ++i) {
+    const auto& c = rep.candidates[i];
+    std::cout << "  [" << (i + 1) << "] " << (c.unique_matches == 1 ? "唯一匹配 ✓" : std::to_string(c.unique_matches) + "+ 处")
+              << " @ rva 0x" << to_hex(c.code_rva, 8) << "  锚点=" << c.anchor << "\n"
+              << "      " << c.pattern << "\n"
+              << "      固定字节 " << c.fixed_bytes << " — " << c.reason << "\n";
+  }
+  if (rep.candidates.empty()) std::cout << "  " << rep.note << "\n";
+  else std::cout << "\n⚠ " << rep.note << "\n";
+  if (!emitted.empty()) std::cout << "\n已写出: " << emitted << "\n下一步: wowmod scan --patterns \"" << emitted
+                                  << "\" && wowmod plan --config \"" << s.config_path << "\"\n";
+  else if (!rep.candidates.empty())
+    std::cout << "\n想直接用最佳候选: 加 --emit hooks/patterns.discovered.json\n";
+  return 0;
+}
+
 int cmd_launch(const Args& a, Session& s) {
   if (a.has("dry-run")) return cmd_plan(a, s);
   LaunchResult r = launch_game(s.cfg, s.ci, s.vfs, s.hooks, s.diag, false);
@@ -468,6 +531,7 @@ int main(int argc, char** argv) {
   if (a.command == "plan") return cmd_plan(a, s);
   if (a.command == "scan") return cmd_scan(a, s);
   if (a.command == "adapt") return cmd_adapt(a, s);
+  if (a.command == "discover") return cmd_discover(a, s);
   if (a.command == "launch") return cmd_launch(a, s);
   std::cerr << "未知命令: " << a.command << "\n\n" << help_text();
   return 2;

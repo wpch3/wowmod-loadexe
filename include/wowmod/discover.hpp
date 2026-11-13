@@ -49,4 +49,39 @@ AdaptFileResult adapt_pattern_file(const std::string& exe_path, const std::strin
                                    const std::string& out_path, const std::string& name,
                                    const std::string& id_register, std::string* err = nullptr);
 
+// ---- 本地自动发现：不需要上传任何文件，直接在用户自己的 exe 上找候选 hook 点 ----
+struct HookCandidate {
+  std::string anchor;         // 命中的锚点字符串
+  uint32_t string_rva = 0;
+  uint32_t code_rva = 0;
+  size_t file_offset = 0;
+  std::string pattern;        // 建议的 IDA 风格特征
+  size_t fixed_bytes = 0;
+  size_t unique_matches = 0;  // 1 = 唯一匹配，可直接使用；>1 / 0 = 需人工收窄
+  bool executable = false;
+  std::string reason;
+  Json to_json() const;
+};
+
+struct DiscoveryReport {
+  std::string exe;
+  bool pe = false;
+  std::string arch;
+  std::vector<std::string> anchors;
+  std::vector<std::string> anchors_found;
+  std::vector<HookCandidate> candidates;
+  std::string note;
+  Json to_json() const;
+};
+
+// 把一条特征写进 patterns.json（合并已有条目，同名覆盖）
+bool write_pattern_descriptor(const std::string& out_path, const std::string& name,
+                              const std::string& pattern, const std::string& arch,
+                              const std::string& id_register, const std::string& note,
+                              std::string* err = nullptr);
+
+std::vector<std::string> default_anchors();
+DiscoveryReport discover_hook_points(const std::vector<uint8_t>& exe_bytes,
+                                     const std::vector<std::string>& anchors);
+
 }  // namespace wowmod

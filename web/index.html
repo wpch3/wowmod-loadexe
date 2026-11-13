@@ -125,6 +125,13 @@
         <div class="row gap"><input id="pName" placeholder="名称 my-server-3.3.5"><input id="pPattern" placeholder="48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ..."><input id="pArch" value="x64" style="max-width:90px"><input id="pReg" value="rdx" style="max-width:90px"></div>
         <div class="row gap" style="margin-top:10px"><button class="btn" id="addPatternBtn">+ 添加并重新探测</button><span class="hint">用 <code>wowmod scan --exe Wow.exe --patterns hooks/patterns.json</code> 检查是否唯一匹配</span></div>
       </div>
+      <div class="card">
+        <h3>本地自动发现（不需要上传任何东西）</h3>
+        <p>没有参考特征时，让加载器直接在自己的 exe 上找候选 hook 点：扫描指向 <code>DBFilesClient\</code> 等字符串的 RIP 相对 LEA，生成候选特征并标出是否唯一匹配。</p>
+        <div class="row gap"><button class="btn" id="discoverBtn">运行 wowmod discover</button><span class="hint">命令只在本地执行：<code>wowmod discover --exe Wow.exe --json</code></span></div>
+        <pre id="discoverOut" class="log">等待运行…</pre>
+        <div class="hint">⚠ 候选 ≠ 目标函数：唯一匹配只说明字节唯一，仍需用调试器核实返回值是路径指针。</div>
+      </div>
       <div class="card flow">
         <h3>WoW 12.0.7 专用流程</h3>
         <p>仓库里的 <code>examples/12.0.7/</code> 是给 12.0.7 准备的起始包（配置、listfile 位置、多特征文件）。</p>

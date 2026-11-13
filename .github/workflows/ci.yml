@@ -33,6 +33,7 @@ jobs:
             --pattern "48 89 5C 24 08 57 48 83 EC 28 48 8B ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 74 ??" \
             --out /tmp/wmd1207_ci/hooks/patterns.adapted.json --name ci-12.0.7
           ./build/wowmod plan --config /tmp/wmd1207_ci/wowmod.json | grep -q 'hook 模式: fileid'
+          ./build/wowmod discover --exe /tmp/wmd1207_ci/Wow.exe --json | grep -q '"candidates"'
       - name: Cross-compile Windows sources with zig
         run: |
           python3 -m pip install --quiet ziglang

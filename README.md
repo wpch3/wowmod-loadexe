@@ -71,17 +71,25 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 [`examples/12.0.7/`](examples/12.0.7/README.md) 是这个版本的可直接运行起始包。
 `detect` 会显示 `12.0.7 / x64 / casc` 和「已支持（无版本白名单）」，`plan` 里的路径型覆盖立刻生效 —— **不需要改任何代码**。
 
-CASC 客户端「按 FileDataID 读模型」需要一条在**你的 exe** 上唯一匹配的特征；
-用 `wowmod adapt` 从邻近 12.x 的特征自动放宽生成即可：
+CASC 客户端「按 FileDataID 读模型」需要一条在**你的 exe** 上唯一匹配的特征。
+**这一步不需要把任何文件上传给我** —— 两条命令都在你自己机器上跑：
 
 ```bash
+# A. 完全没有参考特征：让加载器从你 exe 的字符串引用里找候选 hook 点
+wowmod discover --exe "D:/Games/WoW/Wow.exe" --emit hooks/patterns.discovered.json
+
+# B. 有邻近 12.x 的特征：自动放宽成你这个 exe 上唯一匹配的版本
 wowmod adapt --exe "D:/Games/WoW/Wow.exe" --pattern "48 89 5C 24 08 ..." \
              --out hooks/patterns.adapted.json --name "wow-12.0.7"
+
 wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.adapted.json
 wowmod plan --config wowmod.json     # hook 模式: fileid
 ```
 
 详见 [docs/ADAPTING.md](docs/ADAPTING.md)。即使不提供特征，加载器也会以通用 VFS 模式正常启动。
+
+> 想让我帮你把特征验证好也行：发 `Wow.exe`（或 `.text` 片段）给我即可。
+> 但**不需要上传任何模组软件** —— 模组包只是数据，参考软件的机制已经在代码里实现了。
 
 ## 快速开始
 
@@ -230,6 +238,7 @@ node web/server.js        # http://localhost:3000
 | `wowmod plan [--json] [--materialize DIR]` | 干跑：覆盖表 + hook 选择 |
 | `wowmod scan --exe FILE [--patterns] [--json]` | 在真实 exe 上报告特征匹配 |
 | `wowmod adapt --exe FILE --pattern TEXT [--out]` | 把邻近 build 的特征自动放宽成该 exe 上唯一匹配的特征 |
+| `wowmod discover --exe FILE [--anchors] [--emit]` | 只用自己的 exe 找候选 hook 点（字符串引用 + RIP 相对 LEA），无需上传 |
 | `wowmod launch [--dry-run]` | Windows 启动并注入 |
 | `wowmod version` | 版本 |
 

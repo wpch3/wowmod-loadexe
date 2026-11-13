@@ -53,6 +53,27 @@ hook 模式: fileid — 通过实际二进制能力探测选中 hook 点: my-ser
 
 `vfs` 不是错误，客户端照常启动。想让按 ID 读取的文件也生效，加一条特征。
 
+## 0. 先试试「零上传」的本地自动发现
+
+如果你手上一个参考特征都没有，也不想上传 exe 给任何人：
+
+```bash
+wowmod discover --exe "D:/Games/WoW/Wow.exe" --anchors "DBFilesClient\\,Interface\\AddOns\\" \
+                --emit hooks/patterns.discovered.json
+wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.discovered.json
+```
+
+它在**你自己的机器**上完成：加载 PE → 在可执行节区找指向锚点字符串的 RIP 相对
+`LEA reg,[rip+disp32]` → 把 rel32/disp32 与跳转立即数通配成 `??` → 用
+`count_matches` 标出哪些候选是唯一匹配 → 输出可直接粘进 `patterns.json` 的特征。
+`--anchors` 可换成你自己的字符串（例如某个模型路径），默认锚点见
+`default_anchors()`（`DBFilesClient\`、`Interface\AddOns\`、`World\Model\`、
+`realmlist.wtf`、`FileDataID`、`CascOpen` 等）。
+
+**它是启发式候选，不是保证**：唯一匹配只说明字节序列唯一，不说明该函数就是
+「按 FileDataID 打开、返回路径指针」。候选数量多时用 `wowmod scan` 收窄，
+首次进游戏前用调试器核实。真正确定了函数入口后，再用下面的第 1~3 步写出正式特征。
+
 ## 1. 找 hook 点
 
 目标是客户端里"**按 FileDataID 打开文件**"的函数入口：它的返回值是一个指向 null 结尾 ANSI 路径的指针

@@ -236,6 +236,27 @@ $('addPatternBtn').addEventListener('click', async () => {
   } catch (e) { toast(e.message, true); }
 });
 
+$('discoverBtn').addEventListener('click', async () => {
+  const out = $('discoverOut');
+  out.textContent = '正在扫描本地 exe …';
+  try {
+    const r = await api('/api/discover');
+    const lines = [
+      'exe: ' + (r.exe || '—') + '  ' + (r.arch || ''),
+      '锚点命中: ' + ((r.anchorsFound || []).join(', ') || '无'),
+      '候选: ' + (r.candidates || []).length + ' 个'
+    ];
+    (r.candidates || []).forEach((c, i) => {
+      lines.push(`[${i + 1}] ${c.uniqueMatches === 1 ? '唯一匹配 ✓' : c.uniqueMatches + '+ 处'} @ rva 0x${(c.codeRva || 0).toString(16)}  ${c.anchor || ''}`);
+      lines.push('    ' + c.pattern);
+      lines.push('    ' + c.reason);
+    });
+    lines.push('', '⚠ ' + (r.note || ''));
+    out.textContent = lines.join('\n');
+    toast('本地自动发现完成');
+  } catch (e) { out.textContent = '错误: ' + e.message; toast(e.message, true); }
+});
+
 function log(msg) { $('launchLog').textContent = msg; }
 $('launchBtn').addEventListener('click', async () => {
   log('正在调用 wowmod launch …');

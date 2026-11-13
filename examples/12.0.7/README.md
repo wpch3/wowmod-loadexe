@@ -76,15 +76,34 @@ wowmod launch --config wowmod.json    # Windows
 
 找不到特征也**不影响启动**：保持 `allowFallback: true`，加载器自动用通用 VFS 层。
 
-## 5. 我需要你提供什么才能把第 4 步做完
+## 5. 需要上传东西吗？不需要
 
-任选其一：
+**不用上传任何模组软件**（模型包、Arctium App 之类都是数据/UI，机制已在加载器里实现）。
+第 4 步缺的只有「你的 12.0.7 exe 自身的字节」，而这也**不必上传给我** —— 两条命令全在你本机跑：
 
-1. 你的 `Wow.exe`（或只发 `.text` 段的前若干 KB / 一个字节特征），我来生成并验证 12.0.7 的特征；
-2. 你手上已有的、同家族（12.1.x）的 `CustomFileIdHook` / `LoadByFileId` 特征；
-3. 用 x64dbg 在「按 FileDataID 打开」函数入口断下，把前 24 字节和 ID 所在寄存器告诉我。
+```bash
+# 没有任何参考特征时：自动从字符串引用找候选 hook 点
+wowmod discover --exe "D:/Games/WoW/Wow.exe" --emit hooks/patterns.discovered.json
 
-只有第 3 项涉及人工定位；其余都只是数据转换，不需要改加载器代码。
+# 有邻近 12.x 特征时：自动放宽成唯一匹配
+wowmod adapt --exe "D:/Games/WoW/Wow.exe" --pattern "..." --out hooks/patterns.adapted.json
+
+wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.discovered.json
+wowmod plan --config wowmod.json
+```
+
+`discover` 会在可执行节区里扫描指向 `DBFilesClient\`、`Interface\AddOns\` 等字符串的
+RIP 相对 LEA，生成候选特征并标出是否唯一匹配。也可以用 `--anchors "你的字符串"` 换成
+你自己模组里的路径。
+
+如果愿意让我代劳验证，发我任选其一即可：
+
+1. `Wow.exe`（或 `.text` 段片段）→ 我直接生成并验证特征；
+2. 同家族（12.1.x）的 `CustomFileIdHook` / `LoadByFileId` 特征；
+3. x64dbg 断下的前 24 字节 + ID 所在寄存器。
+
+⚠ `discover` 给的是**候选**：唯一匹配不等于函数语义正确，首次进游戏前请用调试器或
+`wowmod.log` 确认该点确实是「按 FileDataID 打开」的入口。
 
 ---
 
