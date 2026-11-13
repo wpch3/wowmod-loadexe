@@ -68,10 +68,11 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 ## Windows 上怎么运行（PowerShell 必读）
 
-从 GitHub 下载的**分支 ZIP 只有源码，没有 `wowmod.exe`**；PowerShell 也不会搜索当前目录。
-截图里的 `无法将"wowmod"项识别为 cmdlet` 就是这两个原因。正确写法是 `.\wowmod.exe …`，
-二进制从 [Releases](https://github.com/wpch3/wowmod-loadexe/releases) 下载
-`wowmod-windows-x64.zip`，解压到仓库根目录（`wowmod.exe` 与 `wowmod_hook.dll` 必须同目录）。
+截图里的 `无法将"wowmod"项识别为 cmdlet` 有两个原因：你下载的那份 ZIP **还是旧的、没有
+编译好的 `wowmod.exe`**；且 PowerShell 默认不搜索当前目录，必须写 `.\wowmod.exe`。
+**现在分支里已带上预编译的 x64 `wowmod.exe` + `wowmod_hook.dll`** —— 重新下载当前分支
+ZIP（或单独下这两个文件放到根目录，两者必须同目录）就能直接跑。
+[Release 说明页](https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-afbfb94) 有校验和。
 
 ```powershell
 .\wowmod.exe version

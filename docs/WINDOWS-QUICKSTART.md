@@ -16,11 +16,19 @@ PS ...> wowmod launch --config examples/12.0.7/wowmod.firestorm.json
 
 所以 `.\wowmod.exe` 现在也会报"无法识别"——文件不存在。按下面任选一条补齐。
 
-## 方式 A：下载预编译包（推荐，不用装编译器）
+## 方式 A：重新下载分支 ZIP（推荐，不用装编译器）
 
-1. 打开本仓库 **Releases** 页，下载 `wowmod-windows-x64.zip`（约 0.9 MB，x64）。
-   地址：<https://github.com/wpch3/wowmod-loadexe/releases>
-2. 解压到你的源码目录根（就是有 `README.md`、`examples\` 那一层），得到：
+**现在分支里已经带上了预编译的 x64 二进制**（`wowmod.exe` + `wowmod_hook.dll`，
+约 1 MB 各一个）。你截图里那份 ZIP 是旧版本，没有这两个文件。
+
+1. 重新下载当前分支 ZIP 并解压，或直接单独下载这两个文件：
+
+   - 分支 ZIP：<https://github.com/wpch3/wowmod-loadexe/archive/refs/heads/arena/5a3768a5-wowmod-loadexe.zip>
+   - 单个 exe：<https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod.exe>
+   - 单个 DLL：<https://github.com/wpch3/wowmod-loadexe/raw/arena/5a3768a5-wowmod-loadexe/wowmod_hook.dll>
+   - Release 说明页：<https://github.com/wpch3/wowmod-loadexe/releases/tag/windows-x64-afbfb94>
+
+   放到源码根目录（就是有 `README.md`、`examples\` 那一层）：
 
    ```
    wowmod.exe            ← 必须与下面这个 DLL 放同一目录
@@ -28,16 +36,14 @@ PS ...> wowmod launch --config examples/12.0.7/wowmod.firestorm.json
    examples\12.0.7\wowmod.firestorm.json
    ```
 
-3. PowerShell 里先解除下载锁定（ZIP 从网上下载时常见）：
+2. PowerShell 里先解除下载锁定（从网上下载的文件常见）：
 
    ```powershell
-   Unblock-File .\wowmod-windows-x64.zip      # 解压前
-   Expand-Archive .\wowmod-windows-x64.zip -DestinationPath . -Force
    Unblock-File .\wowmod.exe
    Unblock-File .\wowmod_hook.dll
    ```
 
-4. 逐条验证（**注意 `.\`**）：
+3. 逐条验证（**注意 `.\`**）：
 
    ```powershell
    .\wowmod.exe version
@@ -80,7 +86,7 @@ Copy-Item build\Release\wowmod.exe, build\Release\wowmod_hook.dll .
 | 现象 | 原因 / 处理 |
 | --- | --- |
 | `无法将"wowmod"项识别为…` | 少了 `.\`，写 `.\wowmod.exe` |
-| `无法将".\wowmod.exe"项识别为…` | 文件不在当前目录；`Get-ChildItem` 看一下，或重新解压预编译包 |
+| `无法将".\wowmod.exe"项识别为…` | 文件不在当前目录；`Get-ChildItem` 看一下，或重新下载分支 ZIP / 单独下载两个二进制 |
 | `找不到 wowmod_hook.dll（应与 wowmod.exe 放在同一目录）` | 两个文件必须放一起；`find_hook_dll()` 只查 exe 同目录和当前目录 |
 | `找不到客户端 exe` / `无法打开` | 配置里的 `D:\...` 路径与你机器不符，改 `client.exe` / `client.gameDir` |
 | `LoadLibraryW 返回 NULL` | 位数不匹配（x64 客户端必须用 x64 DLL），或缺少系统运行库 |

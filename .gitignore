@@ -1,5 +1,9 @@
-# 构建产物 / 预编译包（二进制走 GitHub Releases，不入库）
+# 构建产物（dist/ 里是本地交叉编译产物，不入库）
 dist/
+
+# 例外：根目录的 wowmod.exe / wowmod_hook.dll 是【有意入库】的 Windows x64 预编译包，
+# 让用户下载分支 ZIP 后可直接运行（GitHub release asset 上传在本环境受限）。
+# 重新生成: ./scripts/build-windows-release.sh && cp dist/windows-x64/{wowmod.exe,wowmod_hook.dll} .
 build/
 out/
 CMakeFiles/

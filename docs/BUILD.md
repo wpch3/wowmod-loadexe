@@ -1,8 +1,9 @@
 # 构建
 
-> **只想运行、不想编译？** 直接从 [Releases](https://github.com/wpch3/wowmod-loadexe/releases)
-> 下载 `wowmod-windows-x64.zip`；PowerShell 里必须用 `.\wowmod.exe`。
+> **只想运行、不想编译？** 当前分支已带预编译的 x64 `wowmod.exe` + `wowmod_hook.dll`，
+> 重新下载分支 ZIP 即可；PowerShell 里必须用 `.\wowmod.exe`。
 > 见 [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md)。
+> 本地重新生成：`./scripts/build-windows-release.sh`（产物在 `dist/`，用 zig 交叉编译）。
 
 ## 依赖
 
