@@ -63,6 +63,10 @@ wowmod scan     --exe runtime-dumps/main.exe.img --mapped --patterns hooks/patte
 
 ## 还需要的（不是文件，是一次真机运行）
 
+> 运行命令前先看 **[../../docs/WINDOWS-QUICKSTART.md](../../docs/WINDOWS-QUICKSTART.md)**：
+> 分支 ZIP 里没有编译好的 exe，PowerShell 必须写 `.\wowmod.exe`。
+> 手工 x64dbg 解密步骤见 **[../../docs/X64DBG.md](../../docs/X64DBG.md)**。
+
 1. **在 Windows 上启动一次游戏**（`wowmod launch --config wowmod.firestorm.json`），
    然后把 `runtime-dumps/` 目录（含 `.img` 与 `*.candidates.json`）传给我。
    我会据此确认候选是不是「按 FileDataID 打开」的入口，并定稿 `patterns.json`。

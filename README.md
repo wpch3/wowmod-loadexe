@@ -66,6 +66,22 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 ---
 
+## Windows 上怎么运行（PowerShell 必读）
+
+从 GitHub 下载的**分支 ZIP 只有源码，没有 `wowmod.exe`**；PowerShell 也不会搜索当前目录。
+截图里的 `无法将"wowmod"项识别为 cmdlet` 就是这两个原因。正确写法是 `.\wowmod.exe …`，
+二进制从 [Releases](https://github.com/wpch3/wowmod-loadexe/releases) 下载
+`wowmod-windows-x64.zip`，解压到仓库根目录（`wowmod.exe` 与 `wowmod_hook.dll` 必须同目录）。
+
+```powershell
+.\wowmod.exe version
+.\wowmod.exe detect   --config "examples\12.0.7\wowmod.firestorm.json"
+.\wowmod.exe launch   --config "examples\12.0.7\wowmod.firestorm.json"
+```
+
+完整步骤与排错见 **[docs/WINDOWS-QUICKSTART.md](docs/WINDOWS-QUICKSTART.md)**，
+x64dbg 手工解密/定位见 **[docs/X64DBG.md](docs/X64DBG.md)**。
+
 ## ⚠ 真实客户端是加密壳：静态特征扫描无效
 
 上传的 `wow_loader.dll`（39,514,832 字节）查清了一个决定性事实：

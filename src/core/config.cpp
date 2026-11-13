@@ -130,7 +130,7 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
   c.hooks.allow_fallback = h.at("allowFallback").as_bool(true);
   c.hooks.runtime_scan = h.at("runtimeScan").as_bool(true);
   c.hooks.runtime_delay_ms = static_cast<int>(h.at("runtimeDelayMs").as_int(4000));
-  c.hooks.runtime_dump = h.at("runtimeDump").as_string();
+  c.hooks.runtime_dump = resolve(c.base_dir, h.at("runtimeDump").as_string());  // 与 log/mappings 一样相对配置文件
   c.hooks.runtime_auto_install = h.at("runtimeAutoInstall").as_bool(false);
   for (const auto& s : h.at("runtimeModules").as_string_array()) {
     if (!s.empty()) c.hooks.runtime_modules.push_back(s);

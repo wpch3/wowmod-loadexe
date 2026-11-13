@@ -33,7 +33,6 @@ std::wstring quote_cmdline(const std::string& exe) {
 std::string find_hook_dll() {
   std::vector<std::string> candidates = {
       join_path(exe_dir_path(), "wowmod_hook.dll"),
-      join_path(exe_dir_path(), "wowmod_hook.dll"),
       join_path(absolute_path("."), "wowmod_hook.dll"),
   };
   for (const auto& p : candidates) if (file_exists(p)) return p;

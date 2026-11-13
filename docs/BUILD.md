@@ -1,5 +1,9 @@
 # 构建
 
+> **只想运行、不想编译？** 直接从 [Releases](https://github.com/wpch3/wowmod-loadexe/releases)
+> 下载 `wowmod-windows-x64.zip`；PowerShell 里必须用 `.\wowmod.exe`。
+> 见 [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md)。
+
 ## 依赖
 
 - CMake ≥ 3.16、C++17 编译器

@@ -86,6 +86,7 @@ wowmod scan --exe runtime-dumps/main.exe.img --mapped \
 `runtimeAutoInstall` 默认 `false`：候选仍需调试器确认 ID 寄存器与返回值语义。
 
 **只有非加密客户端**才适用下面第 0 节的静态 `discover`；对本客户端请直接跳到内存扫描。
+手工用 x64dbg 断解密、dump 内存、确认 ID 寄存器的完整步骤见 [X64DBG.md](X64DBG.md)。
 
 ## 0. 先试试「零上传」的本地自动发现
 

@@ -1,4 +1,5 @@
-# 构建产物
+# 构建产物 / 预编译包（二进制走 GitHub Releases，不入库）
+dist/
 build/
 out/
 CMakeFiles/

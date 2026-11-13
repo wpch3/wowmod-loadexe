@@ -747,7 +747,9 @@ static void test_real_client() {
   Config rc2 = Config::from_json(rc.to_json(), tmp("real/cfg2.json"));
   CHECK(rc2.hooks.runtime_scan, "runtimeScan 往返");
   CHECK_EQ(rc2.hooks.runtime_delay_ms, 9000);
-  CHECK_EQ(rc2.hooks.runtime_dump, "dumps");
+  CHECK(rc2.hooks.runtime_dump.size() >= 5 &&
+        rc2.hooks.runtime_dump.substr(rc2.hooks.runtime_dump.size() - 5) == "dumps",
+        "runtimeDump 应相对配置文件解析为绝对路径");
   CHECK(!rc2.hooks.runtime_auto_install, "默认不自动安装未验证 hook");
   CHECK_EQ(rc2.hooks.runtime_modules.size(), size_t(1));
 }
