@@ -200,7 +200,15 @@ HookPlan plan_hooks(const Config& cfg, const ClientInfo& ci, const std::vector<u
   if (mode == "off") { plan.mode = "off"; plan.reason = "配置里 hooks.mode=off"; return plan; }
   if (mode == "vfs") { plan.reason = "配置里 hooks.mode=vfs（仅使用通用 VFS 覆盖）"; return plan; }
 
-  std::vector<HookDescriptor> ds = cfg.hooks.patterns.empty() ? std::vector<HookDescriptor>{} : load_hook_patterns(cfg.hooks.patterns, diag);
+  std::vector<HookDescriptor> ds;
+  std::vector<std::string> files = cfg.hooks.pattern_files;
+  if (files.empty() && !cfg.hooks.patterns.empty()) files.push_back(cfg.hooks.patterns);  // 兼容旧单字段
+  for (const auto& pf : files) {
+    auto part = load_hook_patterns(pf, diag);
+    ds.insert(ds.end(), part.begin(), part.end());
+  }
+  if (files.empty() && diag)
+    diag->info("hooks", "没有配置任何特征文件（纯 VFS 模式，任何版本可用）");
   if (ds.empty()) {
     plan.reason = "没有可用的 hook 特征，自动退化为纯 VFS 覆盖（不修改客户端代码，任何版本可用）";
     if (diag) diag->info("hooks", plan.reason);

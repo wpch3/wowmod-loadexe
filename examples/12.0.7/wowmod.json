@@ -1,0 +1,39 @@
+// WoW 12.0.7 (Midnight) / 私服客户端 —— 直接可用的起始配置
+// 把这个目录整个复制到你的游戏根目录（Wow.exe 所在目录），或改下面的相对路径。
+// 注意：这里没有任何地方写着"只支持 12.0.7"，换任何版本都照样能用。
+{
+  "version": 1,
+  "client": {
+    "exe": "",                     // 留空 = 自动发现 wow*.exe（不写死 _retail_ 等目录名）
+    "gameDir": ".",
+    "version": "",                 // 可选：你的 exe 版本资源被改过时填 "12.0.7"，仅用于展示
+    "build": 0,                    // 可选：填你的 build 号（如 70500），供 when 过滤用；不是支持性判断
+    "portal": "127.0.0.1",         // 改成你的私服地址：内存覆盖 WTF/Config.wtf，不改磁盘
+    "realmlist": "",
+    "args": ["-console"],
+    "clearCache": false
+  },
+  "mods": [
+    {
+      "name": "12.0.7 模型替换",
+      "path": "mods/models",
+      "root": "",
+      "enabled": true,
+      "priority": 10,
+      "when": {}
+    }
+  ],
+  // 放你自己的 12.0.7 listfile（fileId;filePath）；可以放多个
+  "mappings": ["mappings/listfile.txt"],
+  "rules": [],
+  "hooks": {
+    "mode": "auto",
+    // 支持多个特征文件：adapt 生成的新特征直接加进来，不用改原文件
+    "patterns": [
+      "hooks/patterns.json",
+      "hooks/patterns.adapted.json"
+    ],
+    "allowFallback": true
+  },
+  "log": { "file": "wowmod.log", "verbose": true }
+}

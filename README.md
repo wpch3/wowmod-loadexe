@@ -66,6 +66,23 @@ hook 点来自 `hooks/patterns.json`，**在真实 exe 上扫描，只有唯一�
 
 ---
 
+## WoW 12.0.7 能用吗？能
+
+[`examples/12.0.7/`](examples/12.0.7/README.md) 是这个版本的可直接运行起始包。
+`detect` 会显示 `12.0.7 / x64 / casc` 和「已支持（无版本白名单）」，`plan` 里的路径型覆盖立刻生效 —— **不需要改任何代码**。
+
+CASC 客户端「按 FileDataID 读模型」需要一条在**你的 exe** 上唯一匹配的特征；
+用 `wowmod adapt` 从邻近 12.x 的特征自动放宽生成即可：
+
+```bash
+wowmod adapt --exe "D:/Games/WoW/Wow.exe" --pattern "48 89 5C 24 08 ..." \
+             --out hooks/patterns.adapted.json --name "wow-12.0.7"
+wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.adapted.json
+wowmod plan --config wowmod.json     # hook 模式: fileid
+```
+
+详见 [docs/ADAPTING.md](docs/ADAPTING.md)。即使不提供特征，加载器也会以通用 VFS 模式正常启动。
+
 ## 快速开始
 
 ### 1. 构建（Linux / macOS 也能构建核心 + CLI + 测试）
@@ -192,7 +209,7 @@ node web/server.js        # http://localhost:3000
   ],
   "hooks": {
     "mode": "auto",            // auto | vfs | fileid | off
-    "patterns": "hooks/patterns.json",
+    "patterns": ["hooks/patterns.json", "hooks/patterns.adapted.json"],  // 可写单个字符串或多个文件
     "allowFallback": true      // 找不到 hook 点仍以 VFS 启动
   },
   "log": { "file": "wowmod.log", "verbose": false }
@@ -212,6 +229,7 @@ node web/server.js        # http://localhost:3000
 | `wowmod validate [--json]` | 校验配置 / 模组 / 映射 |
 | `wowmod plan [--json] [--materialize DIR]` | 干跑：覆盖表 + hook 选择 |
 | `wowmod scan --exe FILE [--patterns] [--json]` | 在真实 exe 上报告特征匹配 |
+| `wowmod adapt --exe FILE --pattern TEXT [--out]` | 把邻近 build 的特征自动放宽成该 exe 上唯一匹配的特征 |
 | `wowmod launch [--dry-run]` | Windows 启动并注入 |
 | `wowmod version` | 版本 |
 
@@ -237,7 +255,8 @@ node web/server.js        # http://localhost:3000
 ## 文档
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构与数据流
-- [docs/ADAPTING.md](docs/ADAPTING.md) — 为任意私服 build 添加特征
+- [docs/ADAPTING.md](docs/ADAPTING.md) — 为任意私服 build 添加特征（含 12.0.7 步骤）
+- [examples/12.0.7/README.md](examples/12.0.7/README.md) — 12.0.7 起始包
 - [docs/MODS.md](docs/MODS.md) — 模组包 / 映射 / 优先级
 - [docs/BUILD.md](docs/BUILD.md) — Windows 构建、交叉编译验证、CI
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — 限制与风险

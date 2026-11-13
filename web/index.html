@@ -31,7 +31,8 @@
     </div>
     <div class="version-box">
       <label>模拟任意私服版本</label>
-      <div class="row"><input id="versionInput" value="3.3.5.12340" spellcheck="false"><button id="versionBtn" class="btn small">探测</button></div>
+      <div class="row"><input id="versionInput" value="12.0.7" spellcheck="false"><button id="versionBtn" class="btn small">探测</button></div>
+      <div class="row" style="margin-top:6px"><button class="btn small" id="preset1207">你的版本 12.0.7</button><button class="btn small" id="preset335">3.3.5.12340</button></div>
       <div class="hint">改一个版本号，看加载器是否仍然「已支持」</div>
     </div>
 
@@ -123,6 +124,14 @@
         <h3>为你的私服 build 添加一条特征</h3>
         <div class="row gap"><input id="pName" placeholder="名称 my-server-3.3.5"><input id="pPattern" placeholder="48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ..."><input id="pArch" value="x64" style="max-width:90px"><input id="pReg" value="rdx" style="max-width:90px"></div>
         <div class="row gap" style="margin-top:10px"><button class="btn" id="addPatternBtn">+ 添加并重新探测</button><span class="hint">用 <code>wowmod scan --exe Wow.exe --patterns hooks/patterns.json</code> 检查是否唯一匹配</span></div>
+      </div>
+      <div class="card flow">
+        <h3>WoW 12.0.7 专用流程</h3>
+        <p>仓库里的 <code>examples/12.0.7/</code> 是给 12.0.7 准备的起始包（配置、listfile 位置、多特征文件）。</p>
+        <ol><li><b>路径型覆盖立刻生效</b>：<code>detect</code> 显示「已支持」、<code>plan</code> 显示 VFS 覆盖表，无需任何特征。</li>
+        <li><b>让 CASC 按 ID 读取的模型也生效</b>：<code>wowmod adapt --exe Wow.exe --pattern "邻近 12.x 的特征" --out hooks/patterns.adapted.json</code>，工具会自动放宽成你这个 exe 上唯一匹配的特征。</li>
+        <li><b>验证</b>：<code>wowmod scan</code> 看唯一匹配，<code>wowmod plan</code> 的 hook 模式变成 <code>fileid</code>。</li></ol>
+        <p class="hint">跨大版本的起点特征需要放宽较多字节，工具会给出 ⚠ 提示；最可靠的起点是同家族（12.1.x）的特征。详见 docs/ADAPTING.md。</p>
       </div>
       <div class="card flow">
         <h3>适配新版本的三步</h3>

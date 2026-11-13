@@ -44,6 +44,8 @@ struct Rule {
 struct ClientSettings {
   std::string exe;
   std::string game_dir;
+  std::string version;   // 可选展示覆盖：私服 exe 读不到版本资源时用
+  int build = 0;         // 可选展示覆盖：给 when 过滤用，不参与支持性判断
   std::string portal;
   std::string realmlist;
   std::vector<std::string> args;
@@ -52,7 +54,8 @@ struct ClientSettings {
 
 struct HookSettings {
   std::string mode = "auto";     // auto | vfs | fileid | off
-  std::string patterns;          // hooks/patterns.json 绝对路径
+  std::string patterns;          // 兼容单文件写法（= pattern_files[0]）
+  std::vector<std::string> pattern_files;  // 支持多个特征文件，新增适配不必改原文件
   bool allow_fallback = true;    // 找不到 hook 点时允许仅 VFS 启动
 };
 

@@ -1,4 +1,40 @@
-# 为任意私服 build 适配
+# 为任意私服 build 适配（含 WoW 12.0.7 具体步骤）
+
+## 12.0.7（Midnight / CASC / x64）专用流程
+
+仓库里的 [`examples/12.0.7/`](../examples/12.0.7/README.md) 是给这个版本准备的起始包，
+直接复制到游戏根目录，改 `client.portal` 就能用：
+
+```bash
+wowmod detect   --config wowmod.json     # 输出「已支持（无版本白名单）」
+wowmod validate --config wowmod.json
+wowmod plan     --config wowmod.json     # 路径型覆盖立刻生效，mode=vfs
+```
+
+**版本探测**：`.build.info` 里的 `Version` 一般是 `12.0.7.xxxxx`（完整 build 号会自动读到）。
+如果只写了 `12.0.7`，或者你的 exe 版本资源被改过，可在配置里填
+`client.version: "12.0.7"` / `client.build: 70500` —— 这两个字段只用于展示和 `when` 过滤。
+
+**CASC 按 FileDataID 读模型**时，需要一条在自己的 exe 上唯一匹配的特征。用 `wowmod adapt`
+从邻近 12.x 的特征自动推导，而不是手工找偏移：
+
+```bash
+wowmod adapt --config wowmod.json \
+  --exe "D:/Games/WoW/Wow.exe" \
+  --pattern "48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ..." \
+  --out hooks/patterns.adapted.json --name "wow-12.0.7"
+
+wowmod scan --exe "D:/Games/WoW/Wow.exe" --patterns hooks/patterns.adapted.json
+wowmod plan --config wowmod.json          # hook 模式应变成 fileid
+wowmod launch --config wowmod.json
+```
+
+`adapt` 的算法：在可执行节区里做一次"最多差 N 个固定字节"的近似扫描，记录每个候选
+具体是哪几个字节不同；把差异集合改成 `??` 后若只有它自己能匹配，就得到**最紧**的特征
+（尽量少放宽）。差异太多（超过原固定字节三分之一）会明确给 ⚠，提示起点特征跨版本太远。
+
+没有合适的特征也完全可用：保持 `allowFallback: true`，加载器自动用通用 VFS 层，
+路径型覆盖（模型松散文件、AddOns、`Config.wtf`、MPQ 时代客户端）全部生效。
 
 > 大多数情况你**不需要读这份文档**：把文件按游戏内路径放进模组目录、给一份 listfile，
 > `wowmod plan` 就能工作（通用 VFS 层）。

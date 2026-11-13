@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "wowmod/config.hpp"
+#include "wowmod/discover.hpp"
 #include "wowmod/hooks.hpp"
 #include "wowmod/json.hpp"
 #include "wowmod/mapping.hpp"
@@ -75,6 +76,7 @@ std::string help_text() {
       "  validate   校验配置、模组包、映射文件\n"
       "  plan       干跑：输出完整的覆盖表与 hook 选择（不启动游戏）\n"
       "  scan       扫描客户端 exe，报告 hook 特征匹配情况（用于适配新版本）\n"
+      "  adapt      把邻近版本的特征自动放宽成你的 exe 上唯一匹配的特征\n"
       "  launch     启动客户端并注入覆盖层（Windows；其他平台给出提示）\n"
       "  version    显示加载器版本\n\n"
       "选项:\n"
@@ -82,6 +84,11 @@ std::string help_text() {
       "  --exe FILE       覆盖配置中的客户端 exe\n"
       "  --dir DIR        覆盖配置中的游戏目录\n"
       "  --patterns FILE  覆盖 hook 特征文件\n"
+      "  --pattern TEXT   adapt 用的原始特征（IDA 风格字节串）\n"
+      "  --from FILE      adapt 从某个 patterns.json 的第一条取起点特征\n"
+      "  --out FILE       adapt 输出的特征文件（默认 hooks/patterns.adapted.json）\n"
+      "  --name NAME      adapt 生成的条目名\n"
+      "  --id-register R  adapt 生成的 idRegister（默认 rdx）\n"
       "  --materialize DIR  plan 时把内存生成文件写到 DIR 便于检查\n"
       "  --json           机器可读输出\n"
       "  --force          init 时覆盖已有文件\n\n"
@@ -89,6 +96,7 @@ std::string help_text() {
       "  wowmod init --dir \"D:/Games/MyPrivateServer\"\n"
       "  wowmod detect --dir \"D:/Games/MyPrivateServer\"\n"
       "  wowmod plan --json > plan.json\n"
+      "  wowmod adapt --exe Wow.exe --pattern \"48 89 5C 24 08 57 ...\"\n"
       "  wowmod launch --config wowmod.json\n";
 }
 
@@ -124,8 +132,15 @@ bool prepare(const Args& a, Session* s) {
     s->diag.info("config", "未找到配置文件 " + s->config_path + "，使用默认空配置（可运行 wowmod init 生成）");
   }
   if (a.has("exe")) s->cfg.client.exe = absolute_path(a.opt("exe"));
-  if (a.has("dir")) s->cfg.client.game_dir = absolute_path(a.opt("dir"));
-  if (a.has("patterns")) s->cfg.hooks.patterns = absolute_path(a.opt("patterns"));
+  if (a.has("dir")) {
+    s->cfg.client.game_dir = absolute_path(a.opt("dir"));
+    // 命令行 --dir 明确指定了要探测的客户端目录，覆盖配置里的 exe
+    if (!a.has("exe")) s->cfg.client.exe.clear();
+  }
+  if (a.has("patterns")) {
+    s->cfg.hooks.pattern_files = {absolute_path(a.opt("patterns"))};
+    s->cfg.hooks.patterns = s->cfg.hooks.pattern_files.front();
+  }
 
   std::string target;
   if (!s->cfg.client.exe.empty()) target = s->cfg.client.exe;
@@ -133,6 +148,7 @@ bool prepare(const Args& a, Session* s) {
   else target = absolute_path(".");
   std::vector<uint8_t> exe_bytes;
   s->ci = detect_client(target, &s->diag, &exe_bytes);
+  apply_display_overrides(&s->ci, s->cfg.client.version, s->cfg.client.build);
   if (s->cfg.client.exe.empty() && !s->ci.exe_path.empty()) s->cfg.client.exe = s->ci.exe_path;
   if (s->cfg.client.game_dir.empty() && !s->ci.game_dir.empty()) s->cfg.client.game_dir = s->ci.game_dir;
 
@@ -229,8 +245,10 @@ int cmd_scan(const Args& a, Session& s) {
     return 1;
   }
   std::vector<HookDescriptor> ds;
-  std::string pf = a.has("patterns") ? absolute_path(a.opt("patterns")) : s.cfg.hooks.patterns;
-  if (!pf.empty()) ds = load_hook_patterns(pf, &s.diag);
+  for (const auto& pf : s.cfg.hooks.pattern_files) {
+    auto part = load_hook_patterns(pf, &s.diag);
+    ds.insert(ds.end(), part.begin(), part.end());
+  }
   Json report = scan_report(exe, ds, &s.diag);
   if (a.json) {
     std::cout << report.dump(2) << "\n";
@@ -250,6 +268,69 @@ int cmd_scan(const Args& a, Session& s) {
     std::cout << "\n";
   }
   std::cout << "\n提示: 特征来自外部 JSON，适配新客户端只需添加一条数据，无需改代码。\n";
+  return 0;
+}
+
+int cmd_adapt(const Args& a, Session& s) {
+  std::string exe = a.has("exe") ? absolute_path(a.opt("exe")) : s.cfg.client.exe;
+  if (exe.empty() || !file_exists(exe)) {
+    std::cerr << "请用 --exe 指定你的 12.0.7 客户端 exe（或在配置里设置 client.exe）\n";
+    return 1;
+  }
+  std::string pattern = trim(a.opt("pattern"));
+  std::string source_note;
+  if (pattern.empty() && a.has("from")) {
+    std::string from = absolute_path(a.opt("from"));
+    auto ds = load_hook_patterns(from, &s.diag);
+    if (!ds.empty()) { pattern = ds.front().pattern.source; source_note = "取自 " + from + " [" + ds.front().name + "]"; }
+  }
+  if (pattern.empty()) {
+    // 没给特征时，用配置里已登记的第一条作为起点
+    for (const auto& pf : s.cfg.hooks.pattern_files) {
+      auto ds = load_hook_patterns(pf, &s.diag);
+      if (!ds.empty()) { pattern = ds.front().pattern.source; source_note = "取自 " + pf + " [" + ds.front().name + "]"; break; }
+    }
+  }
+  if (pattern.empty()) {
+    std::cerr << "没有可用作起点的特征。请提供 --pattern \"48 89 5C 24 ...\" 或 --from FILE\n"
+              << "（可从邻近 12.x build 的公开 pattern 开始，工具会自动放宽成你这个 exe 上唯一匹配的版本）\n";
+    return 1;
+  }
+
+  std::string base = s.config_loaded ? parent_path(s.config_path) : absolute_path(".");
+  std::string out = a.has("out") ? absolute_path(a.opt("out")) : join_path(base, "hooks/patterns.adapted.json");
+  std::string name = a.opt("name");
+  if (name.empty()) name = "adapted-" + file_stem(exe);
+  std::string err;
+  AdaptFileResult r = adapt_pattern_file(exe, pattern, out, name, a.opt("id-register", "rdx"), &err);
+
+  if (a.json) {
+    Json j = r.to_json();
+    j.set("exe", Json::make_string(exe));
+    j.set("sourceNote", Json::make_string(source_note));
+    std::cout << j.dump(2) << "\n";
+    return r.ok ? 0 : 1;
+  }
+  std::cout << "客户端: " << exe << "  (" << s.ci.version_string << " / " << s.ci.arch << ")\n";
+  std::cout << "起点特征: " << (source_note.empty() ? "命令行 --pattern" : source_note) << "\n";
+  std::cout << "原始特征: " << pattern << "\n\n";
+  if (!r.ok) {
+    std::cout << "自适应失败: " << r.reason << "\n";
+    return 1;
+  }
+  const auto& ad = r.adapted;
+  std::cout << "结果: " << ad.pattern << "\n"
+            << "  固定字节 " << ad.fixed_bytes << " / 通配 " << ad.wildcard_bytes
+            << " | 唯一匹配 @ 0x" << to_hex(ad.file_offset, 8) << " (rva 0x" << to_hex(ad.rva, 8) << ")"
+            << " | 可执行节区: " << (ad.executable ? "是" : "否") << "\n"
+            << "  " << ad.reason << "\n\n"
+            << "已写入: " << r.out_path << "\n"
+            << "下一步:\n"
+            << "  1) 把 \"hooks.patterns\" 指向该文件（或把它加进 patterns 数组）\n"
+            << "  2) wowmod scan --exe \"" << exe << "\" --patterns \"" << r.out_path << "\"\n"
+            << "  3) wowmod plan --config \"" << s.config_path << "\"\n";
+  if (ad.warning) std::cout << "\n⚠ 原始特征在这个 exe 上 0 处匹配：唯一命中也可能不是目标函数，请用调试器确认返回值是路径指针。\n";
+  else std::cout << "\n提示：唯一匹配 ≠ 函数语义正确。首次进游戏请用 wowmod.log / 调试器确认命中点就是「按 FileDataID 打开」的入口。\n";
   return 0;
 }
 
@@ -386,6 +467,7 @@ int main(int argc, char** argv) {
   if (a.command == "validate") return cmd_validate(a, s);
   if (a.command == "plan") return cmd_plan(a, s);
   if (a.command == "scan") return cmd_scan(a, s);
+  if (a.command == "adapt") return cmd_adapt(a, s);
   if (a.command == "launch") return cmd_launch(a, s);
   std::cerr << "未知命令: " << a.command << "\n\n" << help_text();
   return 2;

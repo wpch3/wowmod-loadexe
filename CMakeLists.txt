@@ -16,6 +16,7 @@ set(WOWMOD_CORE_SOURCES
   src/core/config.cpp
   src/core/vfs.cpp
   src/core/hooks.cpp
+  src/core/discover.cpp
 )
 
 add_library(wowmod_core STATIC ${WOWMOD_CORE_SOURCES})

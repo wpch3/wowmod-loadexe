@@ -1,0 +1,6 @@
+{
+  // 这里放你确认过、能在自己的 12.0.7 exe 上唯一匹配的特征。
+  // 先用 wowmod adapt 生成 hooks/patterns.adapted.json，再用 wowmod scan 验证。
+  // 留空 = 纯 VFS 模式：客户端照常启动，路径型覆盖全部生效。
+  "patterns": []
+}

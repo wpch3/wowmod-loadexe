@@ -33,6 +33,7 @@ async function loadState() {
     const st = await api('/api/state');
     Object.assign(S, st);
     S.versions = JSON.parse(localStorage.getItem('wowmod_versions') || '[]');
+    if (!S.versions.length) { S.versions = ['12.0.7']; localStorage.setItem('wowmod_versions', JSON.stringify(S.versions)); }
     render();
   } catch (e) {
     $('topStatus').textContent = '连接失败';
@@ -62,7 +63,7 @@ function render() {
   const c = client(), h = hooks(), st = stats();
   $('topStatus').textContent = S.cli ? 'CLI 已连接 · 实时计划' : 'CLI 未构建';
   $('cliState').textContent = 'CLI: ' + (S.cli ? 'build/wowmod ✓' : '未构建');
-  $('heroBuild').textContent = 'build ' + (c.build || '—');
+  $('heroBuild').textContent = 'build ' + (c.build > 0 ? c.build : '未知');
   $('clientMini').innerHTML = `<div class="client-mini-title">${esc(c.version || '未知版本')}</div>
     <div class="client-mini-sub">${esc(c.arch || '?')} · ${esc(c.storage || '?')} · <span style="color:#4ade80">已支持</span></div>`;
 
@@ -149,7 +150,7 @@ function render() {
   // 启动页
   $('launchOverlays').textContent = overlays().length;
   $('launchHook').textContent = h.mode || '—';
-  $('launchBuild').textContent = c.build || '—';
+  $('launchBuild').textContent = c.build > 0 ? c.build : '未知';
   $('cmdText').textContent = 'wowmod launch --config examples/demo/wowmod.json';
   $('diagnostics').innerHTML = diagnostics().map(d => `<div class="diag ${esc(d.level)}"><span class="lv">${esc(d.level)}</span><span class="wh">${esc(d.where)}</span><span class="ms">${esc(d.message)}</span></div>`).join('') || '<div class="hint">无诊断信息</div>';
 }
@@ -178,6 +179,8 @@ async function setVersion(v) {
 }
 $('versionBtn').addEventListener('click', () => setVersion($('versionInput').value.trim()));
 $('addVersionBtn').addEventListener('click', () => setVersion($('addVersion').value.trim()));
+$('preset1207').addEventListener('click', () => setVersion('12.0.7'));
+$('preset335').addEventListener('click', () => setVersion('3.3.5.12340'));
 
 $('optPortalOn').addEventListener('change', e => changeConfig(cfg => {
   cfg.client.portal = e.target.checked ? (cfg.client.portal || $('optPortal').value || '127.0.0.1') : '';

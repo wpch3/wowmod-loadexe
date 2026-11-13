@@ -90,6 +90,7 @@ bool init_runtime(void* self_module) {
   std::string target = !rt.cfg.client.exe.empty() && file_exists(rt.cfg.client.exe) ? rt.cfg.client.exe : own_exe;
   std::vector<uint8_t> exe_bytes;
   rt.ci = detect_client(target, &rt.diag, &exe_bytes);
+  apply_display_overrides(&rt.ci, rt.cfg.client.version, rt.cfg.client.build);
   // hook 点必须来自"当前正在运行的这个 exe"，配置里若指向别的客户端则单独读它
   if (!own_exe.empty() && normalize_path(own_exe) != normalize_path(target)) {
     std::vector<uint8_t> running;

@@ -56,6 +56,10 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag = nullptr,
 // 在 root 下递归查找名为 wow*.exe 的可执行文件（不假设 _retail_ 等目录名）。
 std::vector<std::string> discover_client_exes(const std::string& root, int max_depth = 3);
 
+// 用户可选的"展示覆盖"：某些私服 exe 被改过，读不到版本资源。
+// 只影响展示与 when 过滤，绝不用于支持性判断。
+void apply_display_overrides(ClientInfo* ci, const std::string& version, int build);
+
 // PE 映像辅助：RVA <-> 文件偏移，供特征扫描使用。
 struct PeImage {
   std::vector<uint8_t> bytes;

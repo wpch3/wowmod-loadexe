@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "wowmod/config.hpp"
+#include "wowmod/discover.hpp"
 #include "wowmod/hooks.hpp"
 #include "wowmod/json.hpp"
 #include "wowmod/mapping.hpp"
@@ -129,6 +130,36 @@ static std::vector<uint8_t> make_pe(int build) {
   w32(b, fixed + 8, (3u << 16) | 3u);                 // 3.3
   w32(b, fixed + 12, (5u << 16) | static_cast<uint32_t>(build));  // 5.12340
   return b;
+}
+
+// 带一个可执行 .text 节的 PE（RVA 0x2000 -> 文件 0x400）
+static std::vector<uint8_t> make_pe_code() {
+  auto b = make_pe(70783);
+  b.resize(0x900, 0);
+  w16(b, 0x80 + 6, 2);  // 2 sections
+  size_t sec = 0x80 + 24 + 0xF0;
+  size_t s2 = sec + 40;
+  std::memcpy(b.data() + s2, ".text\0\0\0", 8);
+  w32(b, s2 + 8, 0x200);        // VirtualSize
+  w32(b, s2 + 12, 0x2000);      // VirtualAddress
+  w32(b, s2 + 16, 0x200);       // SizeOfRawData
+  w32(b, s2 + 20, 0x400);       // PointerToRawData
+  w32(b, s2 + 36, 0x60000020);  // CODE | EXECUTE
+  return b;
+}
+
+static const uint8_t kSig[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
+    0x05, 0xAA, 0xBB, 0xCC, 0xDD, 0xE8, 0x01, 0x02, 0x03, 0x04, 0x74, 0x09};
+
+static std::string sig_pattern(const uint8_t* s, size_t n) {
+  std::string out;
+  static const char* hx = "0123456789ABCDEF";
+  for (size_t i = 0; i < n; ++i) {
+    if (i) out += ' ';
+    out += hx[s[i] >> 4]; out += hx[s[i] & 0xF];
+  }
+  return out;
 }
 
 // ---------- 测试 ----------
@@ -301,6 +332,7 @@ static void test_vfs() {
   put("vfs/mappings/listfile.txt", "123456;World/Model/Dragon.m2\n123457;World/Textures/Skin.blp\n");
   put("vfs/mods/A/World/Model/Dragon.m2", "AAAA");
   put("vfs/mods/A/Interface/AddOns/New/New.toc", "## Interface: 100000");
+  put("vfs/mods/A/README.md", "# 说明文档，不应成为覆盖项");
   put("vfs/mods/B/World/Model/Dragon.m2", "BBBBBB");
   put("vfs/mods/B/wowmod.manifest.json", "{\"files\":[{\"id\":123457,\"file\":\"override.blp\"}]}");
   put("vfs/mods/B/override.blp", "BLP!");
@@ -320,6 +352,7 @@ static void test_vfs() {
   Vfs vfs;
   CHECK(vfs.build(cfg, ci, m, &d), "构建 VFS");
 
+  CHECK(!vfs.resolve_path("README.md").has_value(), "模组包根目录的说明文档不应成为覆盖项");
   auto hit = vfs.resolve_path("WORLD\\Model\\Dragon.M2");
   CHECK(hit.has_value(), "路径覆盖命中（大小写/分隔符无关）");
   CHECK(hit && hit->pack == "B", "高优先级模组包胜出");
@@ -432,6 +465,75 @@ static void test_hooks() {
   CHECK_EQ(plan_hooks(cfg3, ci, exe, &d).mode, "off");
 }
 
+static void test_discover() {
+  group("discover(adapt)");
+  auto exe = make_pe_code();
+  std::memcpy(exe.data() + 0x400, kSig, sizeof(kSig));
+  std::string exact = sig_pattern(kSig, sizeof(kSig));
+
+  AdaptResult r0 = relax_pattern(exact, exe);
+  CHECK(r0.ok, "原样特征应唯一匹配");
+  CHECK_EQ(r0.file_offset, size_t(0x400));
+  CHECK_EQ(r0.rva, 0x2000u);
+  CHECK(r0.executable, "命中位置应在可执行节区");
+  CHECK(!r0.warning, "原样匹配不应有警告");
+
+  // 模拟"邻近 build"：两个字节变了，原特征 0 匹配；自适应应把变化字节放宽成 ??
+  std::string near = exact;
+  near = replace_all(near, "05 AA BB", "05 AB BB");
+  near = replace_all(near, "04 74 09", "04 75 09");
+  std::string err;
+  Pattern near_p = Pattern::parse(near, &err);
+  CHECK_EQ(count_matches(near_p, exe, 2), size_t(0));
+  AdaptResult r1 = relax_pattern(near, exe, 8, &err);
+  CHECK(r1.ok, "跨 build 特征应能自动放宽: " + r1.reason);
+  CHECK_EQ(r1.file_offset, size_t(0x400));
+  CHECK(r1.fixed_bytes >= 8, "结果应保留足够固定字节");
+  CHECK(r1.warning, "原始 0 匹配应给出警告");
+  Pattern rp = Pattern::parse(r1.pattern, &err);
+  CHECK(err.empty(), "生成的特征应可重新解析");
+  CHECK_EQ(count_matches(rp, exe, 3), size_t(1));
+  CHECK_EQ(r1.rva, 0x2000u);
+
+  // 太短的特征应安全失败，而不是退化成全通配
+  AdaptResult r2 = relax_pattern("48 89", exe, 8, &err);
+  CHECK(!r2.ok, "过短特征应被拒绝");
+  CHECK(r2.reason.find("太少") != std::string::npos, "应说明固定字节太少");
+
+  // 自适应结果可以写成可直接使用的 patterns.json
+  put("adapt/hooks/.keep", "");
+  std::string out = tmp("adapt/hooks/patterns.adapted.json");
+  put_bytes("adapt/exe.bin", exe);
+  std::string aerr;
+  AdaptFileResult f = adapt_pattern_file(tmp("adapt/exe.bin"), exact, out, "my-12.0.7", "rdx", &aerr);
+  CHECK(f.ok, "写出 patterns.json: " + f.reason);
+  auto ds = load_hook_patterns(out, nullptr);
+  CHECK_EQ(ds.size(), size_t(1));
+  CHECK_EQ(ds[0].name, "my-12.0.7");
+  CHECK_EQ(ds[0].id_register, "rdx");
+  // 同名重复写入不会累积
+  f = adapt_pattern_file(tmp("adapt/exe.bin"), exact, out, "my-12.0.7", "rdx", &aerr);
+  CHECK_EQ(load_hook_patterns(out, nullptr).size(), size_t(1));
+
+  // 配置支持多个特征文件
+  put("adapt/cfg/wowmod.json",
+      "{\"client\":{\"gameDir\":\".\",\"version\":\"12.0.7\",\"build\":70500},"
+      "\"hooks\":{\"patterns\":[\"hooks/a.json\",\"hooks/b.json\"]}}");
+  Config cfg;
+  Diagnostics d;
+  CHECK(load_config(tmp("adapt/cfg/wowmod.json"), &cfg, &d), "载入多特征文件配置");
+  CHECK_EQ(cfg.hooks.pattern_files.size(), size_t(2));
+  CHECK_EQ(cfg.client.version, "12.0.7");
+  CHECK_EQ(cfg.client.build, 70500);
+  ClientInfo ci;
+  apply_display_overrides(&ci, cfg.client.version, cfg.client.build);
+  CHECK_EQ(ci.version_string, "12.0.7");
+  CHECK_EQ(ci.build, 70500);
+  CHECK(ci.to_json().at("supported").as_bool(), "覆盖版本后依然 supported");
+  Json dumped = Json::parse(cfg.to_json().dump(2), &err);
+  CHECK(err.empty() && dumped.at("hooks").at("patterns").as_array().size() == 2, "多特征文件 JSON 往返");
+}
+
 int main() {
   std::cout << "wowmod 核心测试\n";
   std::cout << std::string(50, '-') << "\n";
@@ -443,6 +545,7 @@ int main() {
   test_config();
   test_vfs();
   test_hooks();
+  test_discover();
   teardown();
   std::cout << std::string(50, '-') << "\n";
   std::cout << g_total << " 项检查, " << g_failed << " 项失败\n";

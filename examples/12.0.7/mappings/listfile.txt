@@ -1,0 +1,5 @@
+# 换成你的 12.0.7 客户端对应的 listfile：https://github.com/wowdev/wow-listfile
+# 格式: fileId;filePath
+# 有了它，按路径摆放的模组会自动获得 FileDataID，CASC 客户端也能按 ID 覆盖。
+# 示例（请替换成 12.0.7 的真实 ID）：
+# 123456;World/Model/Example/Dragon.m2

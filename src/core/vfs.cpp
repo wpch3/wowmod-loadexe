@@ -176,6 +176,11 @@ bool Vfs::build(const Config& cfg, const ClientInfo& ci, const MappingTable& map
     for (const auto& rel : files) {
       std::string name = file_name(rel);
       if (name == "wowmod.manifest.json" || name == "wowmod.json" || starts_with(name, ".")) continue;
+      // 模组包根目录的说明文档不是游戏资源
+      std::string lname = to_lower(name);
+      if (parent_path(rel).empty() &&
+          (iequals(file_extension(rel), ".md") || starts_with(lname, "readme") ||
+           starts_with(lname, "license") || starts_with(lname, "changelog"))) continue;
       if (referenced.count(path_key(rel))) continue;
       ++stats_.pack_files;
       OverlayHit h;

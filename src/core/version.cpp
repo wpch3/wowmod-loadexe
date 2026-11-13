@@ -431,6 +431,8 @@ ClientInfo detect_client(const std::string& path, Diagnostics* diag, std::vector
   if (ci.version_string.empty()) {
     ci.version_string = "未知版本";
     ci.notes.push_back("未能读取版本号 —— 加载器不依赖版本号，所有功能照常可用");
+  } else if (ci.build == 0) {
+    ci.notes.push_back("版本串里没有 build 号（例如只写了 12.0.7）—— 不影响任何功能；可在配置的 client.build 里补一个供 when 过滤使用");
   }
   ci.storage = detect_storage_layout(ci.game_dir, &ci.data_dir);
   detect_server_settings(ci.game_dir, &ci);
@@ -462,9 +464,22 @@ Json ClientInfo::to_json() const {
   return j;
 }
 
+void apply_display_overrides(ClientInfo* ci, const std::string& version, int build) {
+  if (!ci) return;
+  if (!version.empty()) {
+    ci->version_string = trim(version);
+    parse_version_string(ci->version_string, &ci->major, &ci->minor, &ci->patch, &ci->build);
+    ci->notes.push_back("版本展示来自配置 client.version（仅用于展示）");
+  }
+  if (build > 0) {
+    ci->build = build;
+    ci->notes.push_back("build 来自配置 client.build（供 when 过滤使用，不是支持性判断）");
+  }
+}
+
 std::string ClientInfo::display() const {
   std::ostringstream os;
-  os << "版本: " << version_string << " (build " << build << ")\n"
+  os << "版本: " << version_string << " (build " << (build > 0 ? std::to_string(build) : "未知") << ")\n"
      << "架构: " << arch << " | 存储: " << storage << " | 产品: " << (product.empty() ? "-" : product) << "\n"
      << "exe: " << (exe_path.empty() ? "(未指定)" : exe_path) << "\n"
      << "游戏目录: " << game_dir << "\n"

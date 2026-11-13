@@ -76,6 +76,8 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
   const Json& cl = j.at("client");
   c.client.exe = resolve(c.base_dir, cl.at("exe").as_string());
   c.client.game_dir = resolve(c.base_dir, cl.at("gameDir").as_string());
+  c.client.version = cl.at("version").as_string();
+  c.client.build = static_cast<int>(cl.at("build").as_int(0));
   c.client.portal = cl.at("portal").as_string();
   c.client.realmlist = cl.at("realmlist").as_string();
   c.client.args = strings_from(cl.at("args"));
@@ -111,7 +113,17 @@ Config Config::from_json(const Json& j, const std::string& config_path, Diagnost
 
   const Json& h = j.at("hooks");
   c.hooks.mode = h.at("mode").as_string("auto");
-  c.hooks.patterns = resolve(c.base_dir, h.at("patterns").as_string());
+  const Json& hp = h.at("patterns");
+  if (hp.type == Json::Type::Array) {
+    for (const auto& s : hp.as_string_array()) {
+      std::string p = resolve(c.base_dir, s);
+      if (!p.empty()) c.hooks.pattern_files.push_back(p);
+    }
+  } else {
+    std::string p = resolve(c.base_dir, hp.as_string());
+    if (!p.empty()) c.hooks.pattern_files.push_back(p);
+  }
+  c.hooks.patterns = c.hooks.pattern_files.empty() ? "" : c.hooks.pattern_files.front();
   c.hooks.allow_fallback = h.at("allowFallback").as_bool(true);
 
   const Json& lg = j.at("log");
@@ -127,6 +139,8 @@ Json Config::to_json() const {
   Json cl = Json::make_object();
   cl.set("exe", Json::make_string(client.exe));
   cl.set("gameDir", Json::make_string(client.game_dir));
+  cl.set("version", Json::make_string(client.version));
+  if (client.build) cl.set("build", Json::make_number(client.build));
   cl.set("portal", Json::make_string(client.portal));
   cl.set("realmlist", Json::make_string(client.realmlist));
   Json args = Json::make_array(); for (const auto& a : client.args) args.push(Json::make_string(a));
@@ -162,7 +176,12 @@ Json Config::to_json() const {
   j.set("rules", rules);
   Json h = Json::make_object();
   h.set("mode", Json::make_string(hooks.mode));
-  h.set("patterns", Json::make_string(hooks.patterns));
+  if (hooks.pattern_files.size() == 1) h.set("patterns", Json::make_string(hooks.pattern_files.front()));
+  else {
+    Json arr = Json::make_array();
+    for (const auto& p : hooks.pattern_files) arr.push(Json::make_string(p));
+    h.set("patterns", arr);
+  }
   h.set("allowFallback", Json::make_bool(hooks.allow_fallback));
   j.set("hooks", h);
   Json lg = Json::make_object();
@@ -235,8 +254,8 @@ bool validate_config(const Config& cfg, Diagnostics* diag) {
   for (const auto& p : cfg.mappings) {
     if (!file_exists(p)) { d(Level::Error, "mappings", "映射文件不存在: " + p); ok = false; }
   }
-  if (!cfg.hooks.patterns.empty() && !file_exists(cfg.hooks.patterns)) {
-    d(Level::Warn, "hooks.patterns", "特征文件不存在: " + cfg.hooks.patterns + "（将退化为纯 VFS 模式）");
+  for (const auto& p : cfg.hooks.pattern_files) {
+    if (!file_exists(p)) d(Level::Warn, "hooks.patterns", "特征文件不存在: " + p + "（将退化为纯 VFS 模式）");
   }
   std::string mode = to_lower(cfg.hooks.mode);
   if (mode != "auto" && mode != "vfs" && mode != "fileid" && mode != "off") {
