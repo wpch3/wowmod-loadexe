@@ -99,6 +99,26 @@ done
 echo "   rem 行标点检查通过"
 
 echo "==> 检查一键旁路脚本"
+
+# ---- 模式白名单一致性 ----
+# 已经踩过两次：scout 和 mods 都实现好了，但 launcher_main.cpp 的
+# known 白名单没加，脚本一跑就被"未知模式"挡回去，看起来像功能没做。
+# 这里静态比对：所有 .cmd/.ps1 里出现的 --mode X 都必须出现在白名单里。
+_missing_modes=$(python3 - <<'PYEOF'
+import re, glob
+src = open('src/windows/launcher_main.cpp', encoding='utf-8').read()
+m = re.search(r'known = \{(.*?)\};', src, re.S)
+white = set(re.findall(r'"([a-z]+)"', m.group(1))) if m else set()
+used = set()
+for f in glob.glob('*.cmd') + glob.glob('tools/*.cmd') + glob.glob('scripts/*.ps1'):
+    t = open(f, encoding='utf-8', errors='replace').read()
+    used |= set(re.findall(r'--mode\s+([a-z]+)', t))
+missing = sorted(used - white)
+print(' '.join(missing))
+PYEOF
+)
+[ -z "$_missing_modes" ] || fail "脚本用到了未在模式白名单里的模式: $_missing_modes（改 launcher_main.cpp 的 known）"
+
 [ -f wowmod-load.cmd ] || fail "缺少 wowmod-load.cmd（模组加载器）"
 grep -aq -- "--mode mods" wowmod-load.cmd || fail "wowmod-load.cmd 没有调用 --mode mods"
 _sl=$(wc -l < wowmod-load.cmd | tr -d ' ')

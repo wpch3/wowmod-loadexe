@@ -636,8 +636,13 @@ int main(int argc, char** argv) {
   // 于是「特征码扫描」跑成了「字符串分析」，用户看到的是旧流程的输出，
   // 还以为新模式坏了。宁可当场报错，也不要跑一个不是用户要的模式。
   {
-    const std::vector<std::string> known = {"observe", "auto", "hook", "analyze",
-                                            "diagnose", "sigscan", "probe", "patch"};
+    // 这份白名单是硬约束：漏写一个模式，那个模式就永远跑不起来。
+    // 已经踩过两次：scout 和 mods 都写好了，但白名单没加，
+    // 于是脚本一跑就被"未知模式"挡回去 —— 看起来像功能没做。
+    // 加新模式时【必须同时改这里】。
+    const std::vector<std::string> known = {"observe", "auto",   "hook",  "analyze",
+                                            "diagnose", "sigscan", "probe", "scout",
+                                            "patch",   "mods"};
     if (std::find(known.begin(), known.end(), o.mode) == known.end()) {
       std::printf("\n[错误] 未知模式 --mode %s\n", o.mode.c_str());
       std::printf("  支持的模式: ");
