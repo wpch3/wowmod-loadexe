@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v4"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v5"
 #endif
 #include <tlhelp32.h>
 
@@ -650,19 +650,39 @@ int main(int argc, char** argv) {
     say("特征码扫描：按 Arctium 的序言特征码在运行时映像里找文件打开函数");
     // 等客户端把代码解密出来（12.0.7 是运行期解密）。报告事实，不要瞎等：
     // 每轮把「有没有标记 / 可执行映像数」打出来，用户能看到进展。
+    //
+    // 教训（v4 实测）：只等 "CASC" 这类标记串出现是【假就绪】——标记串在
+    // .rdata 里，客户端一起来就能读到，但那时代码段才解密了 11.9%。
+    // 特征码全在 .text 里，扫得太早就必然 0 命中（CustomFileIdHook 就是这么漏的）。
+    // 所以这里改成等【可执行段明文比例】稳定，与 --dump-module 用同一判据。
     bool ready = false;
-    for (int i = 0; i < 40; ++i) {
-      std::string marker;
-      if (wowmod::win::process_has_client_markers(pi.hProcess, &marker)) {
-        std::printf("  客户端代码已就绪（标记: %s）\n", marker.c_str());
-        ready = true;
-        break;
+    size_t best_low = 0;
+    int stable = 0;
+    const DWORD ts = GetTickCount();
+    for (int i = 0; i < 200; ++i) {
+      const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
+      if (probe.text_checked) {
+        const double pct = 100.0 * static_cast<double>(probe.text_low_entropy) /
+                           static_cast<double>(probe.text_checked);
+        if (i % 2 == 0)
+          std::printf("  等待代码解密... 明文页 %zu/%zu = %.1f%%\n",
+                      probe.text_low_entropy, probe.text_checked, pct);
+        std::fflush(stdout);
+        if (probe.text_low_entropy > best_low) {
+          best_low = probe.text_low_entropy;
+          stable = 0;
+        } else if (++stable >= 3 && best_low > 0) {
+          std::printf("  解密比例已稳定，开始扫描。\n");
+          ready = true;
+          break;
+        }
       }
-      if (i % 5 == 0) std::printf("  等待客户端解密... (%d/40)\n", i);
-      ::Sleep(500);
+      if (GetTickCount() - ts > static_cast<DWORD>(o.wait_ms)) break;
+      ::Sleep(1000);
     }
     if (!ready)
-      std::printf("  ！等满 20 秒仍未看到标记串，仍会继续扫描（结果会说明情况）\n");
+      std::printf("  ！等到上限仍未稳定（当前明文页 %zu），仍会继续扫描。\n"
+                  "    若特征码未命中，请先登进游戏、切几次角色再重跑。\n", best_low);
 
     const auto res = wowmod::win::scan_arctium_signatures(pi.hProcess, o.exe);
     const std::string txt = wowmod::join_path(wowmod_dir, "wowmod-sigscan.txt");

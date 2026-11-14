@@ -272,7 +272,7 @@ CLI 在真实编译产物上的表现：
 应当输出：
 
 ```
-wowmod_loader build: sigscan-dump-v4
+wowmod_loader build: sigscan-dump-v5
 modes: observe auto hook analyze diagnose sigscan
 ```
 
@@ -392,3 +392,96 @@ wowmod_loader.exe --exe "WoW 12.0.7 - Firestorm.exe" --mode sigscan --dump-modul
 有了完整明文，再按 Arctium 的 `CustomFileIdHook` 探针
 `48 89 5C 24 08 57 48 83 EC 20 48 8B ?? 48 ?? ?? 48 ?? ?? ?? ?? ?? ?? E8 ...`
 去匹配才有意义。
+
+---
+
+## 定论：FileDataID 解析函数已定位（build 68974）
+
+用第二次导出的 108 MB 映像（明文 3064/13730 页 = 22.3%，是第一次 9.6% 的两倍多）
+把 Arctium 的 `CustomFileIdHook` 特征码**完整 43 字节**跑了一遍：
+
+```
+48 89 5C 24 08 57 48 83 EC 20 48 8B ?? 48 ?? ?? 48 ?? ?? ?? ?? ?? ?? E8
+?? ?? ?? ?? 48 ?? ?? ?? ?? ?? ?? 48 ?? ?? 74 ?? 48 ?? CD
+```
+
+全 113 MB 映像 **只命中一处**：RVA `0x33e06a0`（基址 0x140000000 → VA `0x1433e06a0`），
+且位于已解密的明文页。反汇编确认它的语义**就是** Arctium 描述的那个函数：
+
+```asm
+1433e06a0: 48 89 5c 24 08        mov  [rsp+8], rbx          ; 序言，与特征码一致
+1433e06a5: 57                    push rdi
+1433e06a6: 48 83 ec 20           sub  rsp, 0x20
+1433e06aa: 48 8b f9              mov  rdi, rcx              ; 参1 = 容器对象
+1433e06ad: 48 63 da              movsxd rbx, edx            ; ★ edx = FileDataID
+1433e06b0: 48 8d 0d 51 c2 fc 00  lea  rcx, [rip+0xfcc251]   ; 获取锁
+1433e06b7: e8 54 5c ee fc        call 0x1402c6310
+1433e06bc: 48 8b 97 30 01 00 00  mov  rdx, [rdi+0x130]       ; 哈希桶数组
+1433e06c3: 48 85 d2              test rdx, rdx
+1433e06c6: 74 7c                 je   0x1433e0744           ; 空 → 返回 0
+1433e06c8: 48 b8 cd 8c 55 ed ...  movabs rax, 0xff51afd7ed558ccd   ; murmur 混合
+1433e06d2: 48 b9 53 ec 85 1a ...  movabs rcx, 0xc4ceb9fe1a85ec53
+1433e06dc: 4c 8b c3              mov  r8, rbx
+1433e06df: 49 c1 e8 21           shr  r8, 0x21
+1433e06e3: 4c 33 c3              xor  r8, rbx
+1433e06e6: 4c 0f af c0           imul r8, rax
+1433e06ea: ...                   （第二轮混合）
+1433e0702: 48 8b 87 28 01 00 00  mov  rax, [rdi+0x128]       ; 桶掩码 = 容量-1
+1433e070f: 48 8b 04 ca           mov  rax, [rdx+rcx*8]      ; 取桶头
+1433e0720: 39 58 08              cmp  [rax+8], ebx          ; ★ 比较 FileDataID
+1433e0725: 48 8b 00              mov  rax, [rax]            ; 链式 next
+1433e0730: 48 8b 3a              mov  rdi, [rdx]
+1433e0738: 48 8b 7f 10           mov  rdi, [rdi+0x10]
+1433e073c: 39 9f 04 01 00 00     cmp  [rdi+0x104], ebx      ; ★ 再校验一次 ID
+1433e0744: 33 ff                 xor  edi, edi               ; 未命中 → 0
+1433e0752: 48 8b 5c 24 30        mov  rbx, [rsp+0x30]
+1433e0757: 48 8b c7              mov  rax, rdi              ; ★ 返回查到的对象指针
+1433e075a: 48 83 c4 20           add  rsp, 0x20
+1433e075e: 5f                    pop  rdi
+1433e075f: c3                    ret
+```
+
+**这就是一个用 `edx` 当键、在哈希表里查 FileDataID 的函数**：
+`Hash(FileDataID) → 桶 → 链表按 [node+8] 比较 → 返回 [node] 关联对象（+0x10 再校验 +0x104）`。
+与 Arctium 的 `rdx = FileDataID` 约定完全一致。
+
+### 调用方交叉验证
+
+该函数有 6 个 `call` 调用点（`0x33d4959` / `0x33d688d` / `0x33d69f6` / `0x33d6b92`
+/ `0x33d7986` / `0x33d97cb`），**全部落在同一片已解密区域**。第一个调用点：
+
+```asm
+1433d4920: 40 53                push rbx
+1433d4922: 48 83 ec 20          sub  rsp, 0x20
+1433d4926: 8b d9                mov  ebx, ecx          ; 参1 = ID
+1433d4928: 85 c9                test ecx, ecx
+1433d492a: 75 08                jne  ...               ; ID == 0 → 直接返回 false
+1433d4934: 8b 0d 4e 23 fd 00     mov  ecx, [rip+...]
+1433d493a: 65 48 8b 04 25 58 00 00 00  mov rax, qword ptr gs:[0x58]   ; TEB
+1433d4953: c6 04 02 01          mov  byte ptr [rdx+rax], 1     ; 标记「正在加载」
+1433d4957: 8b d3                mov  edx, ebx          ; ★ edx = ID
+1433d4959: e8 42 bd 00 00       call 0x1433e06a0       ; ← 就是它
+1433d495e: 48 85 c0             test rax, rax
+1433d4961: 74 08                je   0x1433d496b
+1433d4963: b0 01                mov  al, 1             ; 命中 → 返回 true
+1433d496b: 8b cb                mov  ecx, ebx
+1433d496d: e8 ee 57 00 00       call 0x1433da160       ; 未命中 → 另一条加载路径
+```
+
+`ID == 0` 提前返回、`edx` 传参、命中返回 true 否则 fallback 到另一个加载函数 ——
+这与 Arctium `LoadByFileId` 的行为一致。
+
+### 所以现在缺的只有一件事
+
+目标地址有了，剩下的就是**安装 hook 本身**：
+
+1. 在 `0x33e06a0` 处写 13 字节绝对跳转 `48 B8 <stub> FF E0 90 90 90`（Arctium 布局）
+   —— 注意：这 13 字节正好覆盖 `mov/push/sub`，而特征码是从函数第一条就开始的，
+   所以跳板必须完整复制这 13 字节并在 stub 里执行完再跳回 `0x33e06ad`。
+2. stub 里比对 `edx` 与我们的表（`{u32 fileId, u64 pathPtr}` ×12 字节 + NUL 连接的小写路径）；
+   命中就返回我们自己的路径指针，未命中就走 trampoline 回原函数。
+3. 写入前 `VirtualProtectEx` 改成 RW，写完改回 `0x02`（只读执行）。
+
+**但 0x33e06a0 是每次启动都变的（模块基址随机化）**，所以不能写死 ——
+`--mode hook` 必须先用特征码现找。这次 `sigscan` 之所以报 0 命中，
+原因已查明并修复：扫描在启动后 47 ms 就跑了，那时只有 11.9% 解密（见下节）。
