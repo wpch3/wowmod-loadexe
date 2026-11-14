@@ -616,7 +616,7 @@ int analyze_remote_and_write(HANDLE process, const std::string& out_dir, std::st
     {
       L += "没有找到含 loose-file 标记字符串的内存块。\n";
       *log += "这说明客户端要么还没解密完，要么把字符串去掉了。\n";
-      L += "请走到登录界面、停留 10 秒后重试。\n";
+      L += "这不是需要你操作的事；重跑一次或用更长的 --wait 即可。\n";
     }
     write_text(join_path(out_dir, "wowmod-analysis.txt"), *log);
     return 2;

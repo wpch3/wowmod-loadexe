@@ -81,9 +81,9 @@ echo   Nothing is written to disk. Closing the game undoes everything.
 echo.
 pause
 
-rem 240000 ms: the client only decrypts pages it actually executes, so we must
-rem allow time to reach the world. Do not shorten this.
-"%WM_LOADER%" --mode mods --exe "%WM_GAME%" --workdir "%WM_HOME%" --wait 240000 --wait-exit
+rem 600000 ms: the client decrypts .text page by page, so the wait is generous.
+rem The loader stops as soon as the target signature is found; this is only a cap.
+"%WM_LOADER%" --mode mods --exe "%WM_GAME%" --workdir "%WM_HOME%" --wait 600000 --wait-exit
 
 echo.
 echo ==============================================================

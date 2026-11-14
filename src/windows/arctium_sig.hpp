@@ -75,7 +75,12 @@ struct SigScanResult {
 };
 
 // 对已启动的客户端做一次特征码扫描。不修改目标进程任何字节。
-SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_path);
+//
+// names 非空 = 只扫这几条特征码，其余跳过。等待循环里每 2 秒扫一轮，
+// 而客户端映像有 113 MB，把 7 条特征码全跑一遍纯属浪费 —— 等待时
+// 只关心 Init 和 CustomFileIdHook 两条，扫完就退出映像循环。
+SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_path,
+                                      const std::vector<std::string>& names = {});
 
 }  // namespace win
 }  // namespace wowmod

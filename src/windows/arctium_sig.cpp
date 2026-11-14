@@ -126,7 +126,8 @@ Json SigScanResult::to_text_report() const {
   return j;
 }
 
-SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_path) {
+SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_path,
+                                     const std::vector<std::string>& names) {
   SigScanResult out;
   out.exe = exe_path;
   out.pid = GetProcessId(process);
@@ -197,8 +198,16 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
     return 0;
   };
 
+  auto wanted = [&](const char* n) -> bool {
+    if (names.empty()) return true;
+    for (const auto& w : names)
+      if (w == n) return true;
+    return false;
+  };
+
   std::vector<Candidate> cands;
   for (const auto& s : arctium_signature_specs()) {
+    if (!wanted(s.name)) continue;
     Candidate c;
     c.sig = &s;
     std::string perr;
@@ -226,6 +235,11 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
   for (const auto& img : images) {
     if (img.bytes.empty()) continue;
     out.bytes_scanned += img.bytes.size();
+    // 所有特征码都已找到 -> 不必再扫后面的映像
+    bool all_found = !cands.empty();
+    for (const auto& c : cands)
+      if (c.total == 0) all_found = false;
+    if (all_found) break;
     for (auto& c : cands) {
       const auto offs = c.pat.find_all(img.bytes);
       if (offs.empty()) continue;

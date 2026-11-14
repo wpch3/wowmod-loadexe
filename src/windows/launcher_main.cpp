@@ -567,7 +567,7 @@ int main(int argc, char** argv) {
       std::printf(
           "wowmod_loader.exe --exe \"...\\WoW 12.0.7 - Firestorm.exe\" [选项]\n\n"
           "  --mode observe   只分析并写报告（默认，不修改客户端任何字节）\n"
-          "  --mode auto      分析后自动安装拦截记录（登录界面触发）\n"
+          "  --mode auto      分析后自动安装拦截记录（客户端窗口出现后触发）\n"
           "  --mode hook      分析后直接安装 FileDataID 重定向（需要已确认 ABI）\n"
           "  --mode analyze   只分析，然后立刻退出（不等游戏窗口）\n"
           "  --mode diagnose  只做诊断，不改客户端任何字节（排查用）\n"
@@ -981,11 +981,9 @@ int main(int argc, char** argv) {
                   best_low, last_checked, pct, kMinPlainPct);
       std::printf("  在密文上扫描得到的命中是随机字节，打上去会直接崩溃 —— 所以不打。\n\n");
       std::printf("  12.0.7 的 .text 是按页惰性解密的：只有游戏真正执行到的代码页才是明文。\n");
-      std::printf("  因此必须在【游戏已经进到世界、加载过角色模型】之后再扫。做法：\n\n");
-      std::printf("    1) 先正常启动游戏，登录并进入世界，看到角色模型\n");
-      std::printf("    2) 记下等待时间，然后重跑本脚本并把等待加长，例如：\n");
-      std::printf("         wowmod_loader.exe --mode patch --apply --wait 180000\n");
-      std::printf("       （180000 毫秒 = 3 分钟，覆盖登录 + 读取角色）\n\n");
+      std::printf("  所以判据不是\"等了多久\"，而是\"目标特征码有没有命中\"。\n");
+      std::printf("  把等待时间加长可以让解密继续推进，例如：\n");
+      std::printf("         wowmod_loader.exe --mode patch --apply --wait 600000\n\n");
       std::printf("  本次没有修改客户端任何字节。\n");
       std::string werr;
       wowmod::write_text_file(
@@ -1168,7 +1166,7 @@ int main(int argc, char** argv) {
     if (!target || best_score < min_score) {
       std::printf("  [失败] 特征码 %s 没有找到可用目标（最高语义分 %d/8）\n",
                   o.probe_sig.c_str(), best_score);
-      std::printf("  可能原因：代码还没解密到那一段。请先登进游戏、切几次角色，再重跑本命令。\n");
+      std::printf("  含义：本轮扫过的字节里不含这段代码（范围没覆盖到，或该页还没解密）。\n");
       std::printf("  本次没有修改客户端任何字节。\n");
       CloseHandle(pi.hThread);
       CloseHandle(pi.hProcess);
@@ -1408,8 +1406,7 @@ int main(int argc, char** argv) {
       ::Sleep(1000);
     }
     if (!ready)
-      std::printf("  ！等到上限仍未稳定（当前明文页 %zu），仍会继续扫描。\n"
-                  "    若特征码未命中，请先登进游戏、切几次角色再重跑。\n", best_low);
+      std::printf("  ！等到上限仍未稳定（当前明文页 %zu），仍会继续扫描。\n", best_low);
 
     const auto res = wowmod::win::scan_arctium_signatures(pi.hProcess, o.exe);
     const std::string txt = wowmod::join_path(wowmod_dir, "wowmod-sigscan.txt");
@@ -1529,8 +1526,7 @@ int main(int argc, char** argv) {
         // 比例很低说明客户端还没跑到那些代码 —— 只有真正进游戏、换装、
         // 打开角色面板，才会把模型/文件名解析相关的页解密出来。
         if (md.text_checked && md.text_low_entropy * 5 < md.text_checked)
-          std::printf("  ！明文只有 %.1f%%，偏少。\n"
-                      "    请先登进游戏、切一次角色/换一套模型，再重跑本命令导出。\n",
+          std::printf("  ！明文只有 %.1f%%，偏少（客户端还没执行到那么多代码页）。\n",
                       100.0 * static_cast<double>(md.text_low_entropy) /
                           static_cast<double>(md.text_checked));
       }
@@ -1686,7 +1682,7 @@ int main(int argc, char** argv) {
           } else {
             std::printf("\n[mode=auto] 已安装 %zu 个拦截器（只记录，不改变客户端行为）。\n", n);
             std::printf("  记录文件: %s\n", intercept_log.c_str());
-            std::printf("  现在去登录界面 → 进角色选择 → 进游戏，然后按回车停止记录。\n");
+            std::printf("  拦截记录已开始；按回车停止记录。\n");
             std::fflush(stdout);
             // 轮询环形缓冲，把每次调用的寄存器快照追加到日志
             poll_intercept_ring(pi.hProcess, &agent, intercept_log, targets.size());
@@ -1813,7 +1809,7 @@ int main(int argc, char** argv) {
 
   if (o.detach) {
     // 确认客户端没有立刻崩掉，然后把控制台还给用户。
-    // 运行时线程在客户端进程内继续工作（写报告、等登录界面、按热键）。
+    // 运行时线程在客户端进程内继续工作（写报告、等客户端窗口、按热键）。
     const DWORD alive = WaitForSingleObject(pi.hProcess, 2500);
     if (alive == WAIT_OBJECT_0) {
       DWORD code = 0;
@@ -1827,7 +1823,7 @@ int main(int argc, char** argv) {
       return 7;
     }
     say("客户端正在运行，运行时已驻留其中。本窗口可以关闭。");
-    say("报告（进到登录界面后生成）: " + wowmod::join_path(o.workdir, "wowmod\\wowmod-analysis.txt"));
+    say("报告: " + wowmod::join_path(o.workdir, "wowmod\\wowmod-analysis.txt"));
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 0;

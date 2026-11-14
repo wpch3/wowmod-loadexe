@@ -228,7 +228,7 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   const DWORD t0 = GetTickCount();
   int init_round = 0;
   for (;;) {
-    const auto sig = scan_arctium_signatures(process, "");
+    const auto sig = scan_arctium_signatures(process, "", {"Init", "CustomFileIdHook"});
     bool init_found = false;
     uint64_t init_va = 0;
     int round_best = 0;
@@ -313,7 +313,7 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   const DWORD scan_t0 = GetTickCount();
   int scan_round = 0;
   for (;;) {
-    const auto sig = scan_arctium_signatures(process, "");
+    const auto sig = scan_arctium_signatures(process, "", {"Init", "CustomFileIdHook"});
     int round_best = 0;
     bool round_rx = false;
     uint64_t round_target = 0;
