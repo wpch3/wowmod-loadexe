@@ -13,6 +13,7 @@
 #include "wowmod/protect_plan.hpp"
 #include "wowmod/arctium.hpp"
 #include "wowmod/fileid_stub.hpp"
+#include "wowmod/x64sim.hpp"
 #include "wowmod/launcher_stub.hpp"
 #include "wowmod/x64_decode.hpp"
 #include "wowmod/xref.hpp"
@@ -1208,6 +1209,95 @@ static void test_probe_stub() {
   CHECK_EQ(wowmod::register_number("nope"), -1);
 }
 
+// 跳板语义的离线执行验证。
+//
+// 只看「能否解码」是不够的：字节全都能解码、但逻辑写错（比如循环上界用
+// 项数而不是字节数）照样会让 95% 的文件匹配不到，或者返回错指针直接崩。
+// 这里用 x64sim 把生成的跳板真的执行一遍，逐条比对结果。
+static void test_fileid_stub_semantics() {
+  group("fileid_stub_semantics");
+
+  StubConfig cfg;
+  cfg.id_register = "rdx";
+  cfg.return_register = "rax";
+  const uint32_t kCount = 3;
+  const uint32_t ids[kCount] = {100, 200, 300};
+  auto st = build_fileid_stub(cfg, 0, kCount);
+  CHECK(st.ok(), "应能生成跳板");
+  if (!st.ok()) return;
+
+  // 把 stub + 表 + 字符串 + 跳板桩放进同一段连续内存，
+  // 这样 x64sim 只用一个 code 缓冲就能跑完。
+  auto run_case = [&](uint32_t id, int expect_slot, const char* what) {
+    const uint64_t base = 0x1000000ULL;
+    const uint64_t tbl = base + st.code.size() + 16;
+    const uint64_t strp = tbl + 0x100;
+    const uint64_t tramp = strp + 0x200;
+
+    std::vector<uint8_t> local = st.code;
+    for (const auto& sl : st.patch_slots) {
+      const uint64_t v = (sl.second == "id_table_va") ? tbl : tramp;
+      std::memcpy(local.data() + sl.first, &v, 8);
+    }
+    local.resize(static_cast<size_t>(tramp + 16 - base), 0);
+    for (uint32_t i = 0; i < kCount; ++i) {
+      std::memcpy(local.data() + (tbl - base) + i * 16, &ids[i], 4);
+      const uint64_t p = strp + i * 0x20;
+      std::memcpy(local.data() + (tbl - base) + i * 16 + 8, &p, 8);
+    }
+    const auto r = x64sim::run(local, base, 0, id, 0, 0, 0x100000ULL);
+    if (expect_slot >= 0) {
+      const uint64_t want = strp + static_cast<uint64_t>(expect_slot) * 0x20;
+      CHECK(r.stop == x64sim::Stop::kReturn, std::string("应 ret: ") + what);
+      CHECK_EQ(r.returned, want);
+    } else {
+      CHECK(r.stop == x64sim::Stop::kJumpOut, std::string("应跳到 trampoline: ") + what);
+      CHECK_EQ(r.jump_target, tramp);
+    }
+  };
+
+  run_case(100, 0, "命中第 0 项");
+  run_case(200, 1, "命中第 1 项");
+  run_case(300, 2, "命中第 2 项");
+  run_case(999, -1, "未命中走 trampoline");
+  run_case(0, -1, "id=0 走 trampoline");
+  run_case(0x80000000u, -1, "负 id 走 trampoline");
+
+  // 大表：确认循环真的能扫到【最后一项】。
+  // 这正是「循环上界用项数」那个 bug 会让 95% 文件失效的地方。
+  {
+    const uint32_t big = 1096;
+    auto s2 = build_fileid_stub(cfg, 0, big);
+    CHECK(s2.ok(), "大表应能生成");
+    if (s2.ok()) {
+      const uint64_t base = 0x2000000ULL;
+      const uint64_t tbl = base + s2.code.size() + 16;
+      const uint64_t strp = tbl + big * 16 + 0x100;
+      const uint64_t tramp = strp + 0x1000;
+      std::vector<uint8_t> local = s2.code;
+      for (const auto& sl : s2.patch_slots) {
+        const uint64_t v = (sl.second == "id_table_va") ? tbl : tramp;
+        std::memcpy(local.data() + sl.first, &v, 8);
+      }
+      local.resize(static_cast<size_t>(tramp + 16 - base), 0);
+      for (uint32_t i = 0; i < big; ++i) {
+        const uint32_t fid = 1000 + i;
+        std::memcpy(local.data() + (tbl - base) + i * 16, &fid, 4);
+        const uint64_t p = strp + i * 0x20;
+        std::memcpy(local.data() + (tbl - base) + i * 16 + 8, &p, 8);
+      }
+      // 最后一项
+      const auto r = x64sim::run(local, base, 0, 1000 + big - 1, 0, 0, 0x100000ULL);
+      CHECK(r.stop == x64sim::Stop::kReturn, "必须能命中 1096 项表的最后一项");
+      if (r.stop == x64sim::Stop::kReturn)
+        CHECK_EQ(r.returned, strp + static_cast<uint64_t>(big - 1) * 0x20);
+      // 表外
+      const auto r2 = x64sim::run(local, base, 0, 999999, 0, 0, 0x100000ULL);
+      CHECK(r2.stop == x64sim::Stop::kJumpOut, "表外 id 必须走 trampoline");
+    }
+  }
+}
+
 static void test_fileid_stub() {
   group("fileid_stub");
 
@@ -1775,6 +1865,7 @@ int main() {
   test_hooks();
   test_discover();
   test_x64_decode();
+  test_fileid_stub_semantics();
   test_fileid_stub();
   test_probe_stub();
   test_minidump_layout();

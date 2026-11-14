@@ -320,15 +320,33 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   {
     InstallRequest req;
     req.hook_target = target;
-    // Arctium 的 stub 从 edx 取 FileDataID。
-    // 但被覆盖的那条指令是 mov rdi, rcx —— 说明调用点传参用 rcx/rdi，
-    // 返回值用 rdi（不是 rax）。所以这里两件事分开：
-    //   id 从 rdx 取（FileDataID 恒在 edx，已由 20 条实测记录确证）
-    //   命中时把路径指针放进 rdi（调用点真正读取的寄存器）
+    // ---- 寄存器选择的依据（全部来自用户上传的真实字节离线反汇编）----
+    //
+    // 序言:
+    //   1433E06A0  mov [rsp+8], rbx
+    //   1433E06A5  push rdi
+    //   1433E06A6  sub rsp, 0x20
+    //   1433E06AA  mov rdi, rcx      <- 第一个参数保存到 rdi（之后被 lea 覆盖）
+    // 结论:
+    //   * FileDataID 在【第二个参数】rdx/edx（同上一函数 0x33e0620 的 [rsp+8] 双参惯例）
+    //   * rdi 不是返回值寄存器，它只是第一个参数的暂存
+    //
+    // 返回路径:
+    //   1433E074B  mov rbx, [rsp+0x30]
+    //   1433E0750  mov rax, rdi     <- 函数自己的返回值是【从 rdi 搬进 rax】
+    //   1433E0758  ret
+    // 所以函数对外的返回值确实在 rax，内容是"某个对象指针"。
+    //
+    // 我们要给调用方的是「本地文件路径字符串指针」。它必须从 rax 返回，
+    // 而且【绝不能进函数体】—— 进了就会走 push rdi / mov [rsp+8],rbx 之后
+    // 的收尾逻辑，栈会多退 8、rbx 会被覆盖，直接崩溃（这正是上次
+    // EXCEPTION_INTERNAL_ERROR 的成因）。
+    // stub 命中时直接 ret，不执行任何序言/收尾：此时 rsp 还是调用方 call
+    // 之后的原值，ret 正好返回到调用点。
     req.id_register = "rdx";
-    req.return_register = "rdi";
-    // 必须至少覆盖 13 字节（Arctium 的 hook 长度），
-    // 这个函数的指令边界正好是 16 字节，所以 detour 会搬 16 字节。
+    req.return_register = "rax";
+    // 覆盖 13 字节（Arctium 的 hook 长度）。这个序言 13 字节正好是指令边界，
+    // 下一条指令 1433E06AD `lea rcx,[rip+...]` 从 +13 开始。
     req.min_cover = 13;
     req.entries.reserve(data.entries.size());
     for (const auto& e : data.entries) req.entries.emplace_back(e.file_data_id, e.game_path);

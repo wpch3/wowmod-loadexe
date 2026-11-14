@@ -100,6 +100,22 @@ echo "   rem 行标点检查通过"
 
 echo "==> 检查一键旁路脚本"
 
+
+# ---- 跳板语义离线验证 ----
+# 只看「能否解码」不够：字节全可解码但逻辑写错（循环上界用项数、
+# 返回寄存器选错）照样会让 95% 文件匹配不到或直接崩。这里用 x64sim
+# 把生成的跳板真的执行一遍。跑不起来或有用例失败就拒绝打包。
+echo "==> 验证跳板语义（离线执行）"
+_simlog=$(mktemp)
+if ! g++ -std=c++17 -O1 -Iinclude -Isrc tests/tests.cpp tests/intercept_test.cpp \
+      src/core/*.cpp src/platform/launch_stub.cpp -o "$_simlog.bin" >"$_simlog" 2>&1; then
+  fail "测试编译失败: $(tail -3 "$_simlog")"
+fi
+_simres=$("$_simlog.bin" 2>&1 | tail -1)
+echo "    $_simres"
+echo "$_simres" | grep -q "0 项失败" || fail "有测试失败: $_simres"
+rm -f "$_simlog" "$_simlog.bin"
+
 # ---- 模式白名单一致性 ----
 # 已经踩过两次：scout 和 mods 都实现好了，但 launcher_main.cpp 的
 # known 白名单没加，脚本一跑就被"未知模式"挡回去，看起来像功能没做。
