@@ -281,3 +281,48 @@ modes: observe auto hook analyze diagnose sigscan
 现在脚本在启动前会自动比对：如果 loader 不支持脚本请求的模式，会立刻停下来说明
 「zip 里的 exe 和 ps1 不是同一批产物」，不会再把错误模式跑成别的模式。
 启动器本身也不再有静默兜底——未知模式直接退出码 `3` 并打印支持列表。
+
+---
+
+## 关键发现：客户端自带本地覆盖开关（不用 hook）
+
+在运行时 dump 出来的主模块明文代码里（113 MB 映像，90.4% 的页仍与磁盘相同，
+1313 页 = 5.4 MB 已解密，熵 5~7 属正常代码），找到一个真实函数
+`0x1fa1b0`（2840 字节），它一次性注册了这些 CVar：
+
+```
+0x1fab86  "overrideArchive"
+0x1fabaf  "Whether or not the client loads alternate data"
+0x1fa363  ".blp" ".tga" ".jpg" ".jpeg" ".wav"     <- 允许被覆盖的扩展名
+0x1fa5db  "http://WOW-CDN.FSTORM.EU/68974/%s/%s/%s"
+0x1fa1f4  "casContainerSizeLimit"
+```
+
+`overrideArchive` 是 **WoW 官方控制台变量**，官方定义：
+「Whether or not the client loads alternate data」，默认 `0`（关闭）。
+
+也就是说：**客户端本来就实现了"加载本地替代数据"**，只是默认关着。
+Arctium 之所以要改代码，是因为 10.x 时代这条路径被分支跳转绕过了；
+而 12.0.7 的这个函数里，".blp/.tga/.jpg/.jpeg/.wav" 的覆盖扩展名清单
+和 CVar 注册是同一条代码路径 —— 值得先按官方开关试。
+
+### 怎么试（零风险，不改任何字节）
+
+在游戏目录的 `WTF\Config.wtf` 里加一行：
+
+```
+SET overrideArchive "1"
+```
+
+然后**完全退出客户端再启动**（该变量需要重启生效），直接双击 exe 正常进游戏，
+看血精灵女性外观有没有变化。
+
+注意：`overrideArchive` 官方用途是"中韩版亡灵模型/骷髅变面包"这套替身资源，
+能否让任意 FileDataID 的松散文件生效，需要实测确认。这一步的价值在于：
+**不需要注入、不需要改内存、没有任何崩溃风险**，是最便宜的一次验证。
+
+如果这一行就能让外观变化，我们的路线总结为「CASC 官方覆盖 + 松散文件布局」，
+完全不需要 Arctium 那套 detour。
+
+如果不能，再回到 hook 路线 —— 此时我们已经有 5.4 MB 已解密的明文代码
+和它们引用的字符串清单，不需要再重新 dump。
