@@ -8,7 +8,7 @@ rem    Arctium 的 CustomFileIdHook 目标）上装一个「只记录」的跳�
 rem
 rem  安全性：
 rem    只记录传入的 id，然后原样执行被搬走的指令并跳回。
-rem    不改变返回值、不改变控制流、不改变任何寄存器结果。
+rem    不改变返回值，不改变控制流，不改变任何寄存器结果。
 rem    退出时会把原始字节写回。最坏情况是日志不准，不会影响客户端加载资源。
 rem
 rem  用法：双击本文件，照提示在游戏里正常玩一会儿。
@@ -74,10 +74,10 @@ echo.
 powershell.exe -NoLogo -NoProfile -Command ^
   "Write-Host '==============================================================';" ^
   "Write-Host '  接下来启动游戏并装探针。装好后请在游戏里做这些事：';" ^
-  "Write-Host '    1、登录，在角色选择界面来回切几个角色（看模型预览）';" ^
-  "Write-Host '    2、进入游戏世界';" ^
-  "Write-Host '    3、打开角色面板 / 幻化 / 理发店';" ^
-  "Write-Host '    4、进出一次场景或换个地图';" ^
+  "Write-Host '    1，登录，在角色选择界面来回切几个角色（看模型预览）';" ^
+  "Write-Host '    2，进入游戏世界';" ^
+  "Write-Host '    3，打开角色面板 / 幻化 / 理发店';" ^
+  "Write-Host '    4，进出一次场景或换个地图';" ^
   "Write-Host '';" ^
   "Write-Host '  这些操作会触发客户端加载角色模型，我们要的就是它加载时';" ^
   "Write-Host '  实际传进 FileDataID 查找函数的那些 id。';" ^
@@ -89,7 +89,7 @@ powershell.exe -NoLogo -NoProfile -Command ^
 pause
 
 rem ------------------------------------------------- 2. 跑
-echo   [2/4] 启动客户端、装探针、开始记录 ...
+echo   [2/4] 启动客户端，装探针，开始记录 ...
 echo.
 "%WM_LOADER%" --exe "%WM_GAME%" --mode probe --wait %WM_WAIT_MS%
 set "WM_RC=!errorlevel!"
@@ -129,7 +129,7 @@ endlocal
 exit /b 0
 
 :nofiles
-echo   [失败] 本文件必须和 wowmod_loader.exe、wowmod_rt.dll 放在同一目录。
+echo   [失败] 本文件必须和 wowmod_loader.exe，wowmod_rt.dll 放在同一目录。
 echo   请先完整解压 wowmod-oneclick.zip。
 echo.
 pause

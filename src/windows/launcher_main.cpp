@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v8"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v9"
 #endif
 #include <tlhelp32.h>
 
@@ -661,6 +661,8 @@ int main(int argc, char** argv) {
   //   以及返回值该长什么样。
   if (o.mode == "probe") {
     bool g_client_died = false;
+    wowmod::win::CrashEvidence g_crash;
+    int probe_round = 0;
     const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
     CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
     const std::string log_path = wowmod::join_path(wowmod_dir, "wowmod-probe.txt");
@@ -701,10 +703,22 @@ int main(int argc, char** argv) {
     const auto res = wowmod::win::scan_arctium_signatures(pi.hProcess, o.exe);
     uint64_t target = 0;
     int best_score = 0;
+    bool best_image = false;
+    std::printf("  候选（按语义分 / 是否模块本体 排序）：\n");
     for (const auto& h : res.hits) {
       if (h.name != "CustomFileIdHook") continue;
-      if (h.semantic_score > best_score) {
+      std::printf("    0x%s  语义 %d/8  %s  RVA 0x%s  Protect 0x%lx\n",
+                  wowmod::to_hex(h.match_va, 16).c_str(), h.semantic_score,
+                  h.image_backed ? "MEM_IMAGE(模块本体)"
+                                 : (h.region_type == 0x40000 ? "MEM_MAPPED(映射视图)" : "私有内存"),
+                  wowmod::to_hex(h.image_rva, 16).c_str(),
+                  static_cast<unsigned long>(h.region_protect));
+      // 选优顺序：语义分 > 模块本体 > 先出现的
+      const bool better = (h.semantic_score > best_score) ||
+                          (h.semantic_score == best_score && h.image_backed && !best_image);
+      if (better) {
         best_score = h.semantic_score;
+        best_image = h.image_backed;
         target = h.match_va;
       }
     }
@@ -717,8 +731,9 @@ int main(int argc, char** argv) {
       CloseHandle(pi.hProcess);
       return 4;
     }
-    std::printf("  [成功] 目标 0x%s（语义分 %d/8，edx=FileDataID 已确证）\n",
-                wowmod::to_hex(target, 16).c_str(), best_score);
+    std::printf("  [成功] 目标 0x%s（语义分 %d/8，%s）\n",
+                wowmod::to_hex(target, 16).c_str(), best_score,
+                best_image ? "模块本体，写入安全" : "映射视图，写入可能影响共享映射");
 
     // ---- 装探针 ----
     wowmod::win::FileIdHook hook;
@@ -769,20 +784,33 @@ int main(int argc, char** argv) {
       } else if (err.find("magic") != std::string::npos) {
         // 缓冲区 magic 不符通常意味着跳板还没被执行过，属正常早期状态
       }
-      // 客户端还活着吗？如果进程没了，先别急着报"探针不在了"，
-      // 而是把崩溃现场查清楚 —— 这比任何猜测都有价值。
+      // 每轮都查：① 进程还活着吗 ② 有没有新产生的崩溃转储。
+      //
+      // 上一版只在"进程退出"时才查崩溃 —— 但客户端的 Fatal Error 是
+      // 【弹窗卡住进程】，进程仍然存活，于是永远查不到，用户什么判定都看不到。
+      // 现在改成只要发现新的 c00000e5 转储，立刻收工并给判定。
       DWORD code = 0;
       if (!GetExitCodeProcess(pi.hProcess, &code) || code != STILL_ACTIVE) {
         std::printf("\n  ！客户端已退出（exit code 0x%08X）\n", code);
         g_client_died = true;
         break;
       }
+      if (probe_round++ % 2 == 0) {
+        const auto ev = wowmod::win::find_latest_illegal_instruction_crash(o.workdir);
+        if (ev.found && ev.exception_code == 0xC00000E5u) {
+          std::printf("\n  ！检测到崩溃：客户端弹出了 Fatal Error（进程还在，但已不可用）\n");
+          g_crash = ev;
+          break;
+        }
+      }
       ::Sleep(2000);
     }
 
     // ---- 崩溃取证：客户端如果死了，判定崩溃点是不是我们改的字节 ----
-    if (g_client_died || logged == 0) {
-      const auto ev = wowmod::win::find_latest_illegal_instruction_crash(o.workdir);
+    if (g_client_died || g_crash.found || logged == 0) {
+      const auto ev = g_crash.found
+                          ? g_crash
+                          : wowmod::win::find_latest_illegal_instruction_crash(o.workdir);
       std::vector<std::pair<uint64_t, uint64_t>> hooked = {{target, target + 14}};
       std::vector<std::pair<uint64_t, uint64_t>> stubs = {
           {rep.stub_va, rep.stub_va + 0x200},
@@ -790,7 +818,7 @@ int main(int argc, char** argv) {
       const int verdict = wowmod::win::classify_crash_address(ev, hooked, stubs);
       std::printf("\n== 崩溃现场判定 ==\n");
       std::printf("%s", wowmod::win::describe_crash_verdict(ev, verdict).c_str());
-      if (g_client_died)
+      if (g_client_died || g_crash.found)
         std::printf("  说明: 本次 hook 区间 [0x%s, 0x%s)，跳板 0x%s，trampoline 0x%s\n",
                     wowmod::to_hex(target, 16).c_str(),
                     wowmod::to_hex(target + 14, 16).c_str(),

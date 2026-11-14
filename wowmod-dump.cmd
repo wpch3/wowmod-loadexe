@@ -87,7 +87,7 @@ echo.
 rem ------------------------------------------------- 3. 说清楚要做什么
 rem 这段中文提示改用 PowerShell 输出。
 rem 原因：cmd.exe 在 chcp 65001 下解析【较长的 UTF-8 echo 行】会错位
-rem （实测：同一个块里第 2、4 行正常，最长的第 1、3 行被当成命令执行，
+rem （实测：同一个块里第 2，4 行正常，最长的第 1，3 行被当成命令执行，
 rem  报 "'回切几个角色…' is not recognized"）。换成 powershell 写，
 rem 与代码页无关，彻底绕开这个问题。
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -96,10 +96,10 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host '  接下来会启动游戏，期间【不需要】任何额外操作。';" ^
   "Write-Host '';" ^
   "Write-Host '  请在游戏里做这些事（目的：让壳把相关代码页解密出来）：';" ^
-  "Write-Host '    1、登录，在角色选择界面来回切几个角色看模型预览';" ^
-  "Write-Host '    2、进入游戏世界';" ^
-  "Write-Host '    3、打开角色面板 / 幻化 / 理发店（会加载角色模型）';" ^
-  "Write-Host '    4、进出一次场景，或换个地图';" ^
+  "Write-Host '    1，登录，在角色选择界面来回切几个角色看模型预览';" ^
+  "Write-Host '    2，进入游戏世界';" ^
+  "Write-Host '    3，打开角色面板 / 幻化 / 理发店（会加载角色模型）';" ^
+  "Write-Host '    4，进出一次场景，或换个地图';" ^
   "Write-Host '';" ^
   "Write-Host ('  程序最多采样 3 分钟（' + %WM_WAIT_MS% + ' 毫秒），');" ^
   "Write-Host '  一旦进度【稳定不再上升】就自动导出，你不用回来点任何东西。';" ^
@@ -130,7 +130,7 @@ if not exist "%WM_OUT%" (
 rem ------------------------------------------------- 5. 量化
 echo   [3/4] 对照磁盘 exe 统计明文比例 ...
 echo.
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$dump='%WM_OUT%'; $exe='%WM_GAME%'; $dm=[IO.File]::OpenRead($dump); $de=[IO.File]::OpenRead($exe); try { $m=New-Object byte[] 4096; $d=New-Object byte[] 4096; $same=0; $diff=0; $off=0x400; $va=0x1000; $size=0x35a2000; $dm.Position=$va; for($i=0; $i -lt [math]::Floor($size/4096); $i++){ $de.Position=$off+$i*4096; if($de.Read($d,0,4096) -lt 4096){break}; if($dm.Read($m,0,4096) -lt 4096){break}; $eq=$true; for($k=0; $k -lt 4096; $k++){ if($m[$k] -ne $d[$k]){$eq=$false; break} }; if($eq){$same++} else {$diff++} }; $total=$same+$diff; if($total -le 0){ Write-Host '        [失败] 读不到 .text，请把输出发回来。'; return }; Write-Host ('        明文页(与磁盘不同) = ' + $diff + ' / ' + $total + ' = ' + [math]::Round(100.0*$diff/$total,1) + '%'); Write-Host ('        密文页(与磁盘相同) = ' + $same); if($diff -lt 3000){ Write-Host '        [偏低] 建议重跑，并在游戏里多待一会儿、多切几次角色。' } else { Write-Host '        [够用] 可以拿去做特征码匹配了。' } } finally { $dm.Dispose(); $de.Dispose() }"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$dump='%WM_OUT%'; $exe='%WM_GAME%'; $dm=[IO.File]::OpenRead($dump); $de=[IO.File]::OpenRead($exe); try { $m=New-Object byte[] 4096; $d=New-Object byte[] 4096; $same=0; $diff=0; $off=0x400; $va=0x1000; $size=0x35a2000; $dm.Position=$va; for($i=0; $i -lt [math]::Floor($size/4096); $i++){ $de.Position=$off+$i*4096; if($de.Read($d,0,4096) -lt 4096){break}; if($dm.Read($m,0,4096) -lt 4096){break}; $eq=$true; for($k=0; $k -lt 4096; $k++){ if($m[$k] -ne $d[$k]){$eq=$false; break} }; if($eq){$same++} else {$diff++} }; $total=$same+$diff; if($total -le 0){ Write-Host '        [失败] 读不到 .text，请把输出发回来。'; return }; Write-Host ('        明文页(与磁盘不同) = ' + $diff + ' / ' + $total + ' = ' + [math]::Round(100.0*$diff/$total,1) + '%'); Write-Host ('        密文页(与磁盘相同) = ' + $same); if($diff -lt 3000){ Write-Host '        [偏低] 建议重跑，并在游戏里多待一会儿，多切几次角色。' } else { Write-Host '        [够用] 可以拿去做特征码匹配了。' } } finally { $dm.Dispose(); $de.Dispose() }"
 
 echo.
 echo   [4/4] 完成
@@ -145,7 +145,7 @@ endlocal
 exit /b 0
 
 :nofiles
-echo   [失败] 本文件必须和 wowmod_loader.exe、wowmod_rt.dll 放在同一目录。
+echo   [失败] 本文件必须和 wowmod_loader.exe，wowmod_rt.dll 放在同一目录。
 echo   请先完整解压 wowmod-oneclick.zip，再双击本文件。
 echo.
 pause

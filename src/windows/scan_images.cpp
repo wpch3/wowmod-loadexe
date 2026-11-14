@@ -52,6 +52,7 @@ struct Region {
   uint64_t base;
   size_t size;
   DWORD protect;
+  DWORD type;    // MEM_IMAGE / MEM_MAPPED / MEM_PRIVATE
   bool image;    // mbi.Type == MEM_IMAGE：由映像映射而来
   std::string module;
 };
@@ -70,6 +71,7 @@ std::vector<Region> enumerate_regions(HANDLE p) {
       r.base = base;
       r.size = size;
       r.protect = mbi.Protect;
+      r.type = static_cast<DWORD>(mbi.Type);
       r.image = mbi.Type == MEM_IMAGE;
       out.push_back(std::move(r));
     }
@@ -175,6 +177,9 @@ std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) 
     }
     auto it = modules.find(r.base);
     if (it != modules.end()) img.module_name = it->second;
+    img.region_type = r.type;
+    img.region_protect = r.protect;
+    img.is_image_backed = (r.type == MEM_IMAGE);
 
     img.marker_hits = count_markers(img.bytes.data(), img.bytes.size(), &img.first_marker);
     out.push_back(std::move(img));

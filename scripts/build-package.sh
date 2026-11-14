@@ -30,8 +30,8 @@ done
 
 echo "==> 检查 loader 能力标记"
 # 这三条是脚本与 exe 的「握手协议」，缺一条就说明版本不匹配。
-grep -aq "sigscan-dump-v8" "$ROOT/wowmod_loader.exe" \
-  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v8"
+grep -aq "sigscan-dump-v9" "$ROOT/wowmod_loader.exe" \
+  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v9"
 grep -aq "modes: observe auto hook analyze diagnose sigscan" "$ROOT/wowmod_loader.exe" \
   || fail "wowmod_loader.exe 不含模式清单（--version 会失败）"
 grep -aq "未知模式" "$ROOT/wowmod_loader.exe" \
@@ -61,6 +61,18 @@ _d_crlf=$(grep -c $'\r$' wowmod-dump.cmd || true)
 [ "$_d_lines" = "$_d_crlf" ] \
   || fail "wowmod-dump.cmd 含 LF-only 行尾（$((_d_lines - _d_crlf)) 行），cmd.exe 会解析异常"
 echo "   参数 / 产物校验 / CRLF 行尾 都在"
+
+echo "==> 检查 cmd 脚本的编码安全字符"
+# 已两次踩到：cmd.exe 在 chcp 65001 下解析含【顿号 U+3001】或【行内方括号】的
+# echo 行会错位，把句子后半段当成命令执行（"'回切几个角色' is not recognized"）。
+# 这类错误在 Linux 上完全看不出来，只能靠硬性扫描拦住。
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-start.cmd; do
+  [ -f "$_f" ] || continue
+  if grep -q $'\xe3\x80\x81' "$_f"; then
+    fail "$_f 含中文顿号（U+3001），cmd.exe 会把它后面的内容当命令执行"
+  fi
+done
+echo "   无顿号，行内方括号已确认"
 
 echo "==> 检查一键旁路脚本"
 [ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
@@ -92,7 +104,7 @@ trap 'rm -rf "$STAGE" "$VERIFY"' EXIT
 a=$(md5sum "$VERIFY/wowmod_loader.exe" | cut -d' ' -f1)
 b=$(md5sum "$DIST/wowmod_loader.exe" | cut -d' ' -f1)
 [ "$a" = "$b" ] || fail "zip 里的 loader 与 dist 不一致"
-grep -aq "sigscan-dump-v8" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
+grep -aq "sigscan-dump-v9" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
 grep -aq "sigscan" "$VERIFY/scripts/wowmod-start.ps1" || fail "zip 里的脚本没有 sigscan 菜单"
 [ -f "$VERIFY/wowmod-dump.cmd" ] || fail "zip 里缺 wowmod-dump.cmd"
 grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump.cmd 内容不完整"
@@ -100,5 +112,5 @@ grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump
 
 echo
 echo "OK  $ZIP  ($(stat -c%s "$ZIP") 字节)"
-echo "    loader build tag: sigscan-dump-v8"
+echo "    loader build tag: sigscan-dump-v9"
 echo "    用户可用 \`wowmod_loader.exe --version\` 自查版本"

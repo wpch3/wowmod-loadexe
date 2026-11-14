@@ -32,6 +32,12 @@ struct ScannedImage {
   size_t marker_hits = 0;         // 命中的 loose-file 标记字符串个数
   std::string first_marker;       // 第一个命中的标记
   std::string module_name;        // 若属于某个已加载模块，给出模块名
+  uint32_t region_type = 0;       // MEM_IMAGE(0x100000) / MEM_MAPPED(0x40000) / MEM_PRIVATE
+  uint32_t region_protect = 0;    // VirtualQueryEx 的 Protect（含 PAGE_* 位）
+  // 是否属于「按映像映射」的模块本体。MEM_IMAGE 的那一份是唯一应该被改写的地方：
+  // 它的页是只读+执行，写它必须走写时复制；而壳创建的 MEM_MAPPED 视图可能是
+  // 多进程共享的底层文件映射，往上写会污染其它进程看到的内容。
+  bool is_image_backed = false;
   uint32_t pe_timestamp = 0;
   std::vector<uint8_t> bytes;     // 读出来的映像内容（可能被裁剪到上限）
   size_t committed_bytes = 0;     // 实际读到的字节数

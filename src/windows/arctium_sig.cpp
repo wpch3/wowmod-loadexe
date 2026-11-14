@@ -86,9 +86,15 @@ Json SigScanResult::to_text_report() const {
       t += buf;
       // 同一份代码可能被映射两次（MEM_IMAGE 一份 + 壳的文件映射视图一份），
       // 它们的 RVA 完全相同。实测 12.0.7 的 2 处命中就是这么来的，不是"特征太弱"。
-      std::snprintf(buf, sizeof(buf), "    相对映像 RVA 0x%s\n",
-                    to_hex(h.match_va - h.image_base, 16).c_str());
+      std::snprintf(buf, sizeof(buf), "    相对映像 RVA 0x%s   区域类型 %s  Protect 0x%lx\n",
+                    to_hex(h.match_va - h.image_base, 16).c_str(),
+                    h.region_type == 0x100000 ? "MEM_IMAGE"
+                    : h.region_type == 0x40000 ? "MEM_MAPPED"
+                                               : "MEM_PRIVATE",
+                    static_cast<unsigned long>(h.region_protect));
       t += buf;
+      if (!h.image_backed && h.region_type == 0x40000)
+        t += "    ！这一处是壳创建的映射视图，不是模块本体 —— 写它可能影响共享映射。\n";
       if (h.semantic_score > 0) {
         std::snprintf(buf, sizeof(buf),
                       "    语义判别 %d/8   （键=edx 2 分 / murmur 哈希 3 分 / cmp[id] 3 分）\n",
@@ -205,6 +211,10 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
         h.image_size = img.size;
         h.image_executable = img.executable;
         h.image_note = region_note(img);
+        h.image_backed = img.is_image_backed;
+        h.region_type = img.region_type;
+        h.region_protect = img.region_protect;
+        h.image_rva = h.match_va - img.base;
         // 只对 CustomFileIdHook 做语义判别；其它特征码语义不同，不套用。
         if (std::string(c.sig->name) == "CustomFileIdHook") {
           const size_t probe = std::min<size_t>(0x120, img.bytes.size() - off);
@@ -242,6 +252,10 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
   // 唯一命中的排在前面
   std::stable_sort(out.hits.begin(), out.hits.end(), [](const SigHit& a, const SigHit& b) {
     if (a.semantic_score != b.semantic_score) return a.semantic_score > b.semantic_score;
+    // 同等语义分时，优先选 MEM_IMAGE（模块本体）：它的页是只读的，
+    // 写入必须走写时复制，改错了会当场失败；而 MEM_MAPPED 的视图可能是
+    // 多进程共享的底层映射，往上写真能改坏别人看到的内容。
+    if (a.image_backed != b.image_backed) return a.image_backed;
     if (a.match_count != b.match_count) return a.match_count < b.match_count;
     return a.image_size > b.image_size;
   });

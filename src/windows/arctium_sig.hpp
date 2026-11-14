@@ -45,6 +45,10 @@ struct SigHit {
   std::string image_note;     // 所属区域说明（模块名 或 匿名可执行区）
   std::vector<uint8_t> head;  // 匹配处前 64 字节，供人工核对
   int semantic_score = 0;     // CustomFileIdHook 的语义判别分（0..8，8=确证）
+  bool image_backed = false;  // 命中所在区域是否 MEM_IMAGE（模块本体）
+  uint32_t region_type = 0;   // MEM_IMAGE / MEM_MAPPED / MEM_PRIVATE
+  uint32_t region_protect = 0;
+  uint64_t image_rva = 0;     // 相对所在映像的 RVA（判断"同一份代码被映射两次"）
   std::string verdict;        // 结论：unique / ambiguous / near-miss
 };
 
