@@ -30,8 +30,8 @@ done
 
 echo "==> 检查 loader 能力标记"
 # 这三条是脚本与 exe 的「握手协议」，缺一条就说明版本不匹配。
-grep -aq "sigscan-dump-v6" "$ROOT/wowmod_loader.exe" \
-  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v6"
+grep -aq "sigscan-dump-v7" "$ROOT/wowmod_loader.exe" \
+  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v7"
 grep -aq "modes: observe auto hook analyze diagnose sigscan" "$ROOT/wowmod_loader.exe" \
   || fail "wowmod_loader.exe 不含模式清单（--version 会失败）"
 grep -aq "未知模式" "$ROOT/wowmod_loader.exe" \
@@ -62,15 +62,27 @@ _d_crlf=$(grep -c $'\r$' wowmod-dump.cmd || true)
   || fail "wowmod-dump.cmd 含 LF-only 行尾（$((_d_lines - _d_crlf)) 行），cmd.exe 会解析异常"
 echo "   参数 / 产物校验 / CRLF 行尾 都在"
 
+echo "==> 检查一键旁路脚本"
+[ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
+grep -aq -- "--mode probe" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有调用 --mode probe"
+grep -aq "wowmod-probe.txt" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有校验记录产物"
+_p_lines=$(wc -l < wowmod-probe.cmd | tr -d ' ')
+_p_crlf=$(grep -c $'\r$' wowmod-probe.cmd || true)
+[ "$_p_lines" = "$_p_crlf" ] || fail "wowmod-probe.cmd 含 LF-only 行尾"
+# loader 必须真的支持 probe 模式，否则脚本会以退出码 3 失败
+grep -aq "modes: observe auto hook analyze diagnose sigscan probe" wowmod_loader.exe \
+  || fail "wowmod_loader.exe 的模式清单里没有 probe"
+echo "   参数 / 产物校验 / CRLF 行尾 / probe 模式 都在"
+
 echo "==> 组装"
 mkdir -p "$STAGE/scripts"
-cp wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod-start.cmd wowmod-dump.cmd README.md "$STAGE/"
+cp wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd README.md "$STAGE/"
 cp scripts/wowmod-start.ps1 "$STAGE/scripts/"
 
 echo "==> 压缩"
 rm -f "$ZIP"
 ( cd "$STAGE" && zip -9 -r "$ZIP" \
-    wowmod-start.cmd wowmod-dump.cmd wowmod.exe wowmod_loader.exe wowmod_rt.dll \
+    wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod.exe wowmod_loader.exe wowmod_rt.dll \
     scripts/wowmod-start.ps1 README.md >/dev/null )
 
 echo "==> 复验 zip 内容"
@@ -80,12 +92,13 @@ trap 'rm -rf "$STAGE" "$VERIFY"' EXIT
 a=$(md5sum "$VERIFY/wowmod_loader.exe" | cut -d' ' -f1)
 b=$(md5sum "$DIST/wowmod_loader.exe" | cut -d' ' -f1)
 [ "$a" = "$b" ] || fail "zip 里的 loader 与 dist 不一致"
-grep -aq "sigscan-dump-v6" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
+grep -aq "sigscan-dump-v7" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
 grep -aq "sigscan" "$VERIFY/scripts/wowmod-start.ps1" || fail "zip 里的脚本没有 sigscan 菜单"
 [ -f "$VERIFY/wowmod-dump.cmd" ] || fail "zip 里缺 wowmod-dump.cmd"
 grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump.cmd 内容不完整"
+[ -f "$VERIFY/wowmod-probe.cmd" ] || fail "zip 里缺 wowmod-probe.cmd"
 
 echo
 echo "OK  $ZIP  ($(stat -c%s "$ZIP") 字节)"
-echo "    loader build tag: sigscan-dump-v6"
+echo "    loader build tag: sigscan-dump-v7"
 echo "    用户可用 \`wowmod_loader.exe --version\` 自查版本"

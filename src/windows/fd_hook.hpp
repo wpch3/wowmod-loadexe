@@ -22,6 +22,7 @@
 
 #include "windows/detour.hpp"
 #include "wowmod/fileid_stub.hpp"
+#include "wowmod/probe_stub.hpp"
 
 namespace wowmod {
 namespace win {
@@ -54,6 +55,13 @@ class FileIdHook {
   FileIdHook(const FileIdHook&) = delete;
   FileIdHook& operator=(const FileIdHook&) = delete;
 
+  // 旁路记录模式：在 hook 点装跳板，只把每次传入的 FileDataID 记进环形缓冲，
+  // 不改变任何返回值，也不改变控制流语义。用来在替换之前先拿到真实调用序列。
+  bool install_probe(HANDLE process, uint64_t target, const std::string& id_register,
+                     uint32_t capacity, InstallReport* out);
+  uint64_t probe_buffer_va() const { return probe_buffer_va_; }
+  uint32_t probe_capacity() const { return probe_capacity_; }
+
   bool installed() const { return detour_.installed; }
   bool remove();
   const InstallReport& report() const { return report_; }
@@ -67,6 +75,9 @@ class FileIdHook {
   RemoteBlock id_table_;
   RemoteBlock strings_;
   RemoteBlock stub_;
+  RemoteBlock probe_buffer_;
+  uint64_t probe_buffer_va_ = 0;
+  uint32_t probe_capacity_ = 0;
   InstallReport report_;
 };
 

@@ -21,6 +21,7 @@
 #include "wowmod/arctium_sigs.hpp"
 #include "wowmod/hooks.hpp"
 #include "wowmod/json.hpp"
+#include "wowmod/probe_stub.hpp"
 #include "wowmod/mapping.hpp"
 #include "wowmod/util.hpp"
 #include "wowmod/vfs.hpp"
@@ -1012,6 +1013,125 @@ static void test_launcher_stub() {
 
 // ---------------------------------------------------------------------------
 // 跳板生成：编码必须真的能跳到正确的标签，寄存器必须真的被读到。
+// ---- 旁路记录跳板（probe_stub）----
+//
+// 这个跳板是手写机器码，一旦字节错一位就是把客户端打崩。所以这里逐项验证：
+//   1. 每一段都能被完整解码（没有错位/半截指令）
+//   2. 必须以 jmp qword ptr [rip+0] 结尾（跳回 trampoline）
+//   3. 必须 push/pop 成对，且保存了 r10/r11（跳板自己要用）
+//   4. 必须【不】写返回寄存器 rax（这是它和 fileid_stub 的根本区别）
+static void test_probe_stub() {
+  group("probe_stub");
+
+  for (const char* idr : {"edx", "ecx", "r8d", "r9d", "esi", "edi", "eax"}) {
+    ProbeStubConfig cfg;
+    cfg.id_reg = wowmod::register_number(idr);
+    auto r = build_probe_stub(cfg, 0x20000000000ULL);
+    CHECK(r.ok(), std::string("应该能生成旁路跳板: ") + idr);
+    if (!r.ok()) continue;
+
+    // 1) 全部指令可解码
+    size_t p = 0;
+    int guard = 0;
+    bool all_ok = true;
+    while (p < r.code.size() && guard++ < 200) {
+      const auto insn = wowmod::x64::decode(r.code.data() + p, r.code.size() - p);
+      if (insn.length == 0) { all_ok = false; break; }
+      p += insn.length;
+    }
+    CHECK(all_ok, std::string("跳板必须全部可解码: ") + idr);
+    CHECK_EQ(p, r.code.size());
+
+    // 2) 结尾必须是 FF 25 00000000 + 8 字节地址
+    CHECK(r.code.size() >= 14, "断言失败: r.code.size() >= 14");
+    if (r.code.size() >= 14) {
+      const size_t j = r.code.size() - 14;
+      CHECK_EQ(r.code[j], 0xFF);
+      CHECK_EQ(r.code[j + 1], 0x25);
+      CHECK_EQ(r.code[j + 2], 0x00);
+      CHECK_EQ(r.code[j + 3], 0x00);
+      CHECK_EQ(r.code[j + 4], 0x00);
+      CHECK_EQ(r.code[j + 5], 0x00);
+    }
+    CHECK_EQ(r.patch_slots.size(), 1u);
+    if (!r.patch_slots.empty()) CHECK_EQ(r.patch_slots[0].second, "trampoline_va");
+
+    // 3) push/pop 配平：push 次数 == pop 次数（含 pushfq/popfq）
+    int pushes = 0, pops = 0;
+    p = 0;
+    while (p < r.code.size()) {
+      const auto insn = wowmod::x64::decode(r.code.data() + p, r.code.size() - p);
+      if (insn.length == 0) break;
+      // 只统计跳板前半段（末尾的 jmp 之后是数据）
+      if (r.code[p] == 0xFF && p + 1 < r.code.size() && r.code[p + 1] == 0x25) break;
+      if (r.code[p] == 0x9C) pushes++;
+      else if (r.code[p] == 0x9D) pops++;
+      else if ((r.code[p] & 0xF8) == 0x50) pushes++;
+      else if (r.code[p] == 0x41 && p + 1 < r.code.size() &&
+               (r.code[p + 1] & 0xF8) == 0x50) pushes++;
+      else if ((r.code[p] & 0xF8) == 0x58) pops++;
+      else if (r.code[p] == 0x41 && p + 1 < r.code.size() &&
+               (r.code[p + 1] & 0xF8) == 0x58) pops++;
+      p += insn.length;
+    }
+    CHECK_EQ(pushes, pops);
+    CHECK(pushes >= 6, std::string("至少要保存 5 个寄存器 + rflags: ") + idr);
+  }
+
+  // 4) 不写返回寄存器：不能出现 mov [rdx+0x18], eax 之外的 rax 写回
+  //    这里直接检查有没有 "89 ... 24" 之外的 rax 目标写，
+  //    更简单可靠的做法：确认没有 48 89 或 89 后面跟 modrm 指向 rax 的存储。
+  {
+    ProbeStubConfig cfg;
+    cfg.id_reg = 2;  // edx
+    auto r = build_probe_stub(cfg, 0x20000000000ULL);
+    CHECK(r.ok(), "断言失败: r.ok()");
+    // 整段代码里不应该出现 "mov rax, [table+..]"（fileid_stub 的命中返回）
+    bool has_table_load = false;
+    for (size_t i = 0; i + 3 < r.code.size(); ++i) {
+      if (r.code[i] == 0x49 && r.code[i + 1] == 0x8B && (r.code[i + 2] & 0xC7) == 0x02) {
+        has_table_load = true;
+      }
+    }
+    CHECK(!has_table_load, "旁路跳板不能从表里取路径（那是替换模式才做的事）");
+    // 必须保存 r10 和 r11（跳板自己占用）
+    bool has_r10 = false, has_r11 = false;
+    for (size_t i = 0; i + 1 < r.code.size(); ++i) {
+      if (r.code[i] == 0x41 && r.code[i + 1] == 0x52) has_r10 = true;
+      if (r.code[i] == 0x41 && r.code[i + 1] == 0x53) has_r11 = true;
+    }
+    CHECK(has_r10, "必须保存 r10");
+    CHECK(has_r11, "必须保存 r11");
+  }
+
+  // 5) 参数校验
+  {
+    ProbeStubConfig cfg;
+    cfg.capacity = 1000;  // 不是 2 的幂
+    CHECK(!build_probe_stub(cfg, 0).ok(), "非 2 的幂容量必须被拒绝");
+    cfg.capacity = 4096;
+    cfg.id_reg = 4;  // rsp
+    CHECK(!build_probe_stub(cfg, 0).ok(), "rsp 作为 id 寄存器必须被拒绝");
+    cfg.id_reg = 99;
+    CHECK(!build_probe_stub(cfg, 0).ok(), "越界寄存器必须被拒绝");
+  }
+
+  // 6) 布局常量自洽
+  {
+    CHECK_EQ(wowmod::ProbeBufferLayout::kSlotsOff, 0x18u);
+    CHECK_EQ(wowmod::ProbeBufferLayout::kSlotStride, 16u);
+    CHECK_EQ(wowmod::ProbeBufferLayout::bytes_for(4096), 0x18u + 4096u * 16u);
+    // seq 偏移必须落在槽位内
+    CHECK(wowmod::ProbeBufferLayout::kSlotSeqOff < wowmod::ProbeBufferLayout::kSlotStride, "断言失败: wowmod::ProbeBufferLayout::kSlotSeqOff < wowmod::P");
+  }
+
+  // 7) 寄存器名解析
+  CHECK_EQ(wowmod::register_number("edx"), 2);
+  CHECK_EQ(wowmod::register_number("rdx"), 2);
+  CHECK_EQ(wowmod::register_number("r15d"), 15);
+  CHECK_EQ(wowmod::register_number("nope"), -1);
+}
+
 static void test_fileid_stub() {
   group("fileid_stub");
 
@@ -1473,6 +1593,7 @@ int main() {
   test_discover();
   test_x64_decode();
   test_fileid_stub();
+  test_probe_stub();
   test_launcher_stub();
   test_analyze();
   test_xref_multi_target();

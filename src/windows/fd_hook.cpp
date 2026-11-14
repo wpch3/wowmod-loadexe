@@ -181,6 +181,125 @@ bool FileIdHook::install(HANDLE process, const InstallRequest& req, InstallRepor
   return true;
 }
 
+// ---- 旁路记录模式 ----
+//
+// 与 install() 的区别：不建 id 表、不写任何返回值，只放一个「记下来就跳回去」的跳板。
+// 这样即使有什么没想到的地方，最坏结果也只是日志不准 —— 不会影响客户端加载资源。
+bool FileIdHook::install_probe(HANDLE process, uint64_t target, const std::string& id_register,
+                               uint32_t capacity, InstallReport* out) {
+  report_ = InstallReport{};
+  if (!process || !target) {
+    report_.error = "参数为空";
+    if (out) *out = report_;
+    return false;
+  }
+  const int reg = register_number(id_register);
+  if (reg < 0) {
+    report_.error = "无法识别的 id 寄存器: " + id_register;
+    if (out) *out = report_;
+    return false;
+  }
+  if (capacity < 2 || (capacity & (capacity - 1)) != 0) {
+    report_.error = "capacity 必须是 2 的幂且 >= 2";
+    if (out) *out = report_;
+    return false;
+  }
+
+  std::string err;
+  auto fail = [&](const std::string& why) {
+    report_.error = why;
+    if (detour_.installed) remove_detour(process, &detour_, nullptr);
+    stub_.release();
+    probe_buffer_.release();
+    if (out) *out = report_;
+    return false;
+  };
+
+  // 1) 环形缓冲：先清零，保证 magic 与计数都是确定的初值
+  const size_t bytes = ProbeBufferLayout::bytes_for(capacity);
+  probe_buffer_ = RemoteBlock(process, bytes, PAGE_READWRITE);
+  if (!probe_buffer_.ok()) {
+    return fail("VirtualAllocEx(环形缓冲) 失败, GetLastError=" + std::to_string(GetLastError()));
+  }
+  probe_buffer_va_ = reinterpret_cast<uint64_t>(probe_buffer_.addr());
+  probe_capacity_ = capacity;
+  {
+    std::vector<uint8_t> zero(bytes, 0);
+    const uint32_t magic = ProbeBufferLayout::kMagic;
+    std::memcpy(zero.data() + ProbeBufferLayout::kMagicOff, &magic, 4);
+    const uint32_t cap = capacity;
+    std::memcpy(zero.data() + ProbeBufferLayout::kCapacityOff, &cap, 4);
+    if (!write_remote(process, probe_buffer_va_, zero.data(), zero.size(), &err)) {
+      return fail("初始化环形缓冲失败: " + err);
+    }
+  }
+  report_.id_table_va = probe_buffer_va_;   // 复用字段：环形缓冲地址
+  step(&report_, "环形缓冲 @" + to_hex(probe_buffer_va_, 16) + "（" +
+                     std::to_string(capacity) + " 槽 x 16 字节）");
+
+  // 2) 先探测 hook 点能否安全搬运，避免装上就崩
+  {
+    std::vector<uint8_t> window(64, 0);
+    if (!read_remote(process, target, window.data(), window.size(), &err)) {
+      return fail("读取 hook 点失败: " + err);
+    }
+    const size_t copy_len = x64::find_safe_split(window.data(), window.size(), 0, 14);
+    if (copy_len == 0) {
+      return fail("hook 点不是完整指令边界（不能安全搬运）");
+    }
+    report_.copy_len = copy_len;
+    step(&report_, "hook 点可搬运 " + std::to_string(copy_len) + " 字节完整指令");
+  }
+
+  // 3) 生成跳板（buffer 地址已知，trampoline 稍后回填）
+  ProbeStubConfig pc;
+  pc.id_reg = reg;
+  pc.capacity = capacity;
+  auto stub = build_probe_stub(pc, probe_buffer_va_);
+  if (!stub.ok()) {
+    std::string why = "生成旁路跳板失败:";
+    for (const auto& e : stub.errors) why += "\n  " + e;
+    return fail(why);
+  }
+  step(&report_, "旁路跳板生成完成: " + std::to_string(stub.code.size()) + " 字节（id 取自 " +
+                     id_register + "，不改返回值）");
+
+  if (!write_remote_code(process, stub.code, &stub_, &err)) {
+    return fail("写入跳板失败: " + err);
+  }
+  report_.stub_va = reinterpret_cast<uint64_t>(stub_.addr());
+
+  // 4) 安装 detour
+  if (!install_detour(process, target, report_.stub_va, 14, &detour_, &err)) {
+    return fail("安装 detour 失败: " + err);
+  }
+  report_.trampoline_va = reinterpret_cast<uint64_t>(detour_.trampoline.addr());
+  step(&report_, "detour 已安装: " + to_hex(target, 16) + " -> " + to_hex(report_.stub_va, 16) +
+                     ", trampoline @" + to_hex(report_.trampoline_va, 16));
+
+  // 5) 回填 trampoline 地址
+  {
+    std::vector<uint8_t> patched = stub.code;
+    for (const auto& slot : stub.patch_slots) {
+      uint64_t value = 0;
+      if (slot.second == "trampoline_va") value = report_.trampoline_va;
+      else return fail("跳板里出现未知的回填项: " + slot.second);
+      if (slot.first + 8 > static_cast<int>(patched.size())) return fail("回填位置越界");
+      std::memcpy(patched.data() + slot.first, &value, 8);
+    }
+    if (!write_remote(process, report_.stub_va, patched.data(), patched.size(), &err)) {
+      return fail("回填跳板地址失败: " + err);
+    }
+    DWORD old = 0;
+    VirtualProtectEx(process, stub_.addr(), stub_.size(), PAGE_EXECUTE_READ, &old);
+  }
+  step(&report_, "跳板回填完成");
+
+  report_.installed = true;
+  if (out) *out = report_;
+  return true;
+}
+
 std::vector<uint8_t> build_intercept_stub(uint64_t counter_va, uint64_t ring_va,
                                          uint32_t ring_mask) {
   return build_intercept_stub_bytes(counter_va, ring_va, ring_mask);

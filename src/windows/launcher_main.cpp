@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v6"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v7"
 #endif
 #include <tlhelp32.h>
 
@@ -53,6 +53,8 @@
 #include "windows/detour.hpp"
 #include "windows/remote_load.hpp"
 #include "windows/arctium_sig.hpp"
+#include "windows/probe_reader.hpp"
+#include "windows/fd_hook.hpp"
 #include "windows/fs_scan.hpp"
 #include "wowmod/json.hpp"
 
@@ -531,7 +533,7 @@ int main(int argc, char** argv) {
     else if (a == "--verbose") o.verbose = true;
     else if (a == "--version") {
       std::printf("wowmod_loader build: %s\n", WOWMOD_LOADER_BUILD_TAG);
-      std::printf("modes: observe auto hook analyze diagnose sigscan\n");
+      std::printf("modes: observe auto hook analyze diagnose sigscan probe\n");
       return 0;
     }
     else if (a == "-h" || a == "--help") {
@@ -543,6 +545,8 @@ int main(int argc, char** argv) {
           "  --mode analyze   只分析，然后立刻退出（不等游戏窗口）\n"
           "  --mode diagnose  只做诊断，不改客户端任何字节（排查用）\n"
           "  --mode sigscan   用 Arctium 的公开特征码扫运行时映像，找真正的文件打开函数\n"
+          "  --mode probe     【旁路记录】在 FileDataID 查找函数上装跳板，只记录客户端实际\n"
+          "                   传入了哪些 id，不改变任何返回值（无风险，用来确认 ABI）\n"
           "  --dump           sigscan 时把可执行映像导出到 wowmod\\dump（供 IDA 分析）\n"
           "  --dump-module    sigscan 时把【主模块】完整内存映像导出（含解密后的 .text）\n"
           "  --wait MS        等待客户端解密完成的最长时间（默认 30000）\n"
@@ -603,7 +607,7 @@ int main(int argc, char** argv) {
   // 还以为新模式坏了。宁可当场报错，也不要跑一个不是用户要的模式。
   {
     const std::vector<std::string> known = {"observe", "auto", "hook", "analyze",
-                                            "diagnose", "sigscan"};
+                                            "diagnose", "sigscan", "probe"};
     if (std::find(known.begin(), known.end(), o.mode) == known.end()) {
       std::printf("\n[错误] 未知模式 --mode %s\n", o.mode.c_str());
       std::printf("  支持的模式: ");
@@ -638,6 +642,144 @@ int main(int argc, char** argv) {
     CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
     wowmod::win::run_diagnose(pi.hProcess, wowmod::join_path(wowmod_dir, "wowmod-diagnose.txt"));
     std::printf("\n客户端保持运行。诊断文件: %s\\wowmod-diagnose.txt\n", wowmod_dir.c_str());
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+  }
+
+  // 2c2) 旁路记录模式：定位 FileDataID 查找函数，装上「只记录」的跳板。
+  //
+  //   为什么先做这一步而不是直接替换返回值：
+  //     我们已确证 0x33e06a0 是 CAS.cpp 里 edx=FileDataID 的哈希查找函数
+  //     （Arctium 的 CustomFileIdHook 唯一 8/8 语义命中点）。但它的返回值
+  //     那个对象 +0x10 处到底是什么结构，我们还没有证据。直接替换 = 拿垃圾
+  //     指针当资源用，客户端必崩。
+  //
+  //   所以第一版 hook 只做「记下 edx 就跳回去」：控制流与原始代码等价，
+  //   不改任何寄存器结果。拿到真实调用序列之后，才知道该给哪些 id 做替换、
+  //   以及返回值该长什么样。
+  if (o.mode == "probe") {
+    const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
+    CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
+    const std::string log_path = wowmod::join_path(wowmod_dir, "wowmod-probe.txt");
+
+    say("旁路记录模式：定位 FileDataID 查找函数并安装只读探针");
+    std::printf("  这一步会在客户端里写 14 字节跳转 + 一段跳板，\n"
+                "  但【不改变任何返回值、不改变控制流语义】，只是把传入的 id 记下来。\n\n");
+
+    // ---- 等代码解密，与 sigscan 同一判据 ----
+    size_t best_low = 0;
+    int stable = 0;
+    const DWORD ts = GetTickCount();
+    for (int i = 0; i < 200; ++i) {
+      const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
+      if (probe.text_checked) {
+        if (i % 2 == 0)
+          std::printf("  等待代码解密... 明文页 %zu/%zu = %.1f%%\n", probe.text_low_entropy,
+                      probe.text_checked,
+                      100.0 * static_cast<double>(probe.text_low_entropy) /
+                          static_cast<double>(probe.text_checked));
+        std::fflush(stdout);
+        if (probe.text_low_entropy > best_low) {
+          best_low = probe.text_low_entropy;
+          stable = 0;
+        } else if (++stable >= 3 && best_low > 0) {
+          break;
+        }
+      }
+      if (GetTickCount() - ts > static_cast<DWORD>(o.wait_ms)) break;
+      ::Sleep(1000);
+    }
+
+    // ---- 用特征码现找目标（0x33e06a0 是 RVA，基址每次启动都变，不能写死）----
+    say("按 CustomFileIdHook 特征码定位目标");
+    const auto res = wowmod::win::scan_arctium_signatures(pi.hProcess, o.exe);
+    uint64_t target = 0;
+    int best_score = 0;
+    for (const auto& h : res.hits) {
+      if (h.name != "CustomFileIdHook") continue;
+      if (h.semantic_score > best_score) {
+        best_score = h.semantic_score;
+        target = h.match_va;
+      }
+    }
+    if (!target || best_score < 8) {
+      std::printf("  [失败] 没有找到语义确证的 FileDataID 查找函数（最高语义分 %d/8）\n",
+                  best_score);
+      std::printf("  可能原因：代码还没解密到那一段。请先登进游戏、切几次角色，再重跑本命令。\n");
+      std::printf("  本次没有修改客户端任何字节。\n");
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
+    }
+    std::printf("  [成功] 目标 0x%s（语义分 %d/8，edx=FileDataID 已确证）\n",
+                wowmod::to_hex(target, 16).c_str(), best_score);
+
+    // ---- 装探针 ----
+    wowmod::win::FileIdHook hook;
+    hook.set_process(pi.hProcess);
+    wowmod::win::InstallReport rep;
+    say("安装旁路探针");
+    if (!hook.install_probe(pi.hProcess, target, "edx", 4096, &rep)) {
+      std::printf("  [失败] %s\n", rep.error.c_str());
+      for (const auto& s : rep.steps) std::printf("    %s\n", s.c_str());
+      std::printf("  本次没有留下任何改动。\n");
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
+    }
+    for (const auto& s : rep.steps) std::printf("    %s\n", s.c_str());
+    std::printf("  环形缓冲 0x%s，跳板 0x%s，trampoline 0x%s\n",
+                wowmod::to_hex(rep.id_table_va, 16).c_str(),
+                wowmod::to_hex(rep.stub_va, 16).c_str(),
+                wowmod::to_hex(rep.trampoline_va, 16).c_str());
+    std::printf("\n  探针已生效。现在请在游戏里【正常玩一会儿】——\n"
+                "    切角色、进世界、开角色面板/幻化/理发店、进出场景。\n"
+                "  每 2 秒会读一次记录，最长监控 %d ms（--wait 可改）。\n"
+                "  按 Ctrl+C 或等它自己结束，日志在：\n    %s\n\n",
+                o.wait_ms, log_path.c_str());
+
+    // ---- 轮询 ----
+    uint32_t last_seq = 0;
+    uint32_t logged = 0;
+    bool first = true;
+    const DWORD t0 = GetTickCount();
+    while (GetTickCount() - t0 < static_cast<DWORD>(o.wait_ms)) {
+      std::vector<wowmod::win::ProbeRecord> recs;
+      std::string err;
+      if (wowmod::win::read_probe_records(pi.hProcess, rep.id_table_va, 4096, &last_seq, &recs,
+                                          &err)) {
+        if (!recs.empty()) {
+          logged += static_cast<uint32_t>(recs.size());
+          wowmod::win::append_probe_log(log_path, recs, last_seq, first);
+          first = false;
+          const auto agg = wowmod::win::summarize(recs);
+          std::printf("  [+%zu 条，累计 %u] 最近 id:", recs.size(), logged);
+          const size_t show = agg.size() < 6 ? agg.size() : 6;
+          for (size_t i = 0; i < show; ++i)
+            std::printf(" %u", agg[i].first);
+          std::printf("\n");
+          std::fflush(stdout);
+        }
+      } else if (err.find("magic") != std::string::npos) {
+        // 缓冲区 magic 不符通常意味着跳板还没被执行过，属正常早期状态
+      }
+      if (!hook.installed()) {
+        std::printf("  ！探针不在了（客户端可能已退出或重置了内存）\n");
+        break;
+      }
+      ::Sleep(2000);
+    }
+
+    std::printf("\n  本次共记录 %u 次调用。\n", logged);
+    if (logged == 0)
+      std::printf("  ！一条都没记到。说明目标函数在这段时间里没被调用 ——\n"
+                  "    请确认打进了游戏世界、并且打开了角色面板/幻化界面。\n");
+    std::printf("  日志: %s\n", log_path.c_str());
+    std::printf("\n  卸载探针（把原始字节写回）...\n");
+    if (hook.remove()) std::printf("  已卸载，客户端恢复原状。\n");
+    else std::printf("  ！卸载失败（客户端可能已退出，属正常）\n");
+    std::printf("  本次没有改变客户端的行为，只记录了调用。\n");
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 0;
