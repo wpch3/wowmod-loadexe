@@ -3,6 +3,7 @@
 #ifdef _WIN32
 
 #include "windows/mod_loader.hpp"
+#include "windows/process_suspend.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -354,6 +355,46 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   step("hook 目标 0x" + to_hex(target, 16) + "（语义分 " + std::to_string(best) + "/8, 第 " +
        std::to_string(scan_round + 1) + " 轮命中）");
 
+  // ---- 3a. 【全进程挂起】----
+  //
+  // Arctium 的时序（src/Launcher.cs）：
+  //     WaitForUnpack(...)            <- 等 Init 特征码
+  //     PrepareAntiCrash()
+  //         NtSuspendProcess(handle)  <- 全进程挂起
+  //         ... 找并 queue 所有补丁 ...
+  //     NtResumeProcess(handle)
+  //     RemapAndPatch(...)            <- 写入
+  //
+  // 我们过去是边跑边写。客户端主线程随时可能执行到正在改的那几个字节，
+  // 哪怕窗口只有几微秒，命中半条指令就是 EXCEPTION_INTERNAL_ERROR。
+  // ThreadFreeze 只冻结我们枚举到的线程；NtSuspendProcess 由内核挂起
+  // 整个进程，语义更彻底。这里照抄。
+  //
+  // 失败不致命：拿不到挂起权限时退化成"仍然写，但只在写的那一瞬间冻结线程"
+  // （detour 内部本来就有 ThreadFreeze），并如实报告。
+  bool suspended = false;
+  {
+    std::string serr;
+    if (suspend_process(process, &serr)) {
+      suspended = true;
+      step("已全进程挂起（NtSuspendProcess），准备写入");
+    } else {
+      step("警告: 全进程挂起失败（" + serr + "），将依赖写入瞬间的线程冻结");
+    }
+  }
+  // 无论后面走哪条路径，函数返回前必须恢复进程。用守卫保证不漏。
+  struct ResumeGuard {
+    HANDLE p = nullptr;
+    bool active = false;
+    bool ok = false;
+    ~ResumeGuard() {
+      if (active && p) {
+        std::string e;
+        ok = resume_process(p, &e);
+      }
+    }
+  } resume_guard{process, suspended, false};
+
   // ---- 3b. 先【规划】NoJump（只读，不写）----
   //
   // 用户实测踩过：跳板装成功、NoJump 失败，结果是「改了内存但行为没变」——
@@ -533,6 +574,18 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   r.branch_patched = true;
   r.branch_count = branch_plan.applied_count;
   step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条");
+
+  // 显式恢复进程（守卫还会兜一次，但这里要能把失败报出来）
+  if (suspended) {
+    std::string rerr;
+    if (resume_process(process, &rerr)) {
+      step("已恢复进程（NtResumeProcess），客户端可以继续运行");
+      resume_guard.active = false;   // 交给守卫不要再恢复一次
+    } else {
+      r.error = "补丁已写入，但恢复进程失败: " + rerr + "（请手动结束客户端后重试）";
+      return r;
+    }
+  }
 
   r.ok = true;
   return r;

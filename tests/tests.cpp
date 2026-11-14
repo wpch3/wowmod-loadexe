@@ -5,6 +5,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -1223,6 +1224,46 @@ static void test_probe_stub() {
 //   未命中 -> xor eax,eax / ret 返回 0（【不】执行原始指令）
 // 最后一条是 x64sim 实际跑出来的，不是从源码读出来的直觉 ——
 // 源码里 0x33 `xor eax,eax` / 0x43 `ret` 就在未命中路径的末尾。
+// 安装时序的静态约束。
+//
+// 用户反复踩到的崩溃与"没生效"，根因都在【顺序】上：
+//   * 边跑边写 -> 命中半条指令 -> EXCEPTION_INTERNAL_ERROR
+//   * 先装跳板后判 NoJump -> 改了内存但行为没变
+// 这些没法在 Linux 上运行时验证（要真进程），但可以从源码结构上锁死：
+// 挂起必须在写入之前，恢复必须在所有写入之后，且必须用 RAII 保证不遗漏。
+static void test_mod_loader_ordering() {
+  group("mod_loader_ordering");
+  std::string src;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    if (in) src.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }
+  CHECK(!src.empty(), "应能读到 mod_loader.cpp");
+  if (src.empty()) return;
+
+  const size_t p_suspend = src.find("suspend_process(process, &serr)");
+  const size_t p_plan = src.find("plan_branch_patches(process, by_rva)");
+  const size_t p_hook = src.find("build_hook_jump(tramp_va)");
+  const size_t p_apply = src.find("apply_branch_patches(process, &branch_plan)");
+  const size_t p_resume = src.find("resume_process(process, &rerr)");
+
+  CHECK(p_suspend != std::string::npos, "必须调用 suspend_process");
+  CHECK(p_plan != std::string::npos, "必须调用 plan_branch_patches");
+  CHECK(p_hook != std::string::npos, "必须调用 build_hook_jump");
+  CHECK(p_apply != std::string::npos, "必须调用 apply_branch_patches");
+  CHECK(p_resume != std::string::npos, "必须调用 resume_process");
+
+  // 顺序：挂起 -> 规划 -> 写 hook -> 打 NoJump -> 恢复
+  CHECK(p_suspend < p_plan, "挂起必须在规划之前");
+  CHECK(p_plan < p_hook, "NoJump 规划必须在写 hook 之前（避免改了一半）");
+  CHECK(p_hook < p_apply, "hook 安装必须在 NoJump 写入之前");
+  CHECK(p_apply < p_resume, "恢复必须在所有写入之后");
+
+  // 必须有 RAII 守卫，保证异常/提前 return 时也会恢复
+  CHECK(src.find("struct ResumeGuard") != std::string::npos,
+        "必须有 ResumeGuard 保证进程被恢复（否则客户端会永久挂起）");
+}
+
 static void test_arctium_clone() {
   group("arctium_clone");
 
@@ -1974,6 +2015,7 @@ int main() {
   test_hooks();
   test_discover();
   test_x64_decode();
+  test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();
   test_fileid_stub();
