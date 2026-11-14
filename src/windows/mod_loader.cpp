@@ -12,6 +12,7 @@
 #include <map>
 #include <sstream>
 
+#include "windows/arctium_clone.hpp"
 #include "windows/arctium_patch.hpp"
 #include "windows/arctium_sig.hpp"
 #include "windows/detour.hpp"
@@ -24,6 +25,10 @@ namespace fs = std::filesystem;
 namespace wowmod {
 namespace win {
 namespace {
+
+// Arctium 的 hook 长度（13 字节）。放在这里而不是文件作用域，
+// 因为 arctium::kHookLen 在该命名空间里。
+constexpr size_t kArctiumHookLen = wowmod::arctium::kHookLen;
 
 std::string trim(const std::string& s) {
   size_t a = 0, b = s.size();
@@ -196,7 +201,7 @@ std::string format_mod_loader_report(const ModLoaderResult& r) {
 }
 
 ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir,
-                                   uint32_t wait_ms) {
+                                   uint32_t wait_ms, StubKind kind) {
   ModLoaderResult r;
   auto step = [&](const std::string& s) {
     r.steps.push_back(s);
@@ -317,7 +322,96 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   }
 
   // ---- 4. 装查表跳板（第二半）----
-  {
+  //
+  // 两条路径：
+  //   kArctium : 逐字节照抄 Arctium（12 字节表、50 字节固定 stub、
+  //              13 字节 hook、跳板 = stub + 原指令 + 跳回）
+  //   kNative  : 本项目生成器（16 字节表、命中直接 ret、未命中跳 trampoline）
+  // 默认走 kArctium，因为用户要的是「Arctium 能做什么就做到什么」。
+  if (kind == StubKind::kArctium) {
+    // 4a. 序列化表（12 字节/项）
+    std::vector<std::pair<uint64_t, std::string>> entries;
+    entries.reserve(data.entries.size());
+    for (const auto& e : data.entries) entries.emplace_back(e.file_data_id, e.game_path);
+    auto ser = arctium::serialize_arctium_mappings(entries);
+    if (ser.table.empty() || ser.strings.empty()) {
+      r.error = "序列化映射表失败（表或字符串块为空）";
+      return r;
+    }
+
+    // 4b. 两块内存：idAlloc(count*12) / stringAlloc(strings.size())
+    RemoteBlock id_blk(process, ser.table.size(), PAGE_READWRITE);
+    RemoteBlock str_blk(process, ser.strings.size(), PAGE_READWRITE);
+    if (!id_blk.ok() || !str_blk.ok()) {
+      r.error = "VirtualAllocEx 失败（id 表或字符串块）";
+      return r;
+    }
+    const uint64_t id_va = reinterpret_cast<uint64_t>(id_blk.addr());
+    const uint64_t str_va = reinterpret_cast<uint64_t>(str_blk.addr());
+
+    // 4c. 路径字段改成绝对地址后再整体写入
+    arctium::patch_string_addresses(&ser, str_va);
+    std::string werr;
+    if (!write_remote(process, str_va, ser.strings.data(), ser.strings.size(), &werr, false) ||
+        !write_remote(process, id_va, ser.table.data(), ser.table.size(), &werr, false)) {
+      r.error = "写入映射表失败: " + werr;
+      return r;
+    }
+    // 两块都收紧成只读（Arctium 原样）
+    DWORD oldp = 0;
+    VirtualProtectEx(process, id_blk.addr(), id_blk.size(), PAGE_READONLY, &oldp);
+    VirtualProtectEx(process, str_blk.addr(), str_blk.size(), PAGE_READONLY, &oldp);
+    step("映射表写入完成: " + std::to_string(ser.count) + " 项, 12 字节/项, id 表 @0x" +
+         to_hex(id_va, 16) + ", 字符串块 @0x" + to_hex(str_va, 16));
+
+    // 4d. 读 hook 点 13 字节原始指令（Arctium: memory.Read(hookAddress, 13)）
+    std::vector<uint8_t> orig(kArctiumHookLen, 0);
+    if (!read_remote(process, target, orig.data(), orig.size(), &werr)) {
+      r.error = "读取 hook 点 13 字节失败: " + werr;
+      return r;
+    }
+
+    // 4e. 跳板 = 50 字节 stub + 13 字节原指令 + 13 字节跳回
+    RemoteBlock tramp(process, 50 + 13 + 13, PAGE_EXECUTE_READWRITE);
+    if (!tramp.ok()) {
+      r.error = "VirtualAllocEx(跳板) 失败";
+      return r;
+    }
+    const uint64_t tramp_va = reinterpret_cast<uint64_t>(tramp.addr());
+
+    std::vector<uint8_t> code = arctium::build_arctium_stub(id_va, static_cast<uint32_t>(ser.count));
+    code.insert(code.end(), orig.begin(), orig.end());
+    auto back = arctium::build_hook_jump(target + kArctiumHookLen);
+    code.insert(code.end(), back.begin(), back.end());
+    if (!write_remote(process, tramp_va, code.data(), code.size(), &werr)) {
+      r.error = "写入跳板失败: " + werr;
+      return r;
+    }
+    DWORD oldx = 0;
+    VirtualProtectEx(process, tramp.addr(), tramp.size(), PAGE_EXECUTE_READ, &oldx);
+    step("跳板写入完成: " + std::to_string(code.size()) + " 字节 @0x" + to_hex(tramp_va, 16) +
+         "（50 stub + 13 原指令 + 13 跳回）");
+
+    // 4f. 在 hook 点写 13 字节跳转（Arctium 的 hookInstructions 原样）
+    auto hook = arctium::build_hook_jump(tramp_va);
+    DWORD oldh = 0;
+    VirtualProtectEx(process, reinterpret_cast<void*>(target), hook.size(),
+                     PAGE_EXECUTE_READWRITE, &oldh);
+    if (!write_remote(process, target, hook.data(), hook.size(), &werr)) {
+      r.error = "写入 hook 跳转失败: " + werr;
+      return r;
+    }
+    VirtualProtectEx(process, reinterpret_cast<void*>(target), hook.size(), oldh, &oldh);
+    FlushInstructionCache(process, reinterpret_cast<void*>(target), hook.size());
+    step("hook 已安装: 0x" + to_hex(target, 16) + " -> 0x" + to_hex(tramp_va, 16));
+
+    r.hook_installed = true;
+    r.hook_target = target;
+    r.id_table_va = id_va;
+    r.string_blob_va = str_va;
+    r.stub_va = tramp_va;
+    r.trampoline_va = target + kArctiumHookLen;
+  } else {
     InstallRequest req;
     req.hook_target = target;
     // ---- 寄存器选择的依据（全部来自用户上传的真实字节离线反汇编）----

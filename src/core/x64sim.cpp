@@ -246,6 +246,25 @@ SimResult run(const std::vector<uint8_t>& code, uint64_t va,
       continue;
     }
 
+    // ---- cmp r32, [base+index] : 39 /r SIB mod=00（Arctium: 42 39 14 09）----
+    if (op == 0x39 && (at(p + 1) >> 6) == 0 && (at(p + 1) & 7) == 4) {
+      const uint8_t modrm = at(p + 1);
+      const int reg = ((modrm >> 3) & 7) + R;
+      const uint8_t sib = at(p + 2);
+      const int index = ((sib >> 3) & 7) + X;
+      const int base = (sib & 7) + B;
+      const uint64_t addr = *c.reg(base) + *c.reg(index);
+      const uint32_t lhs = static_cast<uint32_t>(*c.reg(reg) & 0xFFFFFFFFull);
+      const uint32_t rhs = c.read32(addr);
+      c.zf = (lhs == rhs);
+      c.sf = (lhs < rhs);
+      c.cf = lhs < rhs;
+      tr << "  cmp r" << reg << "d, [r" << base << "+r" << index << "]=0x" << rhs;
+      c.rip = here + p + 3;
+      out.trace.push_back(tr.str());
+      continue;
+    }
+
     // ---- cmp id32, [base + index] : 3B /r with SIB mod=00 ----
     if (op == 0x3B && (at(p + 1) >> 6) == 0 && (at(p + 1) & 7) == 4) {
       const uint8_t modrm = at(p + 1);
@@ -262,6 +281,43 @@ SimResult run(const std::vector<uint8_t>& code, uint64_t va,
       c.cf = lhs < rhs;
       tr << "  cmp id32, [r" << base << " + r" << index << "] val=0x" << rhs;
       c.rip = here + p + 3;
+      out.trace.push_back(tr.str());
+      continue;
+    }
+
+    // ---- cmp eax, imm32 : 3D id ----
+    if (!rex && b0 == 0x3D) {
+      uint32_t imm = 0;
+      for (int i = 0; i < 4; ++i) imm |= static_cast<uint32_t>(at(1 + i)) << (8 * i);
+      const uint32_t lhs = static_cast<uint32_t>(c.rax & 0xFFFFFFFFull);
+      c.zf = (lhs == imm);
+      c.sf = (lhs < imm);
+      c.cf = lhs < imm;
+      tr << "  cmp eax, 0x" << std::hex << imm;
+      c.rip = here + 5;
+      out.trace.push_back(tr.str());
+      continue;
+    }
+
+    // ---- jcc rel32 : 0F 80..0F 8F cd（Arctium 的 js 用这条）----
+    if (!rex && b0 == 0x0F && (at(1) & 0xF0) == 0x80) {
+      const int cc = at(1) & 0x0F;
+      uint32_t rel = 0;
+      for (int i = 0; i < 4; ++i) rel |= static_cast<uint32_t>(at(2 + i)) << (8 * i);
+      bool take = false;
+      switch (cc) {
+        case 0x2: take = c.cf; break;
+        case 0x3: take = !c.cf; break;
+        case 0x4: take = c.zf; break;
+        case 0x5: take = !c.zf; break;
+        case 0x8: take = c.sf; break;
+        case 0x9: take = !c.sf; break;
+        default: return fail("不支持的 jcc32 cc=" + std::to_string(cc));
+      }
+      c.rip = take ? here + 6 + static_cast<int64_t>(static_cast<int32_t>(rel))
+                   : here + 6;
+      tr << "  jcc32(cc=" << cc << (take ? " taken" : " not") << ") -> 0x"
+         << std::hex << c.rip;
       out.trace.push_back(tr.str());
       continue;
     }

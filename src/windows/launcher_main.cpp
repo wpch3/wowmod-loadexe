@@ -319,6 +319,7 @@ struct Options {
   bool keep_client = true;
   bool detach = true;      // 默认：确认运行时起来后就退出，不占着控制台
   bool verbose = false;
+  bool stub_native = false;   // --stub native 时用本项目生成器
   // auto 模式默认只演练，不真的改客户端代码。
   // 为什么默认关：我们曾经把 hook 打到"崩溃日志格式化函数"上，
   // 一旦它被弄坏，游戏崩溃时崩溃处理器自己再挂 -> EXCEPTION_INTERNAL_ERROR。
@@ -553,6 +554,10 @@ int main(int argc, char** argv) {
     else if (a == "--wait-exit") o.detach = false;
     else if (a == "--no-detach") o.detach = false;
     else if (a == "--verbose") o.verbose = true;
+    else if (a == "--stub") {
+      const std::string v = next("arctium");
+      o.stub_native = (v == "native");
+    }
     else if (a == "--version") {
       std::printf("wowmod_loader build: %s\n", WOWMOD_LOADER_BUILD_TAG);
       std::printf("modes: observe auto hook analyze diagnose sigscan probe scout patch mods\n");
@@ -691,7 +696,13 @@ int main(int argc, char** argv) {
                 wowmod_dir.c_str(), wowmod_dir.c_str());
     std::fflush(stdout);
 
-    const auto r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms);
+    // 默认逐字节照抄 Arctium。--stub native 才用本项目生成器
+    // （16 字节表、命中直接 ret），后者已被 x64sim 验证但语义与 Arctium 不同。
+    const auto kind = o.stub_native ? wowmod::win::StubKind::kNative
+                                    : wowmod::win::StubKind::kArctium;
+    std::printf("  跳板实现: %s\n\n", o.stub_native ? "native（本项目生成器）"
+                                                     : "Arctium（逐字节照抄）");
+    const auto r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms, kind);
     const std::string text = wowmod::win::format_mod_loader_report(r);
     std::printf("\n%s", text.c_str());
     std::fflush(stdout);

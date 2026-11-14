@@ -248,3 +248,53 @@ Arctium.Api.Protocol.dll
 结论：真正的「引擎」是运行时按 `ModuleFeedConfiguration` **在线下载**的 Module，
 不在这个包里。上文第 1~4 节的机制来自旧版开源实现（那是同一套机制），
 并用用户上传的真实内存字节做了交叉验证。
+
+---
+
+## 7. 复刻实现（`src/core/arctium_clone.cpp`）
+
+不必再"参考"——代码已逐字节照抄。校验结果：
+
+| 项 | Arctium 源码 | 我们的产物 | 一致性 |
+|---|---|---|---|
+| stub 模板 | `ModLoader.cs` 的 50 字节 `asm` 数组 | `arctium_stub_template()` | **逐字节相同（memcmp == 0）** |
+| 回填位置 | 偏移 4 / 12 / 35 | 同 | 相同，且测试断言**三处之外一个字节都不许变** |
+| hook 长度 | 13 字节 | `build_hook_jump()` | **逐字节相同** |
+| hook 编码 | `48 B8 <u64> FF E0 90` | 同 | 相同 |
+| 表项步长 | `4 + 8 = 12` | `EntryLayout::kStride = 12` | 相同 |
+| 表项字段 | `[u32 id][u64 path]` | 同 | 相同 |
+| 两块内存 | `VirtualAllocEx` + `PAGE_READONLY` | 同 | 相同 |
+| 跳板布局 | `stub(50) + 原指令(13) + 跳回(13)` | 同 | 相同 |
+| NoJump | `{0,0,0,0}` 覆盖 rel32 | `apply_branch_patches` | 相同 |
+
+### 7.1 用 x64sim 跑出来的真实语义（不是读源码猜的）
+
+```
+命中第 0 项 -> ret，rax = 路径指针
+命中第 1 项 -> ret，rax = 路径指针
+命中第 2 项 -> ret，rax = 路径指针
+未命中    -> xor eax,eax / ret，rax = 0   （【不】执行原始指令）
+id == 0   -> 同上，返回 0
+id 为负   -> js 跳到 +50 执行原始指令（完全旁路）
+```
+
+**注意「未命中返回 0」**：这条与直觉不同。Arctium 的 `js` 只处理负 id，
+未命中走的是 `xor eax,eax / ret`。也就是说未命中的文件会得到空指针，
+由客户端自己处理（回退到 CASC）。
+
+### 7.2 两套实现的差异（可切换）
+
+`wowmod-load.cmd` 默认走 **Arctium 原版**。
+加 `--stub native` 可切到本项目生成器，后者：
+
+- 16 字节表项（对 CPU 更友好）
+- 未命中跳 `trampoline`（执行原始指令并回到原函数）
+- 已用 x64sim 验证 1096 项表的**最后一项**也能命中
+
+两套实现都有离线执行测试兜底（`tests/tests.cpp` 的
+`arctium_clone` 与 `fileid_stub_semantics` 两组）。
+
+### 7.3 仍然无法离线验证的部分
+
+客户端拿到路径指针后做什么（是否打开文件、是否走 CASC 回退）。
+这一层是客户端自己的代码，不在 Arctium 也不在我们手里。

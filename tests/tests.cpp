@@ -14,6 +14,7 @@
 #include "wowmod/arctium.hpp"
 #include "wowmod/fileid_stub.hpp"
 #include "wowmod/x64sim.hpp"
+#include "windows/arctium_clone.hpp"
 #include "wowmod/launcher_stub.hpp"
 #include "wowmod/x64_decode.hpp"
 #include "wowmod/xref.hpp"
@@ -1214,6 +1215,114 @@ static void test_probe_stub() {
 // 只看「能否解码」是不够的：字节全都能解码、但逻辑写错（比如循环上界用
 // 项数而不是字节数）照样会让 95% 的文件匹配不到，或者返回错指针直接崩。
 // 这里用 x64sim 把生成的跳板真的执行一遍，逐条比对结果。
+// Arctium 原版 stub 的行为验证（12 字节表布局）。
+//
+// 与我们的 16 字节 custom stub 不同，Arctium 的语义是：
+//   负 id  -> js 跳到 +50 执行原始指令（完全旁路）
+//   命中   -> 返回路径指针
+//   未命中 -> xor eax,eax / ret 返回 0（【不】执行原始指令）
+// 最后一条是 x64sim 实际跑出来的，不是从源码读出来的直觉 ——
+// 源码里 0x33 `xor eax,eax` / 0x43 `ret` 就在未命中路径的末尾。
+static void test_arctium_clone() {
+  group("arctium_clone");
+
+  // 1) stub 模板必须与 Arctium 源码的 asm 数组逐字节一致
+  {
+    const unsigned char orig[50] = {
+        0x85, 0xD2, 0x0F, 0x88, 0x72, 0xAF, 0xFF, 0xFF, 0x33, 0xC0, 0x49, 0xB9, 0x22,
+        0x22, 0x22, 0x22, 0x11, 0x11, 0x11, 0x11, 0x8D, 0x0C, 0x40, 0xC1, 0xE1, 0x02,
+        0x42, 0x39, 0x14, 0x09, 0x74, 0x0C, 0xFF, 0xC0, 0x3D, 0xEF, 0xBE, 0xAD, 0xDE,
+        0x72, 0xEB, 0x33, 0xC0, 0xC3, 0x4A, 0x8B, 0x44, 0x09, 0x04, 0xC3};
+    auto t = arctium::arctium_stub_template();
+    CHECK_EQ(t.size(), 50u);
+    CHECK(std::memcmp(t.data(), orig, 50) == 0, "stub 模板必须与 Arctium 源码逐字节一致");
+
+    // 回填必须只落在三处：偏移 4(4B) / 12(8B) / 35(4B)，其余字节一个都不许变
+    auto s = arctium::build_arctium_stub(0x1111111122222222ULL, 1096, 42);
+    for (int i = 0; i < 50; ++i) {
+      const bool in_slot = (i >= 4 && i < 8) || (i >= 12 && i < 20) || (i >= 35 && i < 39);
+      if (!in_slot) {
+        CHECK(s[i] == orig[i], "回填不得改动三处占位之外的任何字节");
+        if (s[i] != orig[i]) break;
+      }
+    }
+    // 三处占位的值必须真的写进去了
+    int32_t js = 0;
+    uint64_t alloc = 0;
+    uint32_t cnt = 0;
+    std::memcpy(&js, s.data() + 4, 4);
+    std::memcpy(&alloc, s.data() + 12, 8);
+    std::memcpy(&cnt, s.data() + 35, 4);
+    CHECK_EQ(js, 42);
+    CHECK_EQ(alloc, 0x1111111122222222ULL);
+    CHECK_EQ(cnt, 1096u);
+  }
+
+  // 2) 13 字节 hook 跳转
+  {
+    auto j = arctium::build_hook_jump(0xAABBCCDDEEFF0011ULL);
+    const unsigned char want[13] = {0x48, 0xB8, 0x11, 0x00, 0xFF, 0xEE, 0xDD,
+                                    0xCC, 0xBB, 0xAA, 0xFF, 0xE0, 0x90};
+    CHECK_EQ(j.size(), 13u);
+    CHECK(std::memcmp(j.data(), want, 13) == 0, "hook 必须是 48 B8 <u64> FF E0 90");
+  }
+
+  // 3) 12 字节表布局 + 路径改写
+  {
+    std::vector<std::pair<uint64_t, std::string>> e = {
+        {100, "Character/Human/Female/A.BLP"}, {200, "Character\\Orc\\B.blp"}};
+    auto m = arctium::serialize_arctium_mappings(e);
+    CHECK_EQ(m.table.size(), 24u);          // 2 * 12
+    CHECK_EQ(m.count, 2u);
+    uint32_t id0 = 0;
+    std::memcpy(&id0, m.table.data(), 4);
+    CHECK_EQ(id0, 100u);
+    // 路径必须小写 + 正斜杠 + NUL 结尾
+    const std::string s0(reinterpret_cast<const char*>(m.strings.data()));
+    CHECK_EQ(s0, std::string("character/human/female/a.blp"));
+    arctium::patch_string_addresses(&m, 0x50000000ULL);
+    uint64_t abs0 = 0;
+    std::memcpy(&abs0, m.table.data() + 4, 8);
+    CHECK_EQ(abs0, 0x50000000ULL);
+  }
+
+  // 4) 用 x64sim 执行 Arctium 原版 stub，核对三条路径的真实行为
+  {
+    const uint64_t base = 0x1000000ULL;
+    const uint32_t ids[3] = {100, 200, 300};
+    auto run_case = [&](uint32_t id, int expect_slot, const char* what) {
+      const size_t head = 50 + 13 + 13;
+      const uint64_t tbl = base + head + 16;
+      const uint64_t strp = tbl + 3 * 12 + 0x40;
+      std::vector<uint8_t> mem(head + 16 + 3 * 12 + 0x40 + 0x200, 0);
+      auto stub = arctium::build_arctium_stub(tbl, 3, 42);
+      std::memcpy(mem.data(), stub.data(), 50);
+      for (int i = 0; i < 13; ++i) mem[50 + i] = 0x90;   // 原始指令用 nop 桩
+      auto back = arctium::build_hook_jump(0xDEADBEEFULL);
+      std::memcpy(mem.data() + 63, back.data(), 13);
+      for (uint32_t i = 0; i < 3; ++i) {
+        std::memcpy(mem.data() + (tbl - base) + i * 12, &ids[i], 4);
+        const uint64_t p = strp + i * 0x20;
+        std::memcpy(mem.data() + (tbl - base) + i * 12 + 4, &p, 8);
+      }
+      const auto r = x64sim::run(mem, base, 0, id, 0, 0, 0x100000ULL);
+      if (expect_slot >= 0) {
+        CHECK(r.stop == x64sim::Stop::kReturn, std::string("应 ret: ") + what);
+        CHECK_EQ(r.returned, strp + static_cast<uint64_t>(expect_slot) * 0x20);
+      } else {
+        // 未命中：Arctium 返回 0（xor eax,eax / ret），不执行原始指令
+        CHECK(r.stop == x64sim::Stop::kReturn, std::string("应 ret 0: ") + what);
+        CHECK_EQ(r.returned, 0ull);
+      }
+    };
+    run_case(100, 0, "命中第 0 项");
+    run_case(200, 1, "命中第 1 项");
+    run_case(300, 2, "命中第 2 项");
+    run_case(999, -1, "未命中返回 0");
+    run_case(0, -1, "id=0 未命中返回 0");
+  }
+}
+
 static void test_fileid_stub_semantics() {
   group("fileid_stub_semantics");
 
@@ -1865,6 +1974,7 @@ int main() {
   test_hooks();
   test_discover();
   test_x64_decode();
+  test_arctium_clone();
   test_fileid_stub_semantics();
   test_fileid_stub();
   test_probe_stub();

@@ -70,12 +70,23 @@ struct ModLoaderResult {
   size_t branch_count = 0;
 };
 
+// 跳板实现选择。
+enum class StubKind {
+  // 逐字节照抄 Arctium：12 字节表项、50 字节固定 stub、
+  // 未命中返回 0、负 id 执行原始指令。
+  kArctium,
+  // 本项目生成器：16 字节表项、命中走 ret、未命中跳 trampoline。
+  // 已被 x64sim 逐条验证（含 1096 项表的最后一项）。
+  kNative,
+};
+
 // 完整安装：读数据 -> 装查表跳板 -> 打 NoJump。
 //
 // wait_ms 用于等代码解密；12.0.7 的 .text 是按页惰性解密的，
 // 在密文上扫描得到的命中是随机字节，必须等到明文比例足够。
 ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir,
-                                   uint32_t wait_ms);
+                                   uint32_t wait_ms,
+                                   StubKind kind = StubKind::kArctium);
 
 std::string format_mod_loader_report(const ModLoaderResult& r);
 

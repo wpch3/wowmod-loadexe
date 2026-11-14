@@ -46,6 +46,7 @@ LM=("$(obj src/windows/launcher_main.cpp)" "$(obj src/windows/remote_load.cpp)" 
     "$(obj src/windows/detour.cpp)" "$(obj src/windows/fd_hook.cpp)" \
     "$(obj src/windows/scan_images.cpp)" "$(obj src/windows/arctium_sig.cpp)" \
     "$(obj src/windows/arctium_patch.cpp)" "$(obj src/windows/mod_loader.cpp)" \
+    "$(obj src/core/arctium_clone.cpp)" "$(obj src/core/x64sim.cpp)" \
     "$(obj src/windows/fs_scan.cpp)" "$(obj src/windows/probe_reader.cpp)" "$(obj src/windows/crash_evidence.cpp)")
 "$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod_loader.exe" \
   "${CORE[@]}" "${LM[@]}" "${LINK[@]}" -Wl,--subsystem,console
