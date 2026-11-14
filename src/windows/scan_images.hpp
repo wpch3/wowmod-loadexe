@@ -93,8 +93,13 @@ struct ModuleDump {
   std::string error;
   std::vector<std::string> sections;   // 每节的 "名称 VA 大小 类型"，供报告
   // ---- 解密进度度量（用来判断"现在抓是不是太早"）----
-  size_t text_checked = 0;   // 采样的可执行页数
+  size_t text_checked = 0;   // 采样中【成功读到且非空白】的可执行页数
   size_t text_low_entropy = 0;  // 其中熵估算 < 7.0 的页数（= 明文代码）
+  // 读取覆盖率统计。分母必须包含读不到/空白的页，
+  // 否则"142/142"这种数字会被误读成"100% 解密"，实际是"只读到了 142 页"。
+  size_t text_pages_total = 0;      // 尝试采样的页数
+  size_t text_pages_unreadable = 0; // 读不出来（未提交/不可访问）
+  size_t text_pages_blank = 0;      // 读到但全零/全同字节
 };
 
 // 用 4 KB 采样页估算可执行段里有几成已经是明文。

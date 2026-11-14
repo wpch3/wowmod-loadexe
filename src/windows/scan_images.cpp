@@ -381,6 +381,16 @@ size_t read_into(HANDLE process, uint64_t addr, std::vector<uint8_t>* buf, size_
 
 }  // namespace
 
+// 判断一页是否"空白"（全 0 或全同一个字节）。
+// 这类页不是明文代码，是未映射/未初始化/占位。
+static bool is_blank_page(const uint8_t* p, size_t n) {
+  if (!n) return true;
+  const uint8_t first = p[0];
+  for (size_t i = 1; i < n; ++i)
+    if (p[i] != first) return false;
+  return true;
+}
+
 // 估算一段字节的位熵（0..8）。密文页≈8.0，x64 明文代码≈6.0~6.6。
 static double byte_entropy(const uint8_t* p, size_t n) {
   if (!n) return 0.0;
@@ -562,8 +572,27 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
     std::vector<uint8_t> page(0x1000);
     for (size_t p = 0; p < pages; p += stride) {
       const uint64_t at = base + va + static_cast<uint64_t>(p) * 0x1000;
-      if (read_into(process, at, &page, 0, 0x1000) < 0x1000) continue;
+      // 【分母必须是"尝试过的页"，不是"读成功的页"】。
+      //
+      // 曾经写成 `read 失败就 continue，然后 text_checked++`，
+      // 于是读不出来的页不进分母 —— 用户日志里就出现了
+      //     明文页 142/142   （100%，看起来解密完美）
+      // 而上一版是 142/260。142/142 的真实含义是：
+      //     "能读到的 142 页全都是零 / 全同字节，熵 < 7 -> 判成明文"，
+      // 分母里根本没有那些读不出来的页。
+      // 这不是解密进度，是读取覆盖率 —— 两个完全不同的东西。
+      out.text_pages_total++;
+      if (read_into(process, at, &page, 0, 0x1000) < 0x1000) {
+        out.text_pages_unreadable++;
+        continue;
+      }
       out.text_checked++;
+      // 全零 / 全同字节不算"明文代码"，它是未映射或未初始化。
+      // 不排除掉的话，读取覆盖率低的区域会被误判成"100% 明文"。
+      if (is_blank_page(page.data(), 0x1000)) {
+        out.text_pages_blank++;
+        continue;
+      }
       if (byte_entropy(page.data(), 0x1000) < 7.0) out.text_low_entropy++;
     }
   }

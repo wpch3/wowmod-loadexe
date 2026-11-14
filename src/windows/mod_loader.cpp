@@ -210,22 +210,19 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     std::fflush(stdout);
   };
 
-  // ---- 1. 等客户端初始化（用 Arctium 的判据，不用熵估算）----
+  const int kNeedScore = 6;   // 满分 8；6 分 = 三个手指印里至少命中两个
+
+  // ---- 1. 等客户端可扫（判据用【命中】，不靠任何间接指标）----
   //
-  // 这里换掉了之前那套「明文页比例」判据。原因：
+  // 走过的弯路（都记在这，别再重复）：
+  //   a) 明文页比例 >= 50%   -> 惰性解密下永远达不到
+  //   b) Init 特征码必须出现 -> 用户实测 5 轮都是"未出现"，直接卡死，
+  //      而且此时 5 个特征码里可能已经有能命中的了
+  //   c) 分母只算读成功的页 -> 报出 142/142 的假象（其实是读到 142 页全零）
   //
-  //   12.0.7 的 .text 惰性解密，实测明文页稳定在 138~139 就不再涨，
-  //   占比远低于我们设的阈值。那是个【间接指标】，而且在你机器上
-  //   永远达不到 —— 于是每次都误报"未就绪"。
-  //
-  // Arctium 的做法（src/Launcher.cs WaitForUnpack）是【直接指标】：
-  //     while (initOffset == 0)
-  //         initOffset = Read(...).FindPattern(Patterns.Windows.Init)
-  //   —— 等那条 Init 特征码出现。客户端初始化完就成立，
-  //      不要求用户先进到登录界面。
-  //
-  // 我们照做：反复扫 Init，出现即认为可以继续。
-  // 熵估算只用来打印进度和做最后兜底，不再作为门槛。
+  // 现在的判据只有一条：**目标特征码命中了吗**。
+  // Init 只用来打印进度，不作为门槛 —— Arctium 用它是因为它对
+  // 自己的客户端有效；对我们的客户端不成立就不该当阻塞条件。
   bool ready = false;
   size_t best_low = 0, last_checked = 0;
   const DWORD t0 = GetTickCount();
@@ -234,23 +231,37 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     const auto sig = scan_arctium_signatures(process, "");
     bool init_found = false;
     uint64_t init_va = 0;
+    int round_best = 0;
+    uint64_t round_target = 0;
+    size_t hits_n = 0;
     for (const auto& h : sig.hits) {
       if (h.name == "Init" && h.has_rx) {
         init_found = true;
         init_va = h.match_va;
-        break;
+      }
+      if (h.name == "CustomFileIdHook") {
+        ++hits_n;
+        if (h.has_rx && h.semantic_score > round_best) {
+          round_best = h.semantic_score;
+          round_target = h.match_va;
+        }
       }
     }
     const auto probe = dump_module_full(process, "", "");
     if (probe.text_checked) {
       best_low = probe.text_low_entropy;
-      last_checked = probe.text_checked;
+      last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
     }
-    std::printf("  第 %d 轮: Init 特征码 %s, 明文页 %zu/%zu\n", init_round + 1,
-                init_found ? ("已出现 @" + to_hex(init_va, 16)).c_str() : "未出现", best_low,
-                last_checked);
+    std::printf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | Init %s | "
+                "明文页 %zu/%zu (不可读 %zu, 空白 %zu) | CustomFileIdHook %zu 处, 最佳 %d/8\n",
+                init_round + 1, sig.images_scanned,
+                static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
+                init_found ? "有" : "无", best_low, last_checked,
+                probe.text_pages_unreadable, probe.text_pages_blank, hits_n, round_best);
     std::fflush(stdout);
-    if (init_found) {
+
+    // 唯一门槛：目标特征码够分。Init 只做参考。
+    if (round_target && round_best >= kNeedScore) {
       ready = true;
       break;
     }
@@ -259,13 +270,13 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     ++init_round;
   }
   if (!ready) {
-    r.error = "等待期内始终没看到 Init 特征码（客户端未完成初始化）。"
-              "明文页 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
-              "。请让客户端正常启动到登录界面后重跑。";
+    r.error = "等待期内 CustomFileIdHook 始终没有达到 " + std::to_string(kNeedScore) +
+              "/8 的可执行命中（客户端未走到文件加载代码，或扫描范围未覆盖代码段）。"
+              "请看上面每轮打印的【扫了多少 MB】—— 若明显小于客户端体积，就是范围问题。";
     return r;
   }
-  step("客户端已初始化（Init 特征码出现, 第 " + std::to_string(init_round + 1) +
-       " 轮; 明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) + " 页）");
+  step("客户端可扫（第 " + std::to_string(init_round + 1) + " 轮开始，明文 " +
+       std::to_string(best_low) + "/" + std::to_string(last_checked) + " 页）");
 
   // ---- 2. 读数据 ----
   const auto data = load_mappings(wowmod_dir);
@@ -295,7 +306,7 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   uint64_t target = 0;
   int best = 0;
   bool best_rx = false;
-  const int kNeedScore = 6;   // 满分 8；6 分 = 三个手指印里至少命中两个
+
   const DWORD scan_t0 = GetTickCount();
   int scan_round = 0;
   for (;;) {
@@ -321,7 +332,8 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
                 scan_round + 1, sig.images_scanned,
                 static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0), hits_n, round_best);
     if (cands == 0) {
-      std::printf("          （0 命中 ≠ 没解密 —— 而是这块内存里根本没有目标函数）\n");
+      std::printf("          （0 命中 ≠ 没解密 —— 而是这些区域里没有目标函数。"
+                  "若下面 MB 数明显小于客户端体积，说明扫描范围没覆盖到代码段）\n");
     }
     std::fflush(stdout);
 

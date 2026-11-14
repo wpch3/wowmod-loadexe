@@ -1231,6 +1231,56 @@ static void test_probe_stub() {
 //   * 先装跳板后判 NoJump -> 改了内存但行为没变
 // 这些没法在 Linux 上运行时验证（要真进程），但可以从源码结构上锁死：
 // 挂起必须在写入之前，恢复必须在所有写入之后，且必须用 RAII 保证不遗漏。
+// 解密进度统计的两个陷阱。
+//
+// 用户日志里出现过「明文页 142/142」，看起来 100% 解密，
+// 实际是：分母只统计了【读成功】的页，而那 142 页全是零/空白。
+// 这类"看起来很好的数字"最危险 —— 它会让人以为方向对了。
+static void test_plain_page_accounting() {
+  group("plain_page_accounting");
+  std::string src;
+  {
+    std::ifstream in("src/windows/scan_images.cpp", std::ios::binary);
+    if (in) src.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }
+  CHECK(!src.empty(), "应能读到 scan_images.cpp");
+  if (src.empty()) return;
+
+  // 分母必须单独计数
+  CHECK(src.find("text_pages_total++") != std::string::npos,
+        "必须有独立的 text_pages_total 作为分母");
+  CHECK(src.find("text_pages_unreadable++") != std::string::npos,
+        "读不出来的页必须单独统计，不能静默丢弃");
+  CHECK(src.find("text_pages_blank++") != std::string::npos,
+        "空白页必须单独统计");
+  CHECK(src.find("is_blank_page") != std::string::npos,
+        "必须有 is_blank_page —— 全零页的熵也是 0，会被误判成明文");
+
+  // 顺序：必须先判 blank 再判熵，否则全零页会被算成明文
+  const size_t p_blank = src.find("is_blank_page(page.data()");
+  const size_t p_ent = src.find("out.text_low_entropy++", p_blank == std::string::npos ? 0 : p_blank);
+  CHECK(p_blank != std::string::npos, "采样循环里必须调用 is_blank_page");
+  CHECK(p_ent != std::string::npos && p_blank < p_ent,
+        "必须先排除空白页，再统计明文页");
+
+  // mod_loader 的就绪判据不能把 Init 当硬门槛
+  std::string ml;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    if (in) ml.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }
+  CHECK(!ml.empty(), "应能读到 mod_loader.cpp");
+  if (!ml.empty()) {
+    // 错误写法：if (!init_found) return r;  或 ready = init_found;
+    CHECK(ml.find("if (!init_found)") == std::string::npos,
+          "Init 不能作为阻塞条件（我们对这个客户端实测 5 轮都没有）");
+    CHECK(ml.find("ready = init_found") == std::string::npos, "Init 不能决定就绪");
+    // 正确写法：命中分够了才就绪
+    CHECK(ml.find("round_best >= kNeedScore") != std::string::npos,
+          "就绪判据应该是目标特征码命中分达标");
+  }
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -2015,6 +2065,7 @@ int main() {
   test_hooks();
   test_discover();
   test_x64_decode();
+  test_plain_page_accounting();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();
