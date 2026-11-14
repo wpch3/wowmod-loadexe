@@ -1,29 +1,38 @@
 @echo off
 rem ===========================================================================
-rem  wowmod 一键准备模组数据
+rem  wowmod - prepare mod data (one click)
 rem
-rem  这一步做什么：
-rem    把你的【完整模组目录】（例如 _midnight_\Character 那棵 21 个种族的树）
-rem    变成 Arctium 机制要求的两个东西：
-rem      wowmod\mappings\mod.txt    每行 "FileDataID;Character/BloodElf/Female/xxx.blp"
-rem      wowmod\files\              实际文件，保持同样相对路径
+rem  What this does:
+rem    Turn a full mod folder (e.g. _midnight_\Character with 21 races)
+rem    into the two things the Arctium mechanism needs:
+rem      wowmod\mappings\mod.txt    one line per file: <FileDataID>;<game path>
+rem      wowmod\files\              the actual files, same relative layout
 rem
-rem  为什么要这一步：
-rem    客户端只认 FileDataID，不认文件名。它拿到一个 id，去查表，
-rem    表里没有就当成"CASC 里没这个资源"。所以必须先把路径换算成 id。
-rem    手工查两百多个文件不现实，这里全自动。
+rem  Why this is required:
+rem    The client only knows FileDataID. It never scans your folder tree.
+rem    A loose .blp sitting in the game root is invisible to it.
+rem    So every path must first be translated into a FileDataID.
 rem
-rem  安全性：
-rem    只读取你的模组目录，不修改/不移动/不删除任何东西。
-rem    files\ 里默认用【硬链接】而不是复制 —— 同一份贴图不占两份空间。
+rem  Safety:
+rem    Read-only with respect to your mod folder. Nothing is moved or deleted.
+rem    files\ uses hard links by default, so a 12MB texture is not stored twice.
 rem
-rem  用法：双击。第一次会让你选模组目录（或把目录拖到本文件上）。
+rem  Usage: double-click, then pick your mod folder. You can also drag a
+rem         folder onto this file.
 rem ===========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
+rem %~dp0 always ends with a backslash. Passing that straight into a
+rem command line means the final backslash escapes the closing quote, and the
+rem argument arrives as  ..._midnight_"   <- literally a quote character.
+rem That is what produced WinError 123. So keep a backslash-free copy.
 set "WM_DIR=%~dp0"
+set "WM_HOME=%~dp0"
+rem Use delayed expansion for the trailing-backslash test: with %VAR% the
+rem closing quote after a backslash gets escaped and cmd reports a syntax error.
+if "!WM_HOME:~-1!"=="\" set "WM_HOME=!WM_HOME:~0,-1!"
 set "WM_LF=%WM_DIR%.lf\wow-listfile.csv"
 set "WM_MOD=%~1"
 
@@ -58,7 +67,7 @@ if defined WM_MOD if exist "%WM_MOD%" (
 )
 set "WM_MOD="
 
-rem 先猜：游戏目录下的 Character 就是完整模组最常见的形态
+rem Character
 for %%D in (
   "D:\Midnight Open Beta\_midnight_\Character"
   "D:\Midnight Open Beta\Character"
@@ -86,7 +95,7 @@ echo.
 rem ------------------------------------------------ 3. 扫描 + 生成
 echo   [3/4] scanning and building mappings ...
 echo.
-python "%WM_DIR%tools\build-mod-mappings.py" --mod "!WM_MOD!" --listfile "%WM_LF%" --out "%WM_DIR%"
+python "%WM_DIR%tools\build-mod-mappings.py" --mod "!WM_MOD!" --listfile "%WM_LF%" --out "%WM_HOME%"
 set "WM_RC=!errorlevel!"
 echo.
 

@@ -1,12 +1,12 @@
 @echo off
 rem ===========================================================================
-rem  wowmod 一键导出（WoW 12.0.7 明文主模块）
+rem  wowmod 一键导出(WoW 12.0.7 明文主模块)
 rem
-rem  为什么需要这个：客户端 .text 是按 4KB 页【惰性解密】的，
-rem  只有游戏真正执行到的代码页才是明文。所以必须【先进游戏玩一会儿】再抓，
-rem  否则导出的 113MB 里九成还是密文（上一版只拿到 9.6%）。
+rem  为什么需要这个:客户端 .text 是按 4KB 页【惰性解密】的,
+rem  只有游戏真正执行到的代码页才是明文。所以必须【先进游戏玩一会儿】再抓,
+rem  否则导出的 113MB 里九成还是密文(上一版只拿到 9.6%)。
 rem
-rem  用法：双击本文件，照屏幕提示操作，不需要输入任何命令。
+rem  用法:双击本文件,照屏幕提示操作,不需要输入任何命令。
 rem  也可以把游戏 exe 直接拖到本文件图标上。
 rem ===========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
@@ -28,7 +28,7 @@ if not exist "%WM_LOADER%" goto nofiles
 if not exist "%WM_RT%" goto nofiles
 
 rem ------------------------------------------------- 0. 先确认客户端没在运行
-rem 客户端已经在跑的话，再启一个会被它拉起来，拿到的可能不是新进程的主模块。
+rem 客户端已经在跑的话,再启一个会被它拉起来,拿到的可能不是新进程的主模块。
 tasklist /nh 2>nul | findstr /i "wow" | findstr /v /i "wowmod" >nul
 if not errorlevel 1 (
   echo   [提示] 检测到 WoW 客户端正在运行。
@@ -40,7 +40,7 @@ if not errorlevel 1 (
 rem ------------------------------------------------- 1. 找游戏 exe
 if defined WM_GAME if exist "%WM_GAME%" goto gotexe
 
-rem 注意：cmd 的 for %%F in (通配符) 不会展开通配符，必须借 dir /b 取。
+rem 注意:cmd 的 for %%F in (通配符) 不会展开通配符,必须借 dir /b 取。
 set "WM_GAME="
 for %%D in (
   "D:\Midnight Open Beta\_midnight_"
@@ -63,7 +63,7 @@ echo   没能自动找到游戏 exe，请在弹出的窗口里手动选择。
 echo   （一般叫 "WoW 12.0.7 - Firestorm.exe"，在 _midnight_ 文件夹内）
 echo.
 for /f "usebackq delims=" %%L in (`powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms|Out-Null; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='选择 WoW 客户端 exe'; $d.Filter='WoW (*.exe)|*.exe'; if($d.ShowDialog() -eq 'OK'){Write-Output $d.FileName}" 2^>nul ^| findstr /r ".exe$"`) do set "WM_GAME=%%L"
-rem 上面依赖 System.Windows.Forms 自动加载；若弹窗没出来，退回手动输入。
+rem 上面依赖 System.Windows.Forms 自动加载;若弹窗没出来,退回手动输入。
 if not defined WM_GAME (
   echo   [提示] 弹窗不可用。请把客户端 exe 的完整路径粘贴到这里，然后回车：
   set /p "WM_GAME=  路径: "
@@ -86,10 +86,10 @@ echo.
 
 rem ------------------------------------------------- 3. 说清楚要做什么
 rem 这段中文提示改用 PowerShell 输出。
-rem 原因：cmd.exe 在 chcp 65001 下解析【较长的 UTF-8 echo 行】会错位
-rem （实测：同一个块里第 2，4 行正常，最长的第 1，3 行被当成命令执行，
-rem  报 "'回切几个角色…' is not recognized"）。换成 powershell 写，
-rem 与代码页无关，彻底绕开这个问题。
+rem 原因:cmd.exe 在 chcp 65001 下解析【较长的 UTF-8 echo 行】会错位
+rem (实测:同一个块里第 2,4 行正常,最长的第 1,3 行被当成命令执行,
+rem  报 "'回切几个角色…' is not recognized")。换成 powershell 写,
+rem 与代码页无关,彻底绕开这个问题。
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
   "Write-Host '';" ^
   "Write-Host '==============================================================';" ^

@@ -1,23 +1,24 @@
 @echo off
 rem ===========================================================================
-rem  下载公开 listfile（一次就好）
+rem  Download the public listfile (once)
 rem
-rem  这是做什么的：
-rem    tools\build-mod-mappings.py 需要一张「路径 -> FileDataID」对照表，
-rem    才能把你模组里的 .blp/.m2 换算成游戏认识的 id。
-rem    那张表来自公开仓库 wowdev/wow-listfile 的 parts\*.csv。
+rem  What this does:
+rem    tools\build-mod-mappings.py needs a "path -> FileDataID" table to turn
+rem    your .blp/.m2 files into ids the client understands.
+rem    That table comes from the public repo wowdev/wow-listfile (parts\*.csv).
 rem
-rem  为什么要单独下：
-rem    你模组里的路径很多，完整对照表约 147 MB/227 万条。
-rem    把它塞进发布包不合适（下载慢/还经常变），所以做成按需拉取。
+rem  Why it is a separate step:
+rem    The full table is about 147 MB and 2.27 million lines. Shipping it in
+rem    the package would make every download slow, and it changes over time.
 rem
-rem  网络要求：能访问 github.com。只需要跑一次，之后一直可用。
+rem  Network: needs github.com. Run once, then it stays available.
+rem  Use /auto to run without any pause (called by wowmod-mod.cmd).
 rem ===========================================================================
 setlocal EnableExtensions
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
-rem /auto: 由 wowmod-mod.cmd 调用时静默运行，不 pause、不等待。
+rem /auto: wowmod-mod.cmd pause
 set "WM_AUTO="
 if /i "%~1"=="/auto" set "WM_AUTO=1"
 
@@ -43,7 +44,7 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/wowdev/wow-li
 if errorlevel 1 goto clipfail
 
 pushd "%WM_TMP%"
-rem 注意：sparse-checkout set 是【破坏性】的，必须一次把所有路径列全。
+rem sparse-checkout set
 git sparse-checkout set --no-cone "/parts/*.csv"
 if errorlevel 1 goto sparsefail
 popd

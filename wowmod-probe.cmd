@@ -1,17 +1,17 @@
 @echo off
 rem ===========================================================================
-rem  wowmod 一键旁路记录（FileDataID 探针）
+rem  wowmod 一键旁路记录(FileDataID 探针)
 rem
-rem  这一步做什么：
-rem    在客户端的 FileDataID 查找函数（RVA 0x33e06a0，CAS.cpp，
-rem    Arctium 的 CustomFileIdHook 目标）上装一个「只记录」的跳板。
+rem  这一步做什么:
+rem    在客户端的 FileDataID 查找函数(RVA 0x33e06a0,CAS.cpp,
+rem    Arctium 的 CustomFileIdHook 目标)上装一个"只记录"的跳板。
 rem
-rem  安全性：
-rem    只记录传入的 id，然后原样执行被搬走的指令并跳回。
-rem    不改变返回值，不改变控制流，不改变任何寄存器结果。
-rem    退出时会把原始字节写回。最坏情况是日志不准，不会影响客户端加载资源。
+rem  安全性:
+rem    只记录传入的 id,然后原样执行被搬走的指令并跳回。
+rem    不改变返回值,不改变控制流,不改变任何寄存器结果。
+rem    退出时会把原始字节写回。最坏情况是日志不准,不会影响客户端加载资源。
 rem
-rem  用法：双击本文件，照提示在游戏里正常玩一会儿。
+rem  用法:双击本文件,照提示在游戏里正常玩一会儿。
 rem ===========================================================================
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul 2>&1

@@ -79,6 +79,46 @@ def load_listfile(paths):
     return table
 
 
+def normalize_key(path):
+    """把路径规范化成 listfile 的比较键。
+
+    实测中发现的三种不一致（都来自用户手上真实模组）：
+      1. 文件名里混进了空格： "goblinfemalenakedpelvisskin00_ 12_hd.blp"
+         —— 空格来自打包工具的失误，游戏里没有这种名字，必须去掉。
+      2. 大小写不同：listfile 里同一个资源既可能是 .BLP 也可能是 .blp。
+      3. 后缀差异：模组给的是 "xxx.blp"，listfile 里只有 "xxx_HD.blp"
+         （HD 皮肤是独立 FileDataID，官方并非总是同时登记两个名字）。
+    所以比较时统一：小写 + 去空格 + 反斜杠转正斜杠。
+    """
+    return path.replace("\\", "/").replace(" ", "").strip().lower()
+
+
+def lookup_variants(table, rel):
+    """按 prio 顺序尝试几个变体，返回 (id, 命中的键) 或 (None, None)。
+
+    顺序很重要：精确匹配优先，其次才是"加/去 _HD"这类推断。
+    推断出来的映射会单独统计并打印，绝不和精确匹配混在一起 ——
+    用户必须知道哪些是猜的，否则贴图错了根本无从排查。
+    """
+    k = normalize_key(rel)
+    if k in table:
+        return table[k], k, "exact"
+
+    # HD 后缀的有无。只在这一个维度上推断，不做别的模糊匹配：
+    # 别的推断（比如改数字）都是凭空猜，猜错就是别的部位变样。
+    cands = []
+    if k.endswith(".blp"):
+        base = k[: -len(".blp")]
+        if base.endswith("_hd"):
+            cands.append(base[: -len("_hd")] + ".blp")
+        else:
+            cands.append(base + "_hd.blp")
+    for c in cands:
+        if c in table:
+            return table[c], c, "hd_variant"
+    return None, None, None
+
+
 def walk_mod(mod_root):
     """遍历模组树，返回 {游戏相对路径: 绝对磁盘路径}。
 
@@ -162,17 +202,29 @@ def main():
               file=sys.stderr)
         return 2
 
-    matched, missing = [], []
+    matched, missing, inferred = [], [], []
     for rel in sorted(files):
-        fid = table.get(rel.lower())
+        fid, hit_key, how = lookup_variants(table, rel)
         if fid is None:
             missing.append(rel)
         else:
             matched.append((fid, rel))
+            if how != "exact":
+                inferred.append((rel, hit_key, fid, how))
 
     print(f"==> 对 listfile")
     print(f"    匹配到 FileDataID: {len(matched)}")
     print(f"    找不到 id:        {len(missing)}")
+
+    if inferred:
+        print(f"    其中 {len(inferred)} 个是靠推断得到的（精确路径在 listfile 里没有）:")
+        for rel, key, fid, how in inferred[:15]:
+            print(f"      {rel}")
+            print(f"        -> {key}  = {fid}   [{how}]")
+        if len(inferred) > 15:
+            print(f"      ... 还有 {len(inferred) - 15} 个")
+        print("    推断的依据只有「_HD 后缀的有无」这一个维度。若模型出现错位/串色，")
+        print("    优先检查这几条。")
 
     if missing:
         print("\n    以下文件在公开 listfile 里没有 id（不会生效，但也不影响其它文件）:")
@@ -219,6 +271,14 @@ def main():
         f.write("# 由 tools/build-mod-mappings.py 生成\n")
         f.write(f"# 模组: {args.mod}\n")
         f.write(f"# 格式: <FileDataID>;<游戏相对路径>  (Arctium 兼容)\n")
+        if inferred:
+            f.write(f"# 注意: 其中 {len(inferred)} 条是靠 _HD 后缀推断得到的：\n")
+            for rel, key, fid, how in inferred:
+                f.write(f"#   {fid} <- {rel}  (实际匹配 {key})\n")
+        # 不能在这行后面追加 "# inferred"：加载器按第一个 ';' 切分，
+        # 注释会直接成为路径的一部分，那条映射反而永远匹配不上。
+        # 推断明细只写在文件头，不放进行内。
+        inferred_set = {r for r, _k, _f, _h in inferred}
         for fid, rel in matched:
             f.write(f"{fid};{rel}\n")
     print(f"    {len(matched)} 条")

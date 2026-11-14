@@ -87,6 +87,17 @@ for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmo
 done
 echo "   echo 行标点检查通过"
 
+echo "==> 检查 rem 行的全角标点"
+# rem 不是 echo 的例外：chcp 65001 下 cmd.exe 对 rem 行里的全角逗号/分号
+# 同样会错位，把后半句当命令执行（"'认识的' is not recognized"）。
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd tools/fetch-listfile.cmd; do
+  [ -f "$_f" ] || continue
+  if grep -qiE $'^[[:space:]]*rem[^\r]*(\xe3\x80\x8c|\xe3\x80\x81|\xef\xbc\x8c|\xef\xbc\x9b|\xe3\x80\x8d|\xef\xbc\x88|\xef\xbc\x89|\xef\xbc\x9a)' "$_f"; then
+    fail "$_f 的 rem 行含全角标点，cmd.exe 会把它后面的内容当命令执行"
+  fi
+done
+echo "   rem 行标点检查通过"
+
 echo "==> 检查一键旁路脚本"
 [ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
 grep -aq -- "--mode probe" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有调用 --mode probe"
