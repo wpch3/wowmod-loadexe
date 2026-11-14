@@ -280,7 +280,7 @@ static double byte_entropy(const uint8_t* p, size_t n) {
 }
 
 ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
-                            const std::string& out_path) {
+                            const std::string& out_path, bool sample) {
   ModuleDump out;
   out.path = out_path;
 
@@ -382,8 +382,12 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
   }
 
   // 5) 采样 .text，估算明文比例（供调用方判断导出时机）。
-  //    只读第一页就知道内容可用不可用，代价远低于整块 113 MB。
-  for (uint16_t i = 0; i < nsec && sec_off + i * 40 + 40 <= hdr.size(); ++i) {
+  //    只读选中的页就知道内容可用不可用，代价远低于整块 113 MB。
+  //
+  //    注意：out_path 为空且调用方只想知道"能不能定位函数"时，
+  //    这 256 页的读取依然要花时间（跨进程读 64 个页 = 几十毫秒到几百毫秒）。
+  //    所以探测模式下由调用方用 sample=false 关掉它，避免每秒拖慢客户端。
+  for (uint16_t i = 0; i < nsec && sample && sec_off + i * 40 + 40 <= hdr.size(); ++i) {
     const uint8_t* s = hdr.data() + sec_off + i * 40;
     const uint32_t ch = rd32(s + 36);
     if (!(ch & 0x20000000u)) continue;  // 只看可执行段

@@ -33,7 +33,7 @@ for f in src/core/*.cpp; do CORE+=("$(obj "$f")"); done
 
 echo "==> wowmod_rt.dll（运行时分析 + hook 安装）"
 RT=()
-for f in src/windows/rt_dll.cpp src/windows/rt_entry.cpp src/windows/detour.cpp src/windows/fd_hook.cpp src/windows/scan_images.cpp src/windows/probe_reader.cpp; do
+for f in src/windows/rt_dll.cpp src/windows/rt_entry.cpp src/windows/detour.cpp src/windows/fd_hook.cpp src/windows/scan_images.cpp src/windows/probe_reader.cpp src/windows/crash_evidence.cpp; do
   RT+=("$(obj "$f")")
 done
 "$ZIG" c++ -target x86_64-windows-gnu -shared -Wl,--strip-all -o "$DIST/wowmod_rt.dll" \
@@ -45,7 +45,7 @@ LM=("$(obj src/windows/launcher_main.cpp)" "$(obj src/windows/remote_load.cpp)" 
     "$(obj src/windows/remote_analyze.cpp)" "$(obj src/windows/diagnose.cpp)" \
     "$(obj src/windows/detour.cpp)" "$(obj src/windows/fd_hook.cpp)" \
     "$(obj src/windows/scan_images.cpp)" "$(obj src/windows/arctium_sig.cpp)" \
-    "$(obj src/windows/fs_scan.cpp)" "$(obj src/windows/probe_reader.cpp)")
+    "$(obj src/windows/fs_scan.cpp)" "$(obj src/windows/probe_reader.cpp)" "$(obj src/windows/crash_evidence.cpp)")
 "$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod_loader.exe" \
   "${CORE[@]}" "${LM[@]}" "${LINK[@]}" -Wl,--subsystem,console
 

@@ -59,6 +59,7 @@ struct Detour {
   std::string name;
   bool installed = false;
   bool dry_run = false;   // 只验证未真正打补丁（演练模式）
+  int frozen_threads = 0; // 打补丁时临时挂起的线程数（用于报告）
 };
 
 // 安装 detour：

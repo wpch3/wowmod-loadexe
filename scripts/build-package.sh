@@ -30,8 +30,8 @@ done
 
 echo "==> 检查 loader 能力标记"
 # 这三条是脚本与 exe 的「握手协议」，缺一条就说明版本不匹配。
-grep -aq "sigscan-dump-v7" "$ROOT/wowmod_loader.exe" \
-  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v7"
+grep -aq "sigscan-dump-v8" "$ROOT/wowmod_loader.exe" \
+  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v8"
 grep -aq "modes: observe auto hook analyze diagnose sigscan" "$ROOT/wowmod_loader.exe" \
   || fail "wowmod_loader.exe 不含模式清单（--version 会失败）"
 grep -aq "未知模式" "$ROOT/wowmod_loader.exe" \
@@ -92,7 +92,7 @@ trap 'rm -rf "$STAGE" "$VERIFY"' EXIT
 a=$(md5sum "$VERIFY/wowmod_loader.exe" | cut -d' ' -f1)
 b=$(md5sum "$DIST/wowmod_loader.exe" | cut -d' ' -f1)
 [ "$a" = "$b" ] || fail "zip 里的 loader 与 dist 不一致"
-grep -aq "sigscan-dump-v7" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
+grep -aq "sigscan-dump-v8" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
 grep -aq "sigscan" "$VERIFY/scripts/wowmod-start.ps1" || fail "zip 里的脚本没有 sigscan 菜单"
 [ -f "$VERIFY/wowmod-dump.cmd" ] || fail "zip 里缺 wowmod-dump.cmd"
 grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump.cmd 内容不完整"
@@ -100,5 +100,5 @@ grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump
 
 echo
 echo "OK  $ZIP  ($(stat -c%s "$ZIP") 字节)"
-echo "    loader build tag: sigscan-dump-v7"
+echo "    loader build tag: sigscan-dump-v8"
 echo "    用户可用 \`wowmod_loader.exe --version\` 自查版本"

@@ -96,7 +96,7 @@ struct ModuleDump {
 // 所以"明文页比例不再上升"就是一个可靠的导出时机信号，
 // 比固定 Sleep 靠谱 —— 之前 dump 只有 9.6% 明文就是这么来的。
 ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
-                            const std::string& out_path);
+                            const std::string& out_path, bool sample = true);
 
 // 只探测（不保留内容），用于轮询判断"解密完成没有"。
 bool process_has_client_markers(HANDLE process, std::string* first_marker);

@@ -72,6 +72,13 @@ bool write_remote_paged(HANDLE process, uint64_t addr, const void* buf, size_t n
                         std::string* err, bool flush_icache) {
   const uint8_t* src = static_cast<const uint8_t*>(buf);
   size_t done = 0;
+  // 每段写完后暂存「地址/长度/原保护」，全部写完再统一恢复。
+  struct PendingRestore {
+    uint64_t addr;
+    size_t len;
+    DWORD old;
+  };
+  std::vector<PendingRestore> pending;
   while (done < n) {
     const uint64_t cur = addr + done;
     const uint64_t page = cur & ~static_cast<uint64_t>(0xFFF);
@@ -155,8 +162,18 @@ bool write_remote_paged(HANDLE process, uint64_t addr, const void* buf, size_t n
     const bool ok =
         WriteProcessMemory(process, reinterpret_cast<void*>(cur), src + done, max_here, &wrote) &&
         wrote == max_here;
-    DWORD ignored = 0;
-    VirtualProtectEx(process, reinterpret_cast<void*>(cur), max_here, old, &ignored);
+    // 【关键】不要在块内立刻恢复保护。
+    //
+    // 早期实现是在这里就 VirtualProtectEx(... old ...) 恢复的，并且
+    // FlushInstructionCache 放在整个循环之后 —— 结果是一条 14 字节的跳转
+    // 如果跨页，第一页的写入会在第一页保护被恢复之后才被刷进指令缓存，
+    // 而那时该页已经不再可写；PAGE_EXECUTE_WRITECOPY 的语义更麻烦：
+    // 恢复保护后，之前那次"写时复制"的私有副本有可能被丢弃，
+    // 于是客户端执行到的是一个【被改了一半的函数头】。
+    // 实测后果就是游戏内 EXCEPTION_INTERNAL_ERROR / 0xC00000E5。
+    //
+    // 正确顺序：所有页都写完 -> 逐页恢复原保护 -> FlushInstructionCache。
+    pending.push_back({cur, max_here, old});
     if (!ok) {
       if (err) {
         char b[192];
@@ -168,7 +185,13 @@ bool write_remote_paged(HANDLE process, uint64_t addr, const void* buf, size_t n
     }
     done += max_here;
   }
+
+  // 先刷新指令缓存，再恢复保护 —— 顺序反了就可能刷到旧字节。
   if (flush_icache) FlushInstructionCache(process, reinterpret_cast<void*>(addr), n);
+  for (const auto& pr : pending) {
+    DWORD ignored = 0;
+    VirtualProtectEx(process, reinterpret_cast<void*>(pr.addr), pr.len, pr.old, &ignored);
+  }
   return true;
 }
 
@@ -245,6 +268,57 @@ bool write_remote_code(HANDLE process, const std::vector<uint8_t>& code, RemoteB
   return true;
 }
 
+namespace {
+
+// 在写入 14 字节跳转期间挂起目标进程的所有其它线程。
+//
+// 为什么必须做：14 字节的绝对跳转（48 B8 <imm64> FF E0）不是原子写。
+// 客户端是多线程的，只要有线程在我们写到一半时执行到这条指令的开头，
+// 就会拿到一条非法指令 -> EXCEPTION_INTERNAL_ERROR / 0xC00000E5。
+// 实测就是这么崩的：跳板本身没错，错在"改代码的时候没让别人执行这段代码"。
+//
+// 标准做法：SuspendThread 所有其它线程 -> 写 -> FlushInstructionCache -> ResumeThread。
+// 单个线程最长挂起时间只有几毫秒，不会触发客户端的看门狗。
+class ThreadFreeze {
+ public:
+  explicit ThreadFreeze(HANDLE process) : pid_(GetProcessId(process)) {}
+  ~ThreadFreeze() { thaw(); }
+
+  int freeze() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    const DWORD self = GetCurrentThreadId();
+    if (Thread32First(snap, &te)) {
+      do {
+        if (te.th32OwnerProcessID != pid_) continue;
+        if (te.th32ThreadID == self) continue;
+        HANDLE t = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+        if (!t) continue;
+        if (SuspendThread(t) != static_cast<DWORD>(-1)) threads_.push_back(t);
+        else CloseHandle(t);
+      } while (Thread32Next(snap, &te));
+    }
+    CloseHandle(snap);
+    return static_cast<int>(threads_.size());
+  }
+
+  void thaw() {
+    for (HANDLE t : threads_) {
+      ResumeThread(t);
+      CloseHandle(t);
+    }
+    threads_.clear();
+  }
+
+ private:
+  DWORD pid_ = 0;
+  std::vector<HANDLE> threads_;
+};
+
+}  // namespace
+
 bool install_detour(HANDLE process, uint64_t target, uint64_t entry_stub, size_t min_bytes,
                     Detour* out, std::string* err, bool dry_run) {
   if (!process || !target || !entry_stub || !out) {
@@ -312,7 +386,27 @@ bool install_detour(HANDLE process, uint64_t target, uint64_t entry_stub, size_t
     out->dry_run = true;
     return true;
   }
-  if (!write_remote(process, target, jump.data(), jump.size(), err)) return false;
+  // 写跳转必须原子：先冻结其它线程，写完刷缓存，再恢复。
+  {
+    ThreadFreeze freeze(process);
+    const int n = freeze.freeze();
+    out->frozen_threads = n;
+    if (!write_remote(process, target, jump.data(), jump.size(), err)) {
+      freeze.thaw();
+      return false;
+    }
+    FlushInstructionCache(process, reinterpret_cast<void*>(target), jump.size());
+    // 回读校验：写进去的字节必须真的在那儿。写时复制/保护恢复出错时，
+    // 这里能当场发现，而不是等到客户端执行到一半才崩。
+    std::vector<uint8_t> verify(jump.size(), 0);
+    if (!read_remote(process, target, verify.data(), verify.size(), err) ||
+        std::memcmp(verify.data(), jump.data(), jump.size()) != 0) {
+      if (err) *err = "跳转写入后回读校验失败（写入没有生效）";
+      freeze.thaw();
+      return false;
+    }
+    freeze.thaw();
+  }
 
   out->trampoline = std::move(code);
   out->installed = true;
@@ -321,7 +415,28 @@ bool install_detour(HANDLE process, uint64_t target, uint64_t entry_stub, size_t
 
 bool remove_detour(HANDLE process, Detour* d, std::string* err) {
   if (!process || !d || !d->installed) return false;
-  if (!write_remote(process, d->target, d->original.data(), d->original.size(), err)) return false;
+  // 卸载同样必须原子：客户端还在跑的时候把 14 字节写回去，
+  // 别的线程只要读到一个混合态就是非法指令。安装时踩过这个坑，卸载不能重犯。
+  {
+    ThreadFreeze freeze(process);
+    freeze.freeze();
+    if (!write_remote(process, d->target, d->original.data(), d->original.size(), err)) {
+      freeze.thaw();
+      return false;
+    }
+    FlushInstructionCache(process, reinterpret_cast<void*>(d->target), d->original.size());
+    freeze.thaw();
+  }
+  // 回读确认已经恢复成原始字节
+  {
+    std::vector<uint8_t> verify(d->original.size(), 0);
+    std::string verr;
+    if (read_remote(process, d->target, verify.data(), verify.size(), &verr) &&
+        std::memcmp(verify.data(), d->original.data(), d->original.size()) != 0) {
+      if (err) *err = "卸载后回读与原始字节不一致";
+      return false;
+    }
+  }
   d->installed = false;
   d->trampoline.release();
   return true;

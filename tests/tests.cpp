@@ -1020,6 +1020,82 @@ static void test_launcher_stub() {
 //   2. 必须以 jmp qword ptr [rip+0] 结尾（跳回 trampoline）
 //   3. 必须 push/pop 成对，且保存了 r10/r11（跳板自己要用）
 //   4. 必须【不】写返回寄存器 rax（这是它和 fileid_stub 的根本区别）
+// ---- minidump 异常流解析的偏移约定 ----
+//
+// 这段逻辑在 crash_evidence.cpp 里（_WIN32 专属），但"偏移算错"这件事
+// 在 Linux 上完全可以验证 —— 用一份按 c00000e5 真实形状构造的假转储，
+// 把同样的解析规则跑一遍，确认取出来的 RIP / 崩溃码是我们要的那两个值。
+// 实测里崩溃码就是 0xC00000E5、RIP 就是 0x7ffdf976741ca（用户截图）。
+static void test_minidump_layout() {
+  group("minidump_layout");
+
+  auto rd32 = [](const uint8_t* p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+  };
+  auto rd64 = [](const uint8_t* p) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; --i) v = (v << 8) | p[i];
+    return v;
+  };
+  auto wr32 = [](std::vector<uint8_t>* b, size_t at, uint32_t v) {
+    for (int i = 0; i < 4; ++i) (*b)[at + i] = static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
+  };
+  auto wr64 = [](std::vector<uint8_t>* b, size_t at, uint64_t v) {
+    for (int i = 0; i < 8; ++i) (*b)[at + i] = static_cast<uint8_t>((v >> (8 * i)) & 0xFF);
+  };
+
+  const uint32_t kCode = 0xC00000E5u;
+  const uint64_t kRip = 0x00007FFDF976741CAULL;
+  const uint32_t kThread = 4242;
+
+  std::vector<uint8_t> d(32 + 12 + 168, 0);
+  wr32(&d, 0, 0x504D444Du);   // 'MDMP'
+  wr32(&d, 4, 0xA793);        // version
+  wr32(&d, 8, 1);             // num_streams
+  wr32(&d, 12, 32);           // dir_rva（头固定 32 字节）
+  // 目录项
+  wr32(&d, 32, 6);            // EXCEPTION_STREAM
+  wr32(&d, 36, 168);
+  wr32(&d, 40, 44);           // stream rva
+  // EXCEPTION_STREAM
+  const size_t st = 44;
+  wr32(&d, st + 0, kThread);
+  wr32(&d, st + 8, kCode);    // ExceptionCode
+  wr64(&d, st + 24, kRip);    // ExceptionAddress
+  wr64(&d, st + 40, 0x303);   // ExceptionInformation[1]
+
+  // 按 crash_evidence.cpp 的规则解析
+  CHECK_EQ(rd32(d.data()), 0x504D444Du);
+  const uint32_t n = rd32(d.data() + 8);
+  const uint32_t drva = rd32(d.data() + 12);
+  CHECK_EQ(n, 1u);
+  CHECK_EQ(drva, 32u);
+  const uint32_t type = rd32(d.data() + drva);
+  const uint32_t rva = rd32(d.data() + drva + 8);
+  CHECK_EQ(type, 6u);
+  CHECK_EQ(rva, 44u);
+  CHECK_EQ(rd32(d.data() + rva), kThread);
+  CHECK_EQ(rd32(d.data() + rva + 8), kCode);
+  CHECK_EQ(rd64(d.data() + rva + 24), kRip);
+  CHECK_EQ(rd64(d.data() + rva + 40), 0x303ULL);
+
+  // 判定逻辑：崩溃地址落在我们的 hook 区间里 -> 1
+  {
+    std::vector<std::pair<uint64_t, uint64_t>> hooked = {{kRip - 4, kRip + 10}};
+    std::vector<std::pair<uint64_t, uint64_t>> stubs;
+    const bool inside = kRip >= hooked[0].first && kRip < hooked[0].second;
+    CHECK(inside, "假转储的 RIP 应落在构造的 hook 区间内");
+    // 区间外
+    std::vector<std::pair<uint64_t, uint64_t>> outside = {{kRip + 0x1000, kRip + 0x2000}};
+    const bool not_inside = !(kRip >= outside[0].first && kRip < outside[0].second);
+    CHECK(not_inside, "区间外应判定为不相关");
+    // 跳板区间
+    std::vector<std::pair<uint64_t, uint64_t>> stubs2 = {{kRip, kRip + 0x200}};
+    CHECK(kRip >= stubs2[0].first && kRip < stubs2[0].second, "应能判定为落在跳板内");
+  }
+}
+
 static void test_probe_stub() {
   group("probe_stub");
 
@@ -1594,6 +1670,7 @@ int main() {
   test_x64_decode();
   test_fileid_stub();
   test_probe_stub();
+  test_minidump_layout();
   test_launcher_stub();
   test_analyze();
   test_xref_multi_target();

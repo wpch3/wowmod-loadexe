@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v7"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v8"
 #endif
 #include <tlhelp32.h>
 
@@ -54,6 +54,7 @@
 #include "windows/remote_load.hpp"
 #include "windows/arctium_sig.hpp"
 #include "windows/probe_reader.hpp"
+#include "windows/crash_evidence.hpp"
 #include "windows/fd_hook.hpp"
 #include "windows/fs_scan.hpp"
 #include "wowmod/json.hpp"
@@ -659,6 +660,7 @@ int main(int argc, char** argv) {
   //   不改任何寄存器结果。拿到真实调用序列之后，才知道该给哪些 id 做替换、
   //   以及返回值该长什么样。
   if (o.mode == "probe") {
+    bool g_client_died = false;
     const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
     CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
     const std::string log_path = wowmod::join_path(wowmod_dir, "wowmod-probe.txt");
@@ -672,9 +674,12 @@ int main(int argc, char** argv) {
     int stable = 0;
     const DWORD ts = GetTickCount();
     for (int i = 0; i < 200; ++i) {
+      // 探测模式只关心"函数所在页解出来没有"，不需要每轮采样 256 页 ——
+      // 跨进程读 64 个页会明显拖慢刚启动的客户端。这里每 3 轮采一次。
+      if (i % 3 != 0) { ::Sleep(1000); continue; }
       const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
       if (probe.text_checked) {
-        if (i % 2 == 0)
+        if (i % 6 == 0)
           std::printf("  等待代码解密... 明文页 %zu/%zu = %.1f%%\n", probe.text_low_entropy,
                       probe.text_checked,
                       100.0 * static_cast<double>(probe.text_low_entropy) /
@@ -764,11 +769,33 @@ int main(int argc, char** argv) {
       } else if (err.find("magic") != std::string::npos) {
         // 缓冲区 magic 不符通常意味着跳板还没被执行过，属正常早期状态
       }
-      if (!hook.installed()) {
-        std::printf("  ！探针不在了（客户端可能已退出或重置了内存）\n");
+      // 客户端还活着吗？如果进程没了，先别急着报"探针不在了"，
+      // 而是把崩溃现场查清楚 —— 这比任何猜测都有价值。
+      DWORD code = 0;
+      if (!GetExitCodeProcess(pi.hProcess, &code) || code != STILL_ACTIVE) {
+        std::printf("\n  ！客户端已退出（exit code 0x%08X）\n", code);
+        g_client_died = true;
         break;
       }
       ::Sleep(2000);
+    }
+
+    // ---- 崩溃取证：客户端如果死了，判定崩溃点是不是我们改的字节 ----
+    if (g_client_died || logged == 0) {
+      const auto ev = wowmod::win::find_latest_illegal_instruction_crash(o.workdir);
+      std::vector<std::pair<uint64_t, uint64_t>> hooked = {{target, target + 14}};
+      std::vector<std::pair<uint64_t, uint64_t>> stubs = {
+          {rep.stub_va, rep.stub_va + 0x200},
+          {rep.trampoline_va, rep.trampoline_va + 0x100}};
+      const int verdict = wowmod::win::classify_crash_address(ev, hooked, stubs);
+      std::printf("\n== 崩溃现场判定 ==\n");
+      std::printf("%s", wowmod::win::describe_crash_verdict(ev, verdict).c_str());
+      if (g_client_died)
+        std::printf("  说明: 本次 hook 区间 [0x%s, 0x%s)，跳板 0x%s，trampoline 0x%s\n",
+                    wowmod::to_hex(target, 16).c_str(),
+                    wowmod::to_hex(target + 14, 16).c_str(),
+                    wowmod::to_hex(rep.stub_va, 16).c_str(),
+                    wowmod::to_hex(rep.trampoline_va, 16).c_str());
     }
 
     std::printf("\n  本次共记录 %u 次调用。\n", logged);
@@ -776,9 +803,13 @@ int main(int argc, char** argv) {
       std::printf("  ！一条都没记到。说明目标函数在这段时间里没被调用 ——\n"
                   "    请确认打进了游戏世界、并且打开了角色面板/幻化界面。\n");
     std::printf("  日志: %s\n", log_path.c_str());
-    std::printf("\n  卸载探针（把原始字节写回）...\n");
-    if (hook.remove()) std::printf("  已卸载，客户端恢复原状。\n");
-    else std::printf("  ！卸载失败（客户端可能已退出，属正常）\n");
+    if (!g_client_died) {
+      std::printf("\n  卸载探针（把原始字节写回）...\n");
+      if (hook.remove()) std::printf("  已卸载，客户端恢复原状。\n");
+      else std::printf("  ！卸载失败，请直接结束客户端进程。\n");
+    } else {
+      std::printf("  客户端已退出，无需卸载。\n");
+    }
     std::printf("  本次没有改变客户端的行为，只记录了调用。\n");
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
