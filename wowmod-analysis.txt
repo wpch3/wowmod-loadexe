@@ -1,0 +1,319 @@
+wowmod 分析报告
+================
+分析基址: 0x0000000003b90000
+读取大小: 113565696 字节
+命中标记: 5 个（首个: Locally overridden files）
+
+映像大小 108.30 MB, 基址 0x0000000003b90000
+
+== 0) 数据布局 ==
+  原始数据是【内存布局】（RVA 可直接当偏移用），无需重映射。
+
+== 1) 已知字符串与交叉引用 ==
+  找到 13 处标记字符串，但没有任何 RIP 相对代码引用：
+      [overridden files] rva=0x35c4898
+      [CASC] rva=0x3914c88
+      [CASC] rva=0x3c544e1
+      [FileDataID] rva=0x378b563
+      [FileDataID] rva=0x3794d1f
+      [FileDataID] rva=0x37a069f
+      [FileDataID] rva=0x3a2229c
+      [FileDataID] rva=0x3a229dd
+      [FileDataID] rva=0x3a46b0c
+      [FileDataID] rva=0x3abbaa8
+      [FileDataID] rva=0x3ae1b85
+      [FileDataID] rva=0x3af886f
+      ...
+  → 字符串确实在映像里，只是没有被 lea/mov 直接引用。
+    可能是经字符串表/哈希间接取址，或引用用的是 32 位绝对地址。
+  [Locally overridden files] rva=0x35c4890 引用 1 处
+      0x33e18aa  lea -> 目标
+      函数起点 0x33e1890
+  [.flavor.info] rva=0x39719e0 引用 1 处
+      0x2c4d7b1  lea -> 目标
+
+== 2) hook 点方案（按函数起点） ==
+  fn=0x33e1890 (标记: Locally overridden files) 可 hook=是 覆盖 15 字节 — 可用：覆盖 15 字节完整指令
+      +0x33e1890  40 53 
+      +0x33e1892  56 
+      +0x33e1893  41 56 
+      +0x33e1895  48 81 ec 40 01 00 00 
+      +0x33e189c  4c 8b f2 
+      +0x33e189f  4c 8d 8c 24 60 01 00 00 
+      +0x33e18a7  48 8b f1 
+      +0x33e18aa  48 8d 15 df 2f 1e 00                     ; -> 0000000007154890
+
+== 2b) 目标函数语义风险（重要） ==
+  下面这些函数只是【引用了那个字符串】。字符串出现在哪里，决定了这个
+  函数是什么性质 —— 一旦 hook 错，轻则无效、重则崩溃：
+
+  「Locally overridden files」在 12.0.7 里出现在【崩溃日志】里
+  （crash dump 会打印 'Locally overridden files' 再逐行列出覆盖的文件）。
+  也就是说引用它的函数多半是【崩溃/诊断报告格式化函数】，不是资源加载路径。
+
+  实测佐证：曾经 hook 过这个函数（rva=0x33e1890），结果
+    - 整个游戏流程里它被调用 0 次（正常路径根本不走）
+    - 客户端随后报 EXCEPTION_INTERNAL_ERROR / 0xC00000E5
+  因为崩溃处理器自己被打坏了，连崩溃日志都写不出来。
+
+  结论：这类目标【不要用来做功能 hook】。它只适合在确认安全后用来
+  观察 ABI（仍需 --apply 显式开启）。
+
+== 3) 推荐 detour 目标（每个引用标记字符串的函数一条） ==
+  fn=0x33e1890 [Locally overridden files] 可 hook 覆盖 15 字节 — 可用：覆盖 15 字节完整指令
+
+== 4) FileDataID 查找函数候选 ==
+发现 16 个 FileDataID 查找候选（按可信度排序）
+[0] score=45 fn=+0x33de3b9 cmp=+0x33de400 scale=8  cmp 使用 [base + idx*8], base=r10, idx=r8
+      +0x33de3f0: 8b 47 08 
+      +0x33de3f3: 48 8d 4a ff 
+      +0x33de3f7: 48 d1 f9 
+      +0x33de3fa: 4c 8b c1 
+      +0x33de3fd: 4d 03 c0 
+      +0x33de400: 43 39 44 c2 08 
+      +0x33de405: 7d 15 
+      +0x33de407: 43 0f 10 04 c2 
+      +0x33de40c: 48 03 d2 
+      +0x33de40f: 41 0f 11 04 d2 
+      +0x33de414: 48 8b d1 
+      +0x33de417: 48 3b cb 
+      +0x33de41a: 7f d4 
+      +0x33de41c: 0f 10 07 
+      +0x33de41f: 48 8b 5c 24 08 
+[1] score=45 fn=+0x19f4f92 cmp=+0x19f4fb4 scale=4  cmp 使用 [base + idx*4], base=r1, idx=r0
+      +0x19f4fa4: ef 
+      +0x19f4fa5: 52 
+      +0x19f4fa6: 6d 
+      +0x19f4fa7: ad 
+      +0x19f4fa8: 2c 14 
+      +0x19f4faa: 79 30 
+      +0x19f4fac: 49 23 27 
+      +0x19f4faf: cd 1f 
+      +0x19f4fb1: 8e 30 
+      +0x19f4fb3: f7 39 
+      +0x19f4fb5: 8c 81 70 bc a2 cb 
+      +0x19f4fbb: af 
+      +0x19f4fbc: fd 
+      +0x19f4fbd: df 8f ef b2 c3 7d 
+      +0x19f4fc3: c4 ea d9 88 aa 65 45 22 f9 
+      +0x19f4fcc: b6 6b 
+      +0x19f4fce: 5d 
+      +0x19f4fcf: 70 ef 
+      +0x19f4fd1: 15 15 c6 84 e5 
+[2] score=45 fn=+0x1a1507a cmp=+0x1a150af scale=4  cmp 使用 [base + idx*4], base=r3, idx=r1
+      +0x1a1509f: b8 01 48 8d 93 
+      +0x1a150a4: a0 01 00 00 4c 8b 0a 4d 85 
+      +0x1a150ad: c9 
+      +0x1a150ae: 74 39 
+      +0x1a150b0: 4c 8b 42 08 
+      +0x1a150b4: 41 f6 c0 01 
+      +0x1a150b8: 75 13 
+      +0x1a150ba: 4d 85 c0 
+      +0x1a150bd: 74 0e 
+      +0x1a150bf: 8b c2 
+      +0x1a150c1: 41 2b 41 08 
+      +0x1a150c5: 48 63 c8 
+      +0x1a150c8: 49 03 c8 
+      +0x1a150cb: eb 07 
+      +0x1a150cd: 49 8b c8 
+[3] score=45 fn=+0x1a1b1a0 cmp=+0x1a1b200 scale=4  cmp 使用 [base + idx*4], base=r3, idx=r1
+      +0x1a1b1f0: eb 07 
+      +0x1a1b1f2: 48 8d 97 58 0d 00 00 
+      +0x1a1b1f9: 4c 8b 0a 
+      +0x1a1b1fc: 4d 85 c9 
+      +0x1a1b1ff: 74 3b 
+      +0x1a1b201: 4c 8b 42 08 
+      +0x1a1b205: 41 f6 c0 01 
+      +0x1a1b209: 75 13 
+      +0x1a1b20b: 4d 85 c0 
+      +0x1a1b20e: 74 0e 
+      +0x1a1b210: 8b c2 
+      +0x1a1b212: 41 2b 41 08 
+      +0x1a1b216: 48 63 c8 
+      +0x1a1b219: 49 03 c8 
+      +0x1a1b21c: eb 07 
+      +0x1a1b21e: 49 8b c8 
+[4] score=45 fn=+0x1a1bac0 cmp=+0x1a1bae5 scale=4  cmp 使用 [base + idx*4], base=r3, idx=r1
+      +0x1a1bad5: c1 01 75 
+      +0x1a1bad8: 5d 
+      +0x1a1bad9: 48 85 c9 
+      +0x1a1badc: 74 58 
+      +0x1a1bade: 4c 8b 09 
+      +0x1a1bae1: 4d 85 c9 
+      +0x1a1bae4: 74 39 
+      +0x1a1bae6: 4c 8b 41 08 
+      +0x1a1baea: 41 f6 c0 01 
+      +0x1a1baee: 75 13 
+      +0x1a1baf0: 4d 85 c0 
+      +0x1a1baf3: 74 0e 
+      +0x1a1baf5: 8b c1 
+      +0x1a1baf7: 41 2b 41 08 
+      +0x1a1bafb: 48 63 d0 
+      +0x1a1bafe: 49 03 d0 
+      +0x1a1bb01: eb 07 
+      +0x1a1bb03: 49 8b d0 
+[5] score=45 fn=+0x6b1c1c9 cmp=+0x6b1c428 scale=8  cmp 使用 [base + idx*8], base=r2, idx=r1
+      +0x6b1c418: bc 1f e4 03 95 
+      +0x6b1c41d: 5b 
+      +0x6b1c41e: ca 02 3b 
+      +0x6b1c421: 5c 
+      +0x6b1c422: ca 02 fc 
+      +0x6b1c425: ef 
+      +0x6b1c426: 05 04 3b 5c ca 
+      +0x6b1c42b: 02 f6 
+      +0x6b1c42d: 5c 
+      +0x6b1c42e: ca 02 18 
+      +0x6b1c431: f0 05 04 00 5d ca 
+      +0x6b1c437: 02 63 5d 
+      +0x6b1c43a: ca 02 90 
+      +0x6b1c43d: 7a e3 
+      +0x6b1c43f: 03 70 5d 
+      +0x6b1c442: ca 02 94 
+      +0x6b1c445: 5d 
+      +0x6b1c446: ca 02 90 
+[6] score=45 fn=+0x1a1c3fb cmp=+0x1a1c43a scale=4  cmp 使用 [base + idx*4], base=r1, idx=r1
+      +0x1a1c42a: 4c 89 09 
+      +0x1a1c42d: 48 8b 0b 
+      +0x1a1c430: 48 8b 43 08 
+      +0x1a1c434: 48 89 41 08 
+      +0x1a1c438: 4c 89 3b 
+      +0x1a1c43b: 4c 89 7b 08 
+      +0x1a1c43f: 4c 89 03 
+      +0x1a1c442: 4c 8d 4f 48 
+      +0x1a1c446: 49 8b 01 
+      +0x1a1c449: 48 89 43 08 
+      +0x1a1c44d: 49 8b 50 08 
+      +0x1a1c451: 8b 4f 38 
+      +0x1a1c454: f6 c2 01 
+      +0x1a1c457: 75 20 
+      +0x1a1c459: 48 85 d2 
+[7] score=45 fn=+0x6b1c1c9 cmp=+0x6b1c420 scale=8  cmp 使用 [base + idx*8], base=r2, idx=r1
+      +0x6b1c410: 50 
+      +0x6b1c411: 5b 
+      +0x6b1c412: ca 02 95 
+      +0x6b1c415: 5b 
+      +0x6b1c416: ca 02 bc 
+[8] score=45 fn=+0x1a568ff cmp=+0x1a56952 scale=4  cmp 使用 [base + idx*4], base=r4, idx=r7
+      +0x1a56942: ed 
+      +0x1a56943: d3 00 
+      +0x1a56945: 80 2c ef 71 
+      +0x1a56949: b9 fe 7f 63 6a 
+[9] score=45 fn=+0x1a657c4 cmp=+0x1a657ee scale=4  cmp 使用 [base + idx*4], base=r1, idx=r1
+      +0x1a657de: d7 
+      +0x1a657df: 18 48 8b 
+      +0x1a657e2: 7c d7 
+      +0x1a657e4: 10 48 8d 
+      +0x1a657e7: 5e 
+      +0x1a657e8: 01 48 83 
+      +0x1a657eb: fe 10 
+      +0x1a657ed: 76 39 
+      +0x1a657ef: 44 89 74 24 28 
+      +0x1a657f4: 4c 8d 05 15 c6 f0 01                     ; -> 0000000007501e10
+      +0x1a657fb: 41 b9 98 2b 33 c8 
+      +0x1a65801: c7 44 24 20 fa ff ff ff 
+      +0x1a65809: ba 09 00 00 00 
+[10] score=45 fn=+0x186136a cmp=+0x18613b9 scale=4  cmp 使用 [base + idx*4], base=r7, idx=r7
+      +0x18613a9: 88 f5 
+      +0x18613ab: 32 24 54 
+      +0x18613ae: e6 dc 
+      +0x18613b0: 36 04 9e 
+      +0x18613b3: 40 9e 
+      +0x18613b5: f7 36 
+      +0x18613b7: 3a c9 
+      +0x18613b9: 39 6c bf ef 
+      +0x18613bd: 0f 9b 11 
+      +0x18613c0: 40 30 8c b1 e0 55 a0 7d 
+      +0x18613c8: 9f 
+      +0x18613c9: 7b fd 
+      +0x18613cb: 75 0b 
+      +0x18613cd: d5 36 
+      +0x18613cf: 97 
+      +0x18613d0: 09 c3 
+      +0x18613d2: cb 
+      +0x18613d3: a4 
+      +0x18613d4: d1 50 f7 
+      +0x18613d7: b1 fc 
+[11] score=45 fn=+0x1a65ed3 cmp=+0x1a66887 scale=8  cmp 使用 [base + idx*8], base=r0, idx=r5
+      +0x1a66877: 7b ca 
+      +0x1a66879: 33 07 
+      +0x1a6687b: ac 
+      +0x1a6687c: 61 
+      +0x1a6687d: 12 f8 
+      +0x1a6687f: 6b fc 3a 
+      +0x1a66882: f8 
+      +0x1a66883: ca f7 4f 
+      +0x1a66886: c5 3b 8c e8 
+      +0x1a6688a: 81 d8 29 40 3e 82 
+      +0x1a66890: 85 f5 
+      +0x1a66892: c3 
+      +0x1a66893: a9 11 d7 91 8f 
+      +0x1a66898: 6f 
+      +0x1a66899: 03 ae 63 46 9d 74 
+      +0x1a6689f: e3 ff 
+      +0x1a668a1: 79 8a 
+      +0x1a668a3: 74 57 
+      +0x1a668a5: d2 60 dd 
+[12] score=45 fn=+0x1a65ed3 cmp=+0x1a66f18 scale=8  cmp 使用 [base + idx*8], base=r2, idx=r1
+      +0x1a66f08: dc c1 
+      +0x1a66f0a: 03 dd 
+      +0x1a66f0c: 69 26 6f e4 24 ea 
+      +0x1a66f12: cb 
+      +0x1a66f13: c4 b6 30 52 e2 
+      +0x1a66f18: 3b 94 ca 14 33 5f f1 
+      +0x1a66f1f: d2 04 ab 
+      +0x1a66f22: 43 ed 
+      +0x1a66f24: e7 23 
+      +0x1a66f26: 75 06 
+      +0x1a66f28: 5d 
+      +0x1a66f29: 75 19 
+      +0x1a66f2b: 2b f0 
+      +0x1a66f2d: 46 ae 
+      +0x1a66f2f: 5c 
+      +0x1a66f30: 66 c6 f0 91 
+      +0x1a66f34: f4 
+      +0x1a66f35: 5f 
+      +0x1a66f36: 9c 
+      +0x1a66f37: 2d c5 15 76 35 
+[13] score=45 fn=+0x1a6e7b0 cmp=+0x1a6e7eb scale=4  cmp 使用 [base + idx*4], base=r1, idx=r1
+      +0x1a6e7db: a0 3b 00 00 4d 85 c0 74 12 
+      +0x1a6e7e4: 48 8d 54 24 38 
+      +0x1a6e7e9: 48 b9 3b 04 89 e5 59 a9 32 0a 
+      +0x1a6e7f3: 41 ff d0 
+      +0x1a6e7f6: 48 83 c4 20 
+      +0x1a6e7fa: 5b 
+      +0x1a6e7fb: c3 
+      +0x1a6e7fc: cc 
+      +0x1a6e7fd: cc 
+      +0x1a6e7fe: cc 
+      +0x1a6e7ff: cc 
+      +0x1a6e800: 48 8d 0d 69 64 e4 02                     ; -> 0000000008444c70
+      +0x1a6e807: e9 a4 f9 14 00 
+[14] score=45 fn=+0x1a9a784 cmp=+0x1a9a7cb scale=4  cmp 使用 [base + idx*4], base=r3, idx=r1
+      +0x1a9a7bb: 93 
+      +0x1a9a7bc: b0 01 
+      +0x1a9a7be: 48 8b 05 23 84 69 02                     ; -> 0000000007cc2be8
+      +0x1a9a7c5: 48 83 78 18 00 
+      +0x1a9a7ca: 74 39 
+      +0x1a9a7cc: 44 8b 8c 24 80 01 00 00 
+      +0x1a9a7d4: 48 8d 15 b5 02 0c 02                     ; -> 00000000076eaa90
+      +0x1a9a7db: 4d 8b c5 
+      +0x1a9a7de: 48 8d 4c 24 30 
+      +0x1a9a7e3: e8 08 f8 ff ff 
+      +0x1a9a7e8: 48 8b 05 f9 83 69 02                     ; -> 0000000007cc2be8
+[15] score=45 fn=+0x1a9b6b0 cmp=+0x1a9b713 scale=4  cmp 使用 [base + idx*4], base=r0, idx=r6
+      +0x1a9b703: 8b 9e 78 01 00 00 
+      +0x1a9b709: 48 85 db 
+      +0x1a9b70c: 74 09 
+      +0x1a9b70e: 48 8b cb 
+      +0x1a9b711: ff 15 39 84 b0 01                        ; -> 0000000007133b50
+      +0x1a9b717: 48 8d 86 60 01 00 00 
+      +0x1a9b71e: 4c 8b 00 
+      +0x1a9b721: 4c 3b c0 
+      +0x1a9b724: 75 06 
+      +0x1a9b726: 48 39 40 08 
+      +0x1a9b72a: 74 27 
+      +0x1a9b72c: 49 8b 50 08 
+      +0x1a9b730: 49 8b f8 
+
+注意：这些只是结构候选。真正确认需要在运行期观察实参（id 在哪个寄存器、
+返回的是路径/缓冲区还是句柄）。本项目不会在未经确认时自动打补丁。
