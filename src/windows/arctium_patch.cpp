@@ -55,6 +55,101 @@ struct RawHit {
   std::string context;           // 命中处前 16 字节，用来判断是不是同一段代码
 };
 
+
+// 读取目标进程内存；整段失败就逐页读，缺页填 0（与 scan_images 同一策略）。
+std::vector<uint8_t> read_exact(HANDLE process, uint64_t addr, size_t n) {
+  std::vector<uint8_t> buf(n, 0);
+  SIZE_T got = 0;
+  if (ReadProcessMemory(process, reinterpret_cast<const void*>(addr), buf.data(), n, &got) &&
+      got == n)
+    return buf;
+  for (size_t off = 0; off < n; off += 0x1000) {
+    SIZE_T g = 0;
+    const size_t m = std::min<size_t>(0x1000, n - off);
+    ReadProcessMemory(process, reinterpret_cast<const void*>(addr + off), buf.data() + off, m, &g);
+  }
+  return buf;
+}
+
+// 就地修正：算出真正的补丁点、校验、并把每一处命中的元数据补全。
+//
+// 为什么需要这个函数 —— v13 实测暴露的两个错都出在这里：
+//
+//   1) 「采用」的那一处判成了不可执行。原因：枚举内存区时 VirtualQueryEx
+//      常把「映像头部页（R）」和「.text 代码页（RX）」报成两个独立区域。
+//      我们只在第一个区域里找特征串，找到的点自然落在 R 页上。可代码页
+//      就在旁边，RVA 一模一样。所以「不可执行」不等于「不能改」——
+//      只要同一 RVA 上存在可执行副本，就改那一份。
+//   2) 补丁点读出来是 9C 00 00 00 / C0 00 00 00，报告写「原字节 00 00 00 00」。
+//      这说明 match_va 本身就不对：特征串起点在 je 【之前 4 个字节】，
+//      真正的 je 操作码在 match+1（01 是上一条 test 指令的立即数尾巴）。
+//      所以补丁点必须在运行时【按操作码校验后重算】，不能硬信匹配起点。
+static void verify_and_fix_hits(HANDLE process, const std::vector<ScannedImage>& images,
+                                BranchPatch* p) {
+  if (!p) return;
+
+  // ---- 1) 找可执行副本 ----
+  //
+  // 同一 RVA 在「可执行区」里若有对应位置，就以那里为准。
+  // 这一步把「映像头部页/代码页被 VirtualQueryEx 拆开」的影响消掉。
+  uint64_t best_va = p->match_va;
+  bool best_exec = false;
+  for (const auto& img : images) {
+    if (!img.executable || img.bytes.empty()) continue;
+    if (img.size <= p->rva_in_image) continue;
+    // 用可执行映像里同一 RVA 处重新验证签名
+    const size_t off = p->rva_in_image;
+    if (off + 8 > img.bytes.size()) continue;
+    // 这里只做「同 RVA 有可执行映射」的判断，签名一致性交给下面的操作码校验
+    best_va = img.base + off;
+    best_exec = true;
+    // 记录一下这个可执行副本所属模块，便于报告
+    for (auto& h : p->hits) {
+      if (h.rva_in_image == p->rva_in_image) {
+        h.executable_copy_va = best_va;
+        h.executable_copy_module = img.module_name;
+      }
+    }
+    break;
+  }
+
+  // ---- 2) 在 [match, match+8) 里找真正的 je 操作码 ----
+  //
+  // 期望形态：0F 84 <rel32>。找到后用【它】做 patch_va。
+  // 找不到就说明这里根本不是我们想的那条 je，直接拒绝。
+  const auto win = read_exact(process, best_va, 10);
+  int je_at = -1;
+  for (int i = 0; i + 5 < static_cast<int>(win.size()) && i <= 4; ++i) {
+    if (win[i] == 0x0F && win[i + 1] == 0x84) { je_at = i; break; }
+  }
+  if (je_at < 0) {
+    char t[96];
+    std::snprintf(t, sizeof(t), "%02X %02X %02X %02X %02X %02X",
+                  win[0], win[1], win[2], win[3], win[4], win[5]);
+    p->error = std::string("在匹配点后 4 字节内找不到 0F 84（je rel32），实际 ") + t;
+    return;
+  }
+
+  p->je_opcode_offset = je_at;
+  p->match_va = best_va;
+  p->executable_copy = best_exec && je_at >= 0;
+  p->patch_va = p->match_va + static_cast<uint64_t>(je_at);
+
+  // ---- 3) 拆出补丁点 4 字节 = je 的 rel32 ----
+  uint8_t rel32[4];
+  std::memcpy(rel32, win.data() + je_at + 2, 4);
+  std::memcpy(p->original, rel32, 4);
+
+  // je 目标 = 下一条指令地址 + rel32
+  const int32_t rel = static_cast<int32_t>(static_cast<uint32_t>(rel32[0]) |
+                                           (static_cast<uint32_t>(rel32[1]) << 8) |
+                                           (static_cast<uint32_t>(rel32[2]) << 16) |
+                                           (static_cast<uint32_t>(rel32[3]) << 24));
+  p->jump_target = p->patch_va + 6 + static_cast<int64_t>(rel);
+
+  p->error.clear();
+}
+
 }  // namespace
 
 BranchPatchReport plan_branch_patches(HANDLE process,
@@ -65,6 +160,13 @@ BranchPatchReport plan_branch_patches(HANDLE process,
   if (images.empty()) {
     rep.error = "没有扫到任何可执行映像（客户端可能还没解密完）";
     return rep;
+  }
+
+  // 主模块基址：报告里给出，方便把 RVA 换算成绝对地址核对。
+  {
+    uint64_t mb = 0;
+    size_t ms = 0;
+    if (module_range(process, L"", &mb, &ms)) rep.main_module_base = mb;
   }
 
   for (const auto& s : arctium_signature_specs()) {
@@ -192,24 +294,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
         p.rva_in_image = chosen->offset_in_image;
         p.image_base = chosen->image_base;
         p.used_strong = used_strong;
-        uint8_t cur[4] = {0, 0, 0, 0};
-        std::string rerr;
-        if (!read_remote(process, p.patch_va, cur, sizeof(cur), &rerr)) {
-          p.error = "读取补丁点失败: " + rerr;
-          rep.patches.push_back(p);
-          continue;
-        }
-        if (!(cur[0] == 0x0F && cur[1] == 0x84)) {
-          p.error = "补丁点不是 je rel32，实际字节 " + hex4(cur);
-          rep.patches.push_back(p);
-          continue;
-        }
-        std::memcpy(p.original, cur, sizeof(cur));
-        const int32_t rel = static_cast<int32_t>(static_cast<uint32_t>(cur[0]) |
-                                                 (static_cast<uint32_t>(cur[1]) << 8) |
-                                                 (static_cast<uint32_t>(cur[2]) << 16) |
-                                                 (static_cast<uint32_t>(cur[3]) << 24));
-        p.jump_target = p.patch_va + 4 + static_cast<int64_t>(rel);
+        verify_and_fix_hits(process, images, &p);
         rep.patches.push_back(p);
         continue;
       }
@@ -258,24 +343,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
         p.image_base = h.image_base;
         p.used_strong = used_strong;
         p.matched_known_rva = true;
-        uint8_t cur[4] = {0, 0, 0, 0};
-        std::string rerr;
-        if (!read_remote(process, p.patch_va, cur, sizeof(cur), &rerr)) {
-          p.error = "读取补丁点失败: " + rerr;
-          rep.patches.push_back(p);
-          continue;
-        }
-        if (!(cur[0] == 0x0F && cur[1] == 0x84)) {
-          p.error = "补丁点不是 je rel32，实际字节 " + hex4(cur);
-          rep.patches.push_back(p);
-          continue;
-        }
-        std::memcpy(p.original, cur, sizeof(cur));
-        const int32_t rel = static_cast<int32_t>(static_cast<uint32_t>(cur[0]) |
-                                                 (static_cast<uint32_t>(cur[1]) << 8) |
-                                                 (static_cast<uint32_t>(cur[2]) << 16) |
-                                                 (static_cast<uint32_t>(cur[3]) << 24));
-        p.jump_target = p.patch_va + 4 + static_cast<int64_t>(rel);
+        verify_and_fix_hits(process, images, &p);
         rep.patches.push_back(p);
         continue;
       }
@@ -309,28 +377,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
     p.image_base = h.image_base;
     p.used_strong = used_strong;
 
-    // ---- 第三步：字节校验 ----
-    uint8_t cur[4] = {0, 0, 0, 0};
-    std::string rerr;
-    if (!read_remote(process, p.patch_va, cur, sizeof(cur), &rerr)) {
-      p.error = "读取补丁点失败: " + rerr;
-      rep.patches.push_back(p);
-      continue;
-    }
-    if (!(cur[0] == 0x0F && cur[1] == 0x84)) {
-      p.error = "补丁点不是 je rel32，实际字节 " + hex4(cur) + "（特征码与版本不匹配）";
-      rep.patches.push_back(p);
-      continue;
-    }
-    std::memcpy(p.original, cur, sizeof(cur));
-
-    // 附带记录 je 的目标地址，方便人核对「它到底跳过了哪一段」。
-    const int32_t rel = static_cast<int32_t>(static_cast<uint32_t>(cur[0]) |
-                                             (static_cast<uint32_t>(cur[1]) << 8) |
-                                             (static_cast<uint32_t>(cur[2]) << 16) |
-                                             (static_cast<uint32_t>(cur[3]) << 24));
-    p.jump_target = p.patch_va + 4 + static_cast<int64_t>(rel);
-
+    verify_and_fix_hits(process, images, &p);
     rep.patches.push_back(p);
   }
 
@@ -432,7 +479,14 @@ std::string format_branch_patch_report(const BranchPatchReport& rep) {
   std::string t;
   t += "=========== Arctium 分支补丁（关闭 CASC 加载分支）===========\n";
   t += "机制来源: Arctium/WoW-Launcher  src/Launcher.cs + src/Patches/Windows.cs\n";
-  t += "           补丁内容 = 4 个 0x00（NoJump），把 je rel32 改成「永不跳」\n\n";
+  t += "           补丁内容 = 4 个 0x00（NoJump），把 je rel32 改成「永不跳」\n";
+  if (rep.main_module_base != 0) {
+    char l[160];
+    std::snprintf(l, sizeof(l), "主模块基址: 0x%llX\n",
+                  static_cast<unsigned long long>(rep.main_module_base));
+    t += l;
+  }
+  t += "\n";
 
   for (const auto& p : rep.patches) {
     t += "[" + p.name + "]\n";
@@ -448,6 +502,13 @@ std::string format_branch_patch_report(const BranchPatchReport& rep) {
                       h.image_backed ? "MEM_IMAGE" : "非映像",
                       h.executable ? " 可执行" : " 不可执行", h.context.c_str());
         t += line;
+        if (h.executable_copy_va && h.executable_copy_va != h.va) {
+          std::snprintf(line, sizeof(line), "       可执行副本 0x%llX  %s\n",
+                        static_cast<unsigned long long>(h.executable_copy_va),
+                        h.executable_copy_module.empty() ? "(匿名区)"
+                                                        : h.executable_copy_module.c_str());
+          t += line;
+        }
       }
     }
     if (p.match_va != 0) {
@@ -458,8 +519,10 @@ std::string format_branch_patch_report(const BranchPatchReport& rep) {
                     p.overridden ? "  [用户 --rva 点名]"
                                  : (p.matched_known_rva ? "  [命中确证 RVA]" : ""));
       t += line;
-      std::snprintf(line, sizeof(line), "  补丁  0x%llX  (匹配+%d)\n",
-                    static_cast<unsigned long long>(p.patch_va), p.patch_offset);
+      std::snprintf(line, sizeof(line),
+                    "  补丁点 0x%llX  (匹配+%d = je 操作码后再 +2，指向 rel32)\n",
+                    static_cast<unsigned long long>(p.patch_va),
+                    p.patch_offset + p.je_opcode_offset + 2);
       t += line;
       std::snprintf(line, sizeof(line), "  原字节 %s (je rel32)\n", hex4(p.original).c_str());
       t += line;

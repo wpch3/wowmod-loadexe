@@ -40,6 +40,10 @@ struct PatchHitInfo {
   bool image_backed = false;     // MEM_IMAGE（模块本体）才是该改写的副本
   bool executable = false;
   std::string context;           // 命中处前 16 字节，用于判断是否同一段代码
+  // 有些副本落在「只读、不标可执行」的区域（映像头部页），
+  // 但同一 RVA 在代码页上有可执行映射。这里记下那个地址，改写要走它。
+  uint64_t executable_copy_va = 0;
+  std::string executable_copy_module;
 };
 
 // 一个待打的条件跳转。
@@ -55,6 +59,8 @@ struct BranchPatch {
   bool used_strong = false;      // 是否用的无通配长签名
   bool overridden = false;       // 是否由 --rva 点名
   bool matched_known_rva = false;  // 是否由离线确证的 RVA 命中
+  int je_opcode_offset = 0;        // je 操作码相对匹配起点的偏移（实测 = 1）
+  bool executable_copy = false;    // 是否找到了可执行副本并按它改
   uint8_t original[4] = {0, 0, 0, 0};  // 原始 rel32（卸载时写回）
   std::vector<PatchHitInfo> hits;      // 全部原始命中
   bool applied = false;
@@ -67,6 +73,7 @@ struct BranchPatchReport {
   bool ok = false;
   size_t applied_count = 0;
   size_t plannable = 0;          // 通过全部校验、可以安全写入的条数
+  uint64_t main_module_base = 0; // 主模块基址（报告里给出，方便换算绝对地址）
 };
 
 // 只搜索、不写入。用于「演练」和给用户看命中位置。

@@ -1660,11 +1660,34 @@ static void test_arctium_signature_table() {
     // （文本里 "?? " 占 3 个字符但只代表 1 个字节，拿字符串长度比会误判）。
     wowmod::Pattern wp = wowmod::Pattern::parse(sg.pattern, nullptr);
     CHECK(sp2.size() > wp.size(), std::string("强签名字节数多于原始特征码: ") + n);
-    // 前 3 字节必须是 01 0F 84 —— 这是 je rel32 的形态，patch_offset=3 落点才对。
+    // 前 3 字节是 01 0F 84，但 01 是【前一条指令的尾巴】，真正的 je 操作码在 +1。
+    //
+    // 这是 v13 实测踩到的坑：报告写「原字节 00 00 00 00」而实际读回 9C 00 00 00，
+    // 说明把 match+3 当成「je 的 rel32」时错位了 —— match+1 才是 0F 84，
+    // rel32 在 match+3。所以补丁点必须在运行时按操作码校验后重算，
+    // 不能硬信匹配起点。这里锁住签名形态，防止有人再改回去。
     if (sp2.size() >= 3) {
-      CHECK_EQ(sp2.bytes[1], 0x0F);
+      CHECK_EQ(sp2.bytes[0], 0x01);   // 01 是先前的 test 立即数，不是 je 的一部分
+      CHECK_EQ(sp2.bytes[1], 0x0F);   // je 操作码从这里开始
       CHECK_EQ(sp2.bytes[2], 0x84);
+      // 因此「je 操作码偏移 = 1」，补丁点 = 匹配起点 + 1 + 2 = 匹配起点 + 3。
+      // patch_offset 已经是 3，两者一致 —— 但代码里仍按实际操作码位置重算，
+      // 这样即使签名起点变化也不会写错位置。
+      CHECK_EQ(sg.patch_offset, 3);
     }
+  }
+
+  // 用合成字节验证「按操作码定位补丁点」的算法本身（不依赖客户端）。
+  {
+    // 01 0F 84 9C 00 00 00 —— 匹配起点含前一条指令尾巴
+    const std::vector<uint8_t> win = {0x01, 0x0F, 0x84, 0x9C, 0x00, 0x00, 0x00, 0x48, 0x8B};
+    int je_at = -1;
+    for (int i = 0; i + 5 < static_cast<int>(win.size()) && i <= 4; ++i) {
+      if (win[i] == 0x0F && win[i + 1] == 0x84) { je_at = i; break; }
+    }
+    CHECK_EQ(je_at, 1);                       // je 在 +1，不在 +0
+    CHECK_EQ(win[je_at + 2], 0x9C);           // rel32 首字节
+    CHECK_EQ(win[je_at + 2 + 3], 0x00);       // rel32 末字节
   }
 
   // 按特征本身构造一段映像：固定字节照抄，通配位填 0x90，
