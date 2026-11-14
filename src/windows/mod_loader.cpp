@@ -287,6 +287,35 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   }
   step("hook 目标 0x" + to_hex(target, 16) + "（语义分 " + std::to_string(best) + "/8）");
 
+  // ---- 3b. 先【规划】NoJump（只读，不写）----
+  //
+  // 用户实测踩过：跳板装成功、NoJump 失败，结果是「改了内存但行为没变」——
+  // 比什么都不做更糟，因为占用了 id 表/字符串块并且 hook 了文件加载主函数。
+  // 所以顺序改成：先把 NoJump 的规划做完（纯读），确认能打，再动第二半。
+  std::map<std::string, uint32_t> by_rva;
+  for (const auto& s2 : arctium_signature_specs()) {
+    if (s2.name != "LoadByFileIdAlternate" && s2.name != "LoadByFilePathAlternate") continue;
+    if (s2.known_rva && s2.known_build == 68974) by_rva[s2.name] = s2.known_rva;
+  }
+  if (!by_rva.empty()) {
+    std::string names;
+    for (const auto& kv : by_rva) {
+      names += (names.empty() ? "" : ", ");
+      names += kv.first + "=0x" + to_hex(kv.second, 0);
+    }
+    step("按离线确证 RVA 点名: " + names);
+  }
+  BranchPatchReport branch_plan;
+  {
+    branch_plan = plan_branch_patches(process, by_rva);
+    if (!branch_plan.ok) {
+      r.error = "NoJump 无法安全安装: " + branch_plan.error +
+                "（第 4 步之前就停止，没有改动客户端任何字节）";
+      return r;
+    }
+    step("NoJump 规划通过 " + std::to_string(branch_plan.plannable) + " 条");
+  }
+
   // ---- 4. 装查表跳板（第二半）----
   {
     InstallRequest req;
@@ -321,23 +350,15 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     r.trampoline_va = irep.trampoline_va;
   }
 
-  // ---- 5. 打 NoJump（第一半）----
-  {
-    auto rep = plan_branch_patches(process, {});
-    if (!rep.ok) {
-      // 第二半已经装上了，第一半失败就意味着「客户端不会去查表」。
-      // 这比不装更糟（跳板白占内存、行为没变），所以如实报告。
-      r.error = "查表跳板已装，但 NoJump 分支补丁失败: " + rep.error;
-      return r;
-    }
-    if (!apply_branch_patches(process, &rep)) {
-      r.error = "查表跳板已装，但 NoJump 写入失败: " + rep.error;
-      return r;
-    }
-    r.branch_patched = true;
-    r.branch_count = rep.applied_count;
-    step("NoJump 已打 " + std::to_string(rep.applied_count) + " 条");
+  // ---- 5. 应用已规划好的 NoJump（第一半）----
+  if (!apply_branch_patches(process, &branch_plan)) {
+    r.error = "NoJump 写入失败: " + branch_plan.error +
+              "（查表跳板已装，但第一半没成 —— 请重启客户端后重试）";
+    return r;
   }
+  r.branch_patched = true;
+  r.branch_count = branch_plan.applied_count;
+  step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条");
 
   r.ok = true;
   return r;
