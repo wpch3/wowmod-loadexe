@@ -726,8 +726,7 @@ int main(int argc, char** argv) {
       CreateDirectoryW(utf8_to_wide(to_native_path(mdir)).c_str(), nullptr);
       const std::string mp = wowmod::join_path(mdir, "main-module.bin");
 
-      size_t best_low = 0, best_checked = 0;
-      double best_ratio = -1.0;
+      size_t best_low = 0;
       int stable = 0;
       const DWORD t_start = GetTickCount();
       say("采样 .text 解密进度（等比例稳定后再导出）");
@@ -742,10 +741,10 @@ int main(int argc, char** argv) {
                       static_cast<double>(GetTickCount() - t_start),
                       probe.text_low_entropy, probe.text_checked, ratio * 100.0);
           std::fflush(stdout);
-          if (ratio > best_ratio + 0.005) {
-            best_ratio = ratio;
+          // 用「明文页数」判断进步，而不是比例：一次多解出 1 页（1/256≈0.39%）
+          // 也是真进步，用比例加容差会把这种微小增长误判成"已稳定"。
+          if (probe.text_low_entropy > best_low) {
             best_low = probe.text_low_entropy;
-            best_checked = probe.text_checked;
             stable = 0;
           } else {
             stable++;
