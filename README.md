@@ -865,3 +865,117 @@ v10 起它是硬条件。
 如果 v10 仍然崩，`probe-hits.txt` 会告诉我们两处命中的真实差异；
 届时我会先做**纯只读**验证（不写任何字节），确认客户端本身能正常运行，
 再把变量一个个隔离 —— 不再在你机器上试错。
+
+---
+
+## 探针成功：1895 次调用，但拿到了一个**否定结论**
+
+v10 的探针**装上了、没崩、正常卸载**，客户端完整跑完：
+
+```
+0x00000001433e06a0  语义 8/8  可执行  Protect 0x20
+0x0000000006ec06a0  语义 8/8  【不可执行·不能用】  Protect 0x4
+[校验] 目标序言与扫描时一致（13 字节），可以安全安装
+```
+
+「可执行是硬条件」这条改动直接解决了问题 —— 选中的是 `Protect 0x20`
+（`PAGE_EXECUTE_READ`）那一处，而不是数据页。
+
+结果：**1895 次调用、1423 个唯一 FileDataID、id 范围 130718 ~ 7713991**，
+全程无崩溃，退出时成功卸载。
+
+### 但把 id 拿去和 listfile 对账，结论是反的
+
+用 `wowdev/wow-listfile` 的 `parts/*.csv`（`fileId;filePath` 格式）做了匹配：
+
+```
+探针: 1895 次调用, 1423 个唯一 FileDataID
+listfile: 696083 个已知 id
+可查到路径的 id: 785/1423 = 55.2%
+
+按调用次数分布:
+     991 次   interface/
+     189 次   sound/
+       3 次   (其它.blp)
+       2 次   fonts/
+
+character/ 开头: 0 个
+```
+
+高频 id 长这样：
+
+```
+4624242  x10   Interface/HUD/UIActionBarFXx2.BLP
+5321221  x7    Interface/HUD/UIUnitFrameTargetManaMask2x.BLP
+134400   x7    Interface/ICONS/INV_Misc_QuestionMark.blp
+130870   x6    Interface/BUTTONS/UI-TempEnchant-Border.blp
+```
+
+**这个函数加载的是界面贴图和音效，没有一个 `character/` 资源。**
+
+### 所以 `0x33e06a0` 不是我们要找的函数
+
+这解释了为什么之前所有尝试都没能让血精灵模型变样：
+
+| 事实 | 含义 |
+|---|---|
+| 它是按 `edx` 查哈希表的函数 | 确实是 FileDataID 查找，但**查的是"界面/音效"那一套表** |
+| 1423 个 id 里 0 个是 `character/` | 角色模型贴图**根本不走这条路径** |
+| 血精灵女性 `.blp` 的 id 在 `116921` 起 | 这些 id 在探针记录里一次都没出现 |
+
+之前"Arctium 的 `CustomFileIdHook` 唯一 8/8 命中"这个判断，**在语义上是对的**
+（它确实是 `edx=FileDataID` 的哈希查找），但**我们误以为它是唯一的资源查找入口**。
+12.0.7 的资源查找分散在多套表里，这个只是其中一套。
+
+### 需要承认的两点
+
+1. 前三次崩溃是我造成的：在没检查 `Protect` 是否可执行的情况下就写内存做实验。
+   现在「可执行」是硬条件，并且写入前会重新校验 13 字节序言。
+2. 这一个 hook 点已经可以判定为**不适用于模型替换**。继续在它上面做替换是白费力气。
+
+### 新增工具：`tools/listid.py`
+
+把「探针 id ↔ listfile」对账这件事固化成可复现的命令，不再靠人肉 grep：
+
+```bash
+# 下载 listfile 分片
+git clone --depth 1 --filter=blob:none --sparse https://github.com/wowdev/wow-listfile
+cd wow-listfile && git sparse-checkout set --no-cone /parts/misc.csv /parts/interface.csv ...
+
+# 对账：问"这个函数有没有加载角色模型贴图"
+python3 tools/listid.py --probe wowmod-probe.txt --listfile parts/*.csv \
+                        --filter character/bloodelf/female
+```
+
+无命中时它会直接给结论：
+
+```
+== 过滤 'character/bloodelf/female' ==
+  listfile 中匹配的 id 总数: 1175
+  探针抓到其中: 0 个
+
+  结论: 这个函数【完全没有】加载该类资源。
+        在这条路径上做替换是无效的 —— 客户端不从这里取这些文件。
+        需要换目标：找到真正加载该类资源的那个函数。
+```
+
+### 下一步（方向变了）
+
+有了 `tools/listid.py` 这个"判据"，下一步是**在内存里找另一处 FileDataID 查找函数**，
+它的判据很明确：
+
+1. 同样能被 `edx`（或其它寄存器）传入 FileDataID 的形式识别
+2. 装上探针跑一遍，`--filter character/` **必须有命中**
+
+也就是说：**先证明它会加载 `character/`，再谈替换**。
+不再靠"特征码命中就上"这种赌法。
+
+### 顺带修复：cmd 报错的真正原因
+
+三次报错最终定位到同一件事：**`chcp 65001` 下 `echo` 行里的全角标点
+（`，`、`、`、`；`）会让 cmd.exe 解析错位**，把后半句当命令执行。
+不是某个字符的问题，是这类标点都会被当分隔符。
+
+处理：进度行改纯 ASCII；并加了一条**通用硬门禁** —— 三个 `.cmd` 里
+只要 `echo` 行出现 `E3 80 8C`（，）/ `E3 80 81`（、）/ `EF BC 9B`（；）的字节序列，
+就拒绝打包。已用"含全角逗号/纯 ASCII"两个样表双向验证。

@@ -74,6 +74,19 @@ for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-start.cmd; do
 done
 echo "   无顿号，行内方括号已确认"
 
+echo "==> 检查 cmd 的 echo 行全为可安全解析的字符"
+# 已三次踩到：chcp 65001 下 cmd.exe 解析 echo 里的全角标点会错位，
+# 把句子后半段当成命令执行。凡 echo 行出现全角逗号/顿号/分号一律拦下。
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-start.cmd; do
+  [ -f "$_f" ] || continue
+  if grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x8c' "$_f" ||
+     grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x81' "$_f" ||
+     grep -qE $'^[[:space:]]*echo[^\r]*\xef\xbc\x9b' "$_f"; then
+    fail "$_f 的 echo 行含全角标点（，、；），cmd.exe 会把它后面的内容当命令执行"
+  fi
+done
+echo "   echo 行标点检查通过"
+
 echo "==> 检查一键旁路脚本"
 [ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
 grep -aq -- "--mode probe" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有调用 --mode probe"
@@ -90,12 +103,14 @@ echo "==> 组装"
 mkdir -p "$STAGE/scripts"
 cp wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd README.md "$STAGE/"
 cp scripts/wowmod-start.ps1 "$STAGE/scripts/"
+mkdir -p "$STAGE/tools"
+cp tools/listid.py "$STAGE/tools/"
 
 echo "==> 压缩"
 rm -f "$ZIP"
 ( cd "$STAGE" && zip -9 -r "$ZIP" \
     wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod.exe wowmod_loader.exe wowmod_rt.dll \
-    scripts/wowmod-start.ps1 README.md >/dev/null )
+    scripts/wowmod-start.ps1 tools/listid.py README.md >/dev/null )
 
 echo "==> 复验 zip 内容"
 VERIFY="$(mktemp -d)"
@@ -109,6 +124,8 @@ grep -aq "sigscan" "$VERIFY/scripts/wowmod-start.ps1" || fail "zip 里的脚本�
 [ -f "$VERIFY/wowmod-dump.cmd" ] || fail "zip 里缺 wowmod-dump.cmd"
 grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump.cmd 内容不完整"
 [ -f "$VERIFY/wowmod-probe.cmd" ] || fail "zip 里缺 wowmod-probe.cmd"
+[ -f "$VERIFY/tools/listid.py" ] || fail "zip 里缺 tools/listid.py"
+grep -aq "character/bloodelf/female" "$VERIFY/tools/listid.py" || fail "listid.py 内容不完整"
 
 echo
 echo "OK  $ZIP  ($(stat -c%s "$ZIP") 字节)"

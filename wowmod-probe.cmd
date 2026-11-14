@@ -120,9 +120,8 @@ echo   [4/4] done
 echo.
 echo   记录文件: %WM_OUT%
 echo.
-echo   请把这个文件发回来。它包含客户端真实请求的 FileDataID 序列，
-echo   我们会用它对上 examples\12.0.7\mods 里那 89 个 .blp 的 id，
-echo   然后才能把探针改成真正的替换。
+echo   Send back wowmod-probe.txt (it lists the real FileDataID calls).
+echo   Use wowmod-listid to look up which paths those ids map to.
 echo.
 pause
 endlocal
