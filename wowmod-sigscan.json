@@ -1,0 +1,147 @@
+{
+  "exe": "D:/Midnight Open Beta/_midnight_/WoW 12.0.7 - Firestorm.exe",
+  "pid": 21312,
+  "imagesScanned": 500,
+  "bytesScanned": 3242065920,
+  "clientModified": false,
+  "hits": [
+    {
+      "name": "LoadByFilePathAlternate",
+      "matchVa": "0000000006f17b58",
+      "patchVa": "0000000006f17b5b",
+      "imageBase": "0000000003b40000",
+      "imageNote": "匿名 PE 映像",
+      "matchCount": 1,
+      "verdict": "unique（可考虑使用）"
+    },
+    {
+      "name": "CustomFileIdHook",
+      "matchVa": "0000000006f206a0",
+      "patchVa": "0000000006f206a0",
+      "imageBase": "0000000003b40000",
+      "imageNote": "匿名 PE 映像",
+      "matchCount": 2,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "CustomFileIdHook",
+      "matchVa": "00000001433e06a0",
+      "patchVa": "00000001433e06a0",
+      "imageBase": "00000001433da000",
+      "imageNote": "匿名区域",
+      "matchCount": 2,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileId",
+      "matchVa": "000000006602bf63",
+      "patchVa": "000000006602bf69",
+      "imageBase": "0000000065941000",
+      "imageNote": "匿名区域",
+      "matchCount": 3,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileId",
+      "matchVa": "00007ffd8db2052c",
+      "patchVa": "00007ffd8db20532",
+      "imageBase": "00007ffd8d5b1000",
+      "imageNote": "匿名区域",
+      "matchCount": 3,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileId",
+      "matchVa": "00007ffd8dfb6010",
+      "patchVa": "00007ffd8dfb6016",
+      "imageBase": "00007ffd8d5b1000",
+      "imageNote": "匿名区域",
+      "matchCount": 3,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "0000000006f17976",
+      "patchVa": "0000000006f17979",
+      "imageBase": "0000000003b40000",
+      "imageNote": "匿名 PE 映像",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffcd0a40166",
+      "patchVa": "00007ffcd0a40169",
+      "imageBase": "00007ffcd0031000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffd8da9eb7e",
+      "patchVa": "00007ffd8da9eb81",
+      "imageBase": "00007ffd8d5b1000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "000000001b890156",
+      "patchVa": "000000001b890159",
+      "imageBase": "000000001b870000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "000000001bcd667f",
+      "patchVa": "000000001bcd6682",
+      "imageBase": "000000001b870000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffd95090156",
+      "patchVa": "00007ffd95090159",
+      "imageBase": "00007ffd95071000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffd954d667f",
+      "patchVa": "00007ffd954d6682",
+      "imageBase": "00007ffd95071000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffd9095219c",
+      "patchVa": "00007ffd9095219f",
+      "imageBase": "00007ffd90921000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    },
+    {
+      "name": "LoadByFileIdAlternate",
+      "matchVa": "00007ffd90952d8e",
+      "patchVa": "00007ffd90952d91",
+      "imageBase": "00007ffd90921000",
+      "imageNote": "匿名区域",
+      "matchCount": 9,
+      "verdict": "ambiguous（出现多次，需人工确认）"
+    }
+  ],
+  "unmatched": [
+    "LoadByFilePath: 未命中 — 路径型覆盖的分支"
+  ]
+}
