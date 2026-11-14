@@ -46,3 +46,7 @@ runtime-dumps/
 !/wowmod_loader.exe
 !/wowmod-start.cmd
 !/wowmod-oneclick.zip
+
+# 完整 listfile（227 万条 / 147 MB）不入库：太大，且可随时从公开仓库重建。
+# tools/fetch-listfile.cmd 会拉取它；缺失时 build-mod-mappings.py 会明确报错。
+.lf/*.csv

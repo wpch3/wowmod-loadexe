@@ -1344,3 +1344,77 @@ v14 实测报告（关键部分）：
 签名找对了、命中对了，唯一错的是我 v14 那个"找副本"的动作。**
 
 构建标记 `patch-v15`，主机测试 581 项 0 失败。
+
+---
+
+## v16：完整模组 ≠ 89 张 blp —— 需要先把目录树变成 mappings
+
+### 之前理解错的地方
+
+我一直把 `examples/12.0.7/mods/` 当成等同物，实际上用户的
+`_midnight_\Character\` 是**完整模组树**：21 个种族全在
+（BloodElf / DarkIronDwarf / Draenei / Dwarf / Gnome / Goblin /
+HighmountainTauren / Human / KulTiran / LightforgedDraenei / Nightborne /
+NightElf / Orc / Pandaren / Scourge / Tauren / Troll / VoidElf / Vulpera /
+Worgen / ZandalariTroll），而且放在**游戏根目录**，不在 `wowmod\files\` 里。
+
+### 两个必须满足的条件
+
+Arctium 的机制只认这两样：
+
+```
+wowmod\mappings\*.txt    每行 "<FileDataID>;<游戏相对路径>"
+wowmod\files\            实际文件，保持同样的相对路径
+```
+
+放在 `_midnight_\Character\` **不会生效** —— 客户端不扫目录树找文件，
+它拿一个 FileDataID 去查表，表里没有就当"CASC 里没这个资源"。
+
+### 新增 `wowmod-mod.cmd` + `tools/build-mod-mappings.py`
+
+一步把任意模组目录树变成上面两样：
+
+```
+wowmod-mod.cmd  →  选目录  →  mappings/mod.txt + files/（硬链接，不占双份空间）
+```
+
+实测（用仓库里的 89 张 blp 模拟同一棵树）：
+
+```
+游戏资源文件 89 个（另有 0 个非资源路径已忽略）
+匹配到 FileDataID: 89
+找不到 id:        0
+硬链接 89 个，复制 0 个（源文件合计 11.6 MB）
+```
+
+### 设计上刻意做对的三件事
+
+1. **相对路径基准是 `mod_root` 的父目录**。若以 `mod_root` 为基准，会得到
+   `BloodElf/Female/xxx.blp`（丢了 `Character/`），客户端永远匹配不上。
+2. **只接受游戏资源前缀**（`character/ creature/ item/ interface/ sound/ fonts/
+   world/ spells/ particles/ environments/ ...`）。否则仓库源码里的
+   `src/`、`tools/` 同名目录也会被当成模组塞进去。
+3. **硬链接而非复制**。同一份贴图不占两份空间；id 冲突会明确报出来，
+   不让"两个文件抢一个 id、只有一个随机生效"静默发生。
+
+### listfile 按需拉取
+
+完整对照表 227 万条 / 147 MB，不适合塞进发布包。新增
+`tools/fetch-listfile.cmd`（`wowmod-mod.cmd` 发现缺失时会自动调用），
+从公开仓库 `wowdev/wow-listfile` 的 `parts/*.csv` 合并生成
+`.lf/wow-listfile.csv`，只需一次。
+
+`.lf/*.csv` 已加入 `.gitignore`（太大且可重建）。
+
+### 现在的完整流程
+
+```
+1. wowmod-mod.cmd        准备模组数据（→ mappings + files）
+2. wowmod-patch.cmd      打分支补丁（→ wowmod-patch.txt）
+3. 进游戏 → 看角色模型
+```
+
+第 2 步目前仍有一个已知 bug 待验证（v15 修的是"选错地址"），
+第 1 步是**不论第 2 步结果如何都必须先做**的准备工作。
+
+构建标记 `patch-v15`，主机测试 581 项 0 失败。
