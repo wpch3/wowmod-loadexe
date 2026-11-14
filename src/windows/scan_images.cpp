@@ -178,12 +178,76 @@ bool process_has_client_markers(HANDLE process, std::string* first_marker) {
 
 std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) {
   std::vector<ScannedImage> out;
+
+  // ---- 0. 首选：Arctium 的做法 —— 从 PEB 基址连续读整个映像 ----
+  //
+  // 用户实测：Init 特征码能找到（说明基址对、映像可读），
+  // 但 CustomFileIdHook 0 命中，且 dump_module_full 报 147/147 页全明文。
+  // 也就是说【我们只覆盖到映像的一小部分】。
+  //
+  // 根因在下面的区域筛选：
+  //     looks_like_image = r.image || (r.module.empty() && r.size >= 1MB)
+  // 这个客户端的主模块是 MEM_MAPPED（壳把真实 PE 映射成文件映射），
+  // 而且可能被切成多个小于 1 MB 的段 —— 于是绝大多数段被跳过。
+  //
+  // Arctium 完全不这样筛：它从 PEB 拿到基址，直接
+  //     Data = Read(BaseAddress, (int)binaryLength)
+  // 连续读一整块。这里照做，并把这一块作为【第一个】扫描映像，
+  // 后面的区域筛选只作为补充。
+  {
+    const uint64_t peb_base = read_peb_image_base(process);
+    if (peb_base) {
+      std::vector<uint8_t> hdr(0x1000);
+      SIZE_T got = 0;
+      if (ReadProcessMemory(process, reinterpret_cast<const void*>(peb_base), hdr.data(),
+                            hdr.size(), &got) && got >= 0x400 && hdr[0] == 'M' &&
+          hdr[1] == 'Z') {
+        const uint32_t pe_off = *reinterpret_cast<const uint32_t*>(hdr.data() + 0x3C);
+        if (pe_off <= 0x1000 && *reinterpret_cast<const uint32_t*>(hdr.data() + pe_off) ==
+                                  0x00004550u) {
+          const uint32_t soi =
+              *reinterpret_cast<const uint32_t*>(hdr.data() + pe_off + 24 + 56);
+          if (soi >= 0x10000) {
+            ScannedImage img;
+            img.base = peb_base;
+            img.size = soi;
+            img.executable = true;          // 主模块整体按可执行对待
+            img.is_image_backed = true;     // 逻辑上是映像本体
+            img.region_type = MEM_MAPPED;
+            const size_t to_read = std::min<size_t>(soi, max_bytes);
+            img.bytes.assign(to_read, 0);
+            // 逐页读：映像里可能有整页未提交，一次性读会整体失败
+            size_t done = 0;
+            for (size_t off = 0; off < to_read; off += 0x1000) {
+              SIZE_T g = 0;
+              const size_t n = std::min<size_t>(0x1000, to_read - off);
+              if (ReadProcessMemory(process,
+                                    reinterpret_cast<const void*>(peb_base + off),
+                                    img.bytes.data() + off, n, &g))
+                done += g;
+            }
+            if (done >= 0x10000) {
+              img.bytes.resize(done);
+              img.committed_bytes = done;
+              out.push_back(std::move(img));
+            }
+          }
+        }
+      }
+    }
+  }
+
   const auto modules = module_map(GetProcessId(process));
   const auto regions = enumerate_regions(process);
 
   for (const auto& r : regions) {
     // 只关注「像代码/数据」的区域：可执行，或属于映像，或足够大
-    const bool looks_like_image = r.image || r.module.empty() && r.size >= (1u << 20);
+    // 已经由 PEB 收录过的主模块不再重复收
+    if (!out.empty() && r.base >= out[0].base && r.base < out[0].base + out[0].size) continue;
+    // 放宽：MEM_MAPPED 且大小 >= 256KB 也算候选（原来要 1MB，
+    // 这个客户端的模块被切成小段时会被整体漏掉）
+    const bool looks_like_image =
+        r.image || (r.module.empty() && r.size >= (256u << 10));
     if (!looks_like_image && !executable(r.protect)) continue;
     if (r.size < (64u << 10)) continue;
 

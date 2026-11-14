@@ -317,10 +317,11 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
         }
       }
     }
+    std::printf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB, CustomFileIdHook %zu 处命中, 最佳可执行 %d/8\n",
+                scan_round + 1, sig.images_scanned,
+                static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0), hits_n, round_best);
     if (cands == 0) {
-      std::printf("  第 %d 轮: 特征码 0 处命中（目标页还没解密）\n", scan_round + 1);
-    } else {
-      std::printf("  第 %d 轮: %zu 处命中, 最佳可执行 %d/8\n", scan_round + 1, hits_n, round_best);
+      std::printf("          （0 命中 ≠ 没解密 —— 而是这块内存里根本没有目标函数）\n");
     }
     std::fflush(stdout);
 
