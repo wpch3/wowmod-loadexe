@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v11"
+#define WOWMOD_LOADER_BUILD_TAG "patch-v12"
 #endif
 #include <tlhelp32.h>
 
@@ -53,6 +53,7 @@
 #include "windows/detour.hpp"
 #include "windows/remote_load.hpp"
 #include "windows/arctium_sig.hpp"
+#include "windows/arctium_patch.hpp"
 #include "windows/probe_reader.hpp"
 #include "windows/crash_evidence.hpp"
 #include "windows/fd_hook.hpp"
@@ -552,6 +553,9 @@ int main(int argc, char** argv) {
           "  --mode sigscan   用 Arctium 的公开特征码扫运行时映像，找真正的文件打开函数\n"
           "  --mode probe     【旁路记录】在 FileDataID 查找函数上装跳板，只记录客户端实际\n"
           "                   传入了哪些 id，不改变任何返回值（无风险，用来确认 ABI）\n"
+          "  --mode patch     【Arctium 机制】把「按 FileDataID/路径从 CASC 加载」的\n"
+          "                   条件跳转改成不跳（4 个 00），让客户端回头查本地文件。\n"
+          "                   这是 Arctium 真正用的做法，不加 hook、不搬指令、不写跳板\n"
           "  --dump           sigscan 时把可执行映像导出到 wowmod\\dump（供 IDA 分析）\n"
           "  --dump-module    sigscan 时把【主模块】完整内存映像导出（含解密后的 .text）\n"
           "  --target NAME    probe 用哪条特征码定位目标（默认 CustomFileIdHook；\n"
@@ -614,7 +618,7 @@ int main(int argc, char** argv) {
   // 还以为新模式坏了。宁可当场报错，也不要跑一个不是用户要的模式。
   {
     const std::vector<std::string> known = {"observe", "auto", "hook", "analyze",
-                                            "diagnose", "sigscan", "probe"};
+                                            "diagnose", "sigscan", "probe", "patch"};
     if (std::find(known.begin(), known.end(), o.mode) == known.end()) {
       std::printf("\n[错误] 未知模式 --mode %s\n", o.mode.c_str());
       std::printf("  支持的模式: ");
@@ -650,6 +654,119 @@ int main(int argc, char** argv) {
     wowmod::win::run_diagnose(pi.hProcess, wowmod::join_path(wowmod_dir, "wowmod-diagnose.txt"));
     std::printf("\n客户端保持运行。诊断文件: %s\\wowmod-diagnose.txt\n", wowmod_dir.c_str());
     CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+  }
+
+  // 2c1) 【Arctium 机制】分支补丁模式。
+  //
+  //   这是 Arctium 真正用来让本地文件生效的做法，和我们前几轮做的
+  //   「hook 查找函数 / 替换返回值」完全不是一回事：
+  //
+  //     memory.QueuePatch(Patterns.Windows.LoadByFileIdAlternate,
+  //                       Patches.Windows.NoJump, "LoadByFileId", 3)
+  //
+  //   它把「按 FileDataID 从 CASC 加载」那条 je 改成【永不跳】，
+  //   于是函数走空分支、返回 false，上层认为 CASC 里没有这个资源，
+  //   转而去查 mappings/*.txt 里登记过的本地文件。
+  //
+  //   好处：只改 4 个字节，不搬指令、不装跳板、没有撕裂写入、
+  //   也不碰任何函数入口 —— 前三次崩溃的原因（写不可执行页）在这里不存在。
+  if (o.mode == "patch") {
+    const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
+    CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
+    const std::string log_path = wowmod::join_path(wowmod_dir, "wowmod-patch.txt");
+
+    say("Arctium 分支补丁模式：关闭「从 CASC 加载」的条件跳转");
+
+    // 等代码解密。判据与 sigscan/--dump-module 相同：等可执行段的明文页数稳定，
+    // 只等标记串是假就绪（v4 的教训）。
+    bool ready = false;
+    size_t best_low = 0;
+    int stable = 0;
+    const DWORD ts = GetTickCount();
+    for (int i = 0; i < 200; ++i) {
+      const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
+      if (probe.text_checked) {
+        if (i % 2 == 0)
+          std::printf("  等待代码解密... 明文页 %zu/%zu = %.1f%%\n", probe.text_low_entropy,
+                      probe.text_checked,
+                      100.0 * static_cast<double>(probe.text_low_entropy) /
+                          static_cast<double>(probe.text_checked));
+        std::fflush(stdout);
+        if (probe.text_low_entropy > best_low) {
+          best_low = probe.text_low_entropy;
+          stable = 0;
+        } else if (++stable >= 3 && best_low > 0) {
+          ready = true;
+          break;
+        }
+      }
+      if (GetTickCount() - ts > static_cast<DWORD>(o.wait_ms)) break;
+      ::Sleep(1000);
+    }
+    if (!ready)
+      std::printf("  ！等到上限仍未稳定（明文页 %zu），仍会继续。\n", best_low);
+
+    say("定位分支补丁点（只读，不写入）");
+    auto rep = wowmod::win::plan_branch_patches(pi.hProcess);
+    std::string report = wowmod::win::format_branch_patch_report(rep);
+    std::printf("%s", report.c_str());
+    std::fflush(stdout);
+
+    if (!rep.ok) {
+      std::printf("\n[失败] %s\n", rep.error.c_str());
+      std::printf("本次没有修改客户端任何字节。\n");
+      std::string werr;
+      wowmod::write_text_file(log_path, report + "\n[失败] " + rep.error + "\n", &werr);
+      std::printf("报告: %s\n", log_path.c_str());
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
+    }
+
+    if (o.dry_run) {
+      std::printf("\n[演练] 目标都已通过唯一性 + 字节校验，但【没有写入】。\n");
+      std::printf("  要真正打补丁请加 --apply（会在客户端留下 4 字节改动）。\n");
+      std::string werr;
+      wowmod::write_text_file(log_path, report + "\n[演练] 未写入\n", &werr);
+      std::printf("报告: %s\n", log_path.c_str());
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 0;
+    }
+
+    say("写入分支补丁");
+    if (!wowmod::win::apply_branch_patches(pi.hProcess, &rep)) {
+      std::printf("\n[失败] 写入没有成功：%s\n", rep.error.c_str());
+      report = wowmod::win::format_branch_patch_report(rep);
+      std::printf("%s", report.c_str());
+      std::string werr;
+      wowmod::write_text_file(log_path, report + "\n[失败] " + rep.error + "\n", &werr);
+      std::printf("报告: %s\n", log_path.c_str());
+      // 已经改过的那些会被 apply 内部回滚，这里再兜一次底。
+      std::string rerr;
+      wowmod::win::revert_branch_patches(pi.hProcess, &rep, &rerr);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
+    }
+
+    report = wowmod::win::format_branch_patch_report(rep);
+    std::printf("\n%s", report.c_str());
+    std::fflush(stdout);
+    {
+      std::string werr;
+      wowmod::write_text_file(log_path, report, &werr);
+      std::printf("报告: %s\n", log_path.c_str());
+    }
+
+    std::printf("\n  补丁已生效。现在进游戏看角色模型是否变成你放的贴图。\n");
+    std::printf("  客户端退出后补丁自动消失（只改内存，不动磁盘文件）。\n\n");
+    std::fflush(stdout);
+
+    CloseHandle(pi.hThread);
+    WaitForSingleObject(pi.hProcess, INFINITE);
     CloseHandle(pi.hProcess);
     return 0;
   }

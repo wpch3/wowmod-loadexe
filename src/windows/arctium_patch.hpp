@@ -1,0 +1,68 @@
+// Arctium 的 mod 机制本体：把「按 FileDataID / 按路径从 CASC 加载」的条件跳转
+// 改成【不跳】，让客户端以为 CASC 里没有这个资源，从而回头查本地文件。
+//
+// 这不是我们的发明，而是 Arctium/WoW-Launcher（MIT）的实际做法：
+//   src/Launcher.cs        -> QueuePatch(Patterns.Windows.LoadByFileIdAlternate,
+//                                          Patches.Windows.NoJump, "LoadByFileId", 3)
+//                            QueuePatch(Patterns.Windows.LoadByFilePathAlternate,
+//                                       Patches.Windows.NoJump, "LoadByFilePath", 3)
+//   src/Patches/Windows.cs -> NoJump = { 0x00, 0x00, 0x00, 0x00 }
+//
+// 关键点：它【不 hook 任何函数入口】，只改 4 个字节的 rel32 条件跳转，
+// 所以不需要搬运指令、不需要跳板、不会有撕裂写入、不会被壳的完整性校验打到。
+//
+// 12.0.7 实测（113,565,696 字节主模块解密映像）：
+//   LoadByFileIdAlternate   唯一命中 0x33d7976，补丁点 0x33d797a（je → 4 个 0x00）
+//   LoadByFilePathAlternate 唯一命中 0x33d7b58，补丁点 0x33d7b5b（je → 4 个 0x00）
+// 两条都是 1 处命中，因此可以安全地按「必须唯一」来安装。
+//
+// SPDX-License-Identifier: MIT
+#pragma once
+#ifdef _WIN32
+#include <windows.h>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace wowmod {
+namespace win {
+
+// 一个待打的条件跳转。
+struct BranchPatch {
+  std::string name;              // 特征码名（LoadByFileIdAlternate / ...）
+  std::string pattern;           // IDA 风格特征串
+  int patch_offset = 0;          // 匹配起点 → 4 字节 rel32 的偏移
+  uint64_t match_va = 0;         // 匹配到的虚拟地址
+  uint64_t patch_va = 0;         // match_va + patch_offset
+  uint8_t original[4] = {0, 0, 0, 0};  // 原始 rel32（卸载时写回）
+  bool applied = false;
+  std::string error;             // 失败原因（人话，不是错误码）
+};
+
+struct BranchPatchReport {
+  std::vector<BranchPatch> patches;
+  std::string error;             // 整体失败原因
+  bool ok = false;
+  size_t applied_count = 0;
+};
+
+// 只搜索、不写入。用于「演练」和给用户看命中位置。
+// 命中数 != 1 的目标会被标记 error 并跳过 —— 特征太弱的绝不能打。
+BranchPatchReport plan_branch_patches(HANDLE process);
+
+// 真正写入：把 patch_va 处的 4 字节改成 00 00 00 00。
+// 写入前会重新读一遍，确认那 4 字节此刻仍是 0F 84（je rel32）：
+// 扫描和写入是两次独立读取，中间壳可能重映射过这块内存。
+// 任何一步失败都会把已经改过的那些写回原值，不留半装状态。
+bool apply_branch_patches(HANDLE process, BranchPatchReport* rep);
+
+// 卸载：把 original 写回。查不到原值就拒绝（不能瞎写）。
+bool revert_branch_patches(HANDLE process, BranchPatchReport* rep, std::string* err);
+
+// 人类可读报告（也用于写进日志文件）。
+std::string format_branch_patch_report(const BranchPatchReport& rep);
+
+}  // namespace win
+}  // namespace wowmod
+#endif

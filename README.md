@@ -1050,10 +1050,10 @@ v10 新增的候选字节 dump 立刻有了回报。在目标函数**前面 0xE0
 | 元素 | 桶指针 8B + 节点 16B | **元素 44B，键在 +8** |
 | 空槽标记 | 链表 NULL | **`-1`** |
 | 探测方式 | 链式 | **开放寻址（线性探测）** |
-| 探针实测 | interface/ + sound/，`character/` 0 个 | **尚未测** |
+| 在调用链里的位置 | 第二个查找 | **第一个查找** |
 
-两张表结构完全不同，说明 12.0.7 的 FileDataID 查找是**分表**的。
-`CustomFileIdHook` 抓到的只是"界面/音效"表。
+两张表结构确实完全不同 —— 但**不是按资源类别分表**。这一点后来搞清楚了，
+见下一节。
 
 ### 新特征码（31 字节，全映像唯一命中）
 
@@ -1085,3 +1085,83 @@ python3 tools/listid.py --probe wowmod-probe.txt \
   探针 + listid 对账这个闭环已经跑通了）
 
 这个闭环的关键是：**先证明它会加载 `character/`，再谈替换**。不再靠特征码命中就上。
+
+---
+
+## 更正：Arctium 到底怎么让模组生效（v12）
+
+前面几轮一直在找「哪个函数负责加载 `character/`」，并据此判断
+`0x33e06a0` / `0x33e05c0` 能不能用来换模型。**这个方向本身是错的。**
+
+拿到 Arctium 的 mod 加载器源码（`Arctium/WoW-Launcher`，MIT，2024 年删库，
+现存于 fork `Longee-G/Arctium-WoW-Launcher-No-Certificate-Requirements`）之后，
+它的做法一目了然 —— 它**不 hook 查找函数，也不替换返回值**：
+
+```csharp
+// src/Launcher.cs
+Task.WaitAll(new[] {
+    memory.QueuePatch(Patterns.Windows.LoadByFileIdAlternate,
+                      Patches.Windows.NoJump, "LoadByFileId", 3),
+    memory.QueuePatch(Patterns.Windows.LoadByFilePathAlternate,
+                      Patches.Windows.NoJump, "LoadByFilePath", 3)
+});
+
+// src/Patches/Windows.cs
+public static byte[] NoJump = { 0x00, 0x00, 0x00, 0x00 };
+```
+
+它把那两处「按 FileDataID / 按路径从 CASC 加载」的 `je rel32`
+**改成 `je 0`（永不跳）**。于是函数跳过整段 CASC 读取逻辑，
+返回 false，上层认为「CASC 里没有这个资源」，转而去查
+`mappings/*.txt` + `files/` 里登记的本地文件。
+
+### 12.0.7 上这两条特征码都在
+
+用 113,565,696 字节的主模块解密映像逐条验证：
+
+| 特征码 | 命中数 | 地址 | 补丁点 | 原字节 |
+|---|---|---|---|---|
+| `LoadByFileIdAlternate` | **1** | `0x33d7976` | `0x33d797a` | `0F 84 9C 00 00 00`（`je 0x33d7a19`） |
+| `LoadByFilePathAlternate` | **1** | `0x33d7b58` | `0x33d7b5b` | `0F 84 C0 00 00 00`（`je 0x33d7c1f`） |
+| `LoadByFileId`（旧） | 0 | — | — | 12.0.7 已不再使用 |
+| `LoadByFilePath`（旧） | 0 | — | — | 12.0.7 已不再使用 |
+| `CustomFileIdHook` | 1 | `0x33e06a0` | — | 同上，是**另一个**用途 |
+
+### 为什么前几轮的「0 命中」不能说明问题
+
+`0x33d78f0` 是文件打开函数本体，`r8d`（第 4 个参数）被存进 `ebp`
+（`0x33d7917  mov ebp, r8d`），随后 `0x33d7973  test bpl,1` 用它决定
+要不要走 CASC 分支。
+
+探针装在下游的两个查找函数上（`0x33e05c0` / `0x33e06a0`），
+**只统计了「已经决定要走 CASC 分支」的那些调用**。界面和音效先加载、
+且走这条路径，所以日志里只有 `interface/` 和 `sound/`；
+角色资源要么走了另一个分支，要么在这些调用之前就被上层拦掉了。
+
+结论：探针的「0 命中」是**测量位置的问题**，不是「这个函数不管角色资源」。
+两次共 4739 次调用这个数字仍然有效，但它证明不了任何关于 `character/` 的事。
+
+### v12 的变化
+
+1. 新增 `--mode patch`：按 Arctium 的做法改写两条条件跳转
+   （**不打 hook、不搬指令、不写跳板**，所以前三次崩溃的成因在这里不存在）
+2. 新增 `wowmod-patch.cmd` 一键脚本（`--mode patch --apply`）
+3. 特征码表改正：`patch_offset` 对 Alternate 变体是 **3**（不是旧版的 6），
+   并把旧的 `LoadByFileId` / `LoadByFilePath` 标注为「12.0.7 不命中」
+4. 三条硬性安全条件，任一不满足就跳过并写报告，绝不猜着打：
+   - 全映像**唯一**命中（多处命中 = 特征太弱）
+   - 补丁点当前字节必须真的是 `0F 84`（`je rel32`）
+   - 写前复读 + 写后回读，不一致就回滚
+5. 构建标记 `patch-v12`，主机测试 560 项 0 失败
+
+### 还需要补的一环（诚实说明）
+
+Arctium 的 `ModLoader.HookClient` 在打完这两条补丁之后，还会在
+`CustomFileIdHook`（= `0x33e06a0`）入口装一个 15 字节 jmp 到它自己的查表
+stub：拿 `edx` 在它注入的 `idAlloc` 表（每项 12 字节：4 字节 id + 8 字节
+路径指针）里线性查找，命中就返回路径指针。**这一层 v12 还没有做** ——
+它需要正确的「查不到时返回什么」语义，直接替换返回值会拿垃圾指针当资源用。
+
+所以 v12 的定位是：**先把「关闭 CASC 分支」这一半做对、做安全**，
+并且用实测数据确认它在 12.0.7 上确实命中。这一半是 Arctium 机制里
+唯一「改动极小、可验证、不会崩」的部分。下一半要等这一半的实测结果。

@@ -73,6 +73,7 @@ if(WIN32)
     src/windows/fd_hook.cpp
     src/windows/scan_images.cpp
     src/windows/arctium_sig.cpp
+    src/windows/arctium_patch.cpp
   )
   target_include_directories(wowmod_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(wowmod_loader PRIVATE wowmod_core)

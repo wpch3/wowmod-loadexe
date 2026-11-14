@@ -13,35 +13,53 @@ const std::vector<ArctiumSignatureSpec> kSpecs = {
      "48 ?? ?? ?? ?? ?? ?? 48 ?? ?? 74 ?? 48 ?? CD",
      0, "Arctium 直接在这些字节处装 15 字节 jmp，换成查表 stub"},
 
-    // 第二张 FileDataID 哈希表（12.0.7 新增发现，实测唯一命中 RVA 0x33e05c0）。
+    // 第二张 FileDataID 哈希表（12.0.7 唯一命中 RVA 0x33e05c0）。
     //
     // 与上面的 CustomFileIdHook 是【两张不同的表】：
     //   CustomFileIdHook : murmur(0xff51afd7ed558ccd) + 桶指针 + 节点 16 字节
     //   本特征码        : FNV-1a(0xcbf29ce484222325 / 0x100000001b3) + 元素 44 字节
-    // 判据来自反汇编：mov r10,[rcx] / movabs rax,0xcbf29ce484222325 /
-    // mov r11d,edx / 逐字节混合 dl、>>8、>>16、>>24 / imul rax,r8,0x2c
     //
-    // 为什么要加它：CustomFileIdHook 那个函数经探针实测只加载 interface/ 与 sound/，
-    // character/ 一次都没有。角色模型贴图必然走别的查找路径，这一张是最有可能的。
+    // 它【不是】模组加载点，而是 LoadByFileId 内部的第一步查找（见下）。实测调用序
+    // 0x33d7959 call 0x33e05c0  →  0x33d7986 call 0x33e06a0，两者都在同一个文件打开
+    // 函数里、共用 rdx=FileDataID。早期探针挂在这里却只记录到 interface//sound/，
+    // 是因为它 0x33d7973 处 test bpl,1 的 bpl 由该函数第 4 个参数 r8d 传入，
+    // 探针触发的那条路径本身就只走界面/音效，不能据此判断它「管什么资源」。
     {"FileIdLookupFNV",
      "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 8B 11 48 B8 25 23 22 84 E4 9C F2 CB "
      "44 8B DA",
      0, "FNV-1a 哈希的 FileDataID 查找（元素步长 0x2C）"},
 
-    // 「按 FileDataID 从 CASC 加载」分支。
-    {"LoadByFileId",
-     "41 ?? ?? 01 0F 84 ?? 00 00 00 48 8B ?? ?? ?? ?? ?? 8B", 6,
-     "10.x 之前的分支特征；patch_offset=6 指向 je 的 4 字节相对位移"},
-    {"LoadByFileIdAlternate", "01 0F 84 ?? ?? ?? ?? 48 8B ?? ?? ?? ?? ?? 8B ?? E8", 3,
-     "Arctium 对 10.0+ 使用这条"},
-
-    // 「按路径从 CASC 加载」分支。
-    {"LoadByFilePath",
-     "01 0F 84 ?? ?? ?? ?? 48 8B ?? ?? ?? ?? ?? 44 89 ?? ?? ?? 48 85 C9", 3,
-     "路径型覆盖的分支"},
+    // ------------------------------------------------------------------
+    // Arctium 的【真正 mod 机制】：不是替换 CustomFileIdHook 的返回值，
+    // 而是把这两处「按 FileDataID / 按路径从 CASC 加载」的条件跳转【改成不跳】。
+    //
+    //   je 0x33d7a19  <- 打掉它 → 跳过 CASC 分支，rdi 保持为 0
+    //   je 0x33d7c1f  <- 打掉它 → 跳过 CASC 分支
+    //   ... 于是函数返回 false，上层把这次读取当成「CASC 里没有」，
+    //   转而在 mappings/*.txt + files/ 里查 FileDataID 对应的本地文件。
+    //
+    // 补丁内容就是 4 个 0x00（Arctium Patches.Windows.NoJump）。
+    // patch_offset 是【相对匹配起点的偏移】，这两个值来自 12.0.7 实测反汇编：
+    //   0x33d7977  test bpl,1
+    //   0x33d797a  je 0x33d7a19      <- 匹配起点 0x33d7976，偏移 3 指向 je 的 4 字节位移
+    //   0x33d7b55  test sil,1
+    //   0x33d7b58  je 0x33d7c1f      <- 匹配起点 0x33d7b58，偏移 3 同上
+    //
+    // 注意：这两个偏移（3）与旧 10.x 分支用的 6 不同，因为匹配起点不同。
+    {"LoadByFileIdAlternate",
+     "01 0F 84 ?? ?? ?? ?? 48 8B ?? ?? ?? ?? ?? 8B ?? E8", 3,
+     "12.0.7 唯一命中 0x33d7976。je 改成不跳 = 关掉 CASC 加载分支，模组文件的入口"},
     {"LoadByFilePathAlternate",
      "01 0F 84 ?? ?? ?? ?? 48 8B ?? ?? ?? ?? ?? 44 89 ?? ?? ?? 00 00 00 48 85 C9", 3,
-     "10.0+ 变体"},
+     "12.0.7 唯一命中 0x33d7b58。同上，路径型资源（如 textures 相对路径）用这条"},
+
+    // 旧版（10.x 之前）的特征串，保留以便识别老客户端。12.0.7 上命中 0 处。
+    {"LoadByFileId",
+     "41 ?? ?? 01 0F 84 ?? 00 00 00 48 8B ?? ?? ?? ?? ?? 8B", 6,
+     "10.x 之前的分支特征；patch_offset=6 指向 je 的 4 字节相对位移。12.0.7 上不命中"},
+    {"LoadByFilePath",
+     "01 0F 84 ?? ?? ?? ?? 48 8B ?? ?? ?? ?? ?? 44 89 ?? ?? ?? 48 85 C9", 3,
+     "10.x 之前的路径型分支。12.0.7 上不命中"},
 };
 }  // namespace
 

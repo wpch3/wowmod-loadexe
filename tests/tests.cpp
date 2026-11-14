@@ -1620,6 +1620,26 @@ static void test_arctium_signature_table() {
   CHECK(saw_loadbyid, "有 LoadByFileId 分支特征");
   CHECK(saw_loadbypath, "有 LoadByFilePath 分支特征");
 
+  // 12.0.7 实测：Arctium 真正打补丁的两条是 *Alternate 变体，
+  // 而旧的两条（LoadByFileId / LoadByFilePath）在 12.0.7 上命中 0 处。
+  // 补丁偏移必须是 3（匹配起点 -> je 的 rel32），不是旧版的 6。
+  bool saw_id_alt = false, saw_path_alt = false;
+  for (const auto& sg : sigs) {
+    const std::string n = sg.name;
+    if (n == "LoadByFileIdAlternate") {
+      saw_id_alt = true;
+      CHECK_EQ(sg.patch_offset, 3);
+      // 起点第 1 字节是 01，第 2-3 是 0F 84，偏移 3 落在 rel32 上
+      CHECK_EQ(sg.pattern[0], '0');
+    }
+    if (n == "LoadByFilePathAlternate") {
+      saw_path_alt = true;
+      CHECK_EQ(sg.patch_offset, 3);
+    }
+  }
+  CHECK(saw_id_alt, "有 LoadByFileIdAlternate（12.0.7 唯一命中，Arctium 实际打的是这条）");
+  CHECK(saw_path_alt, "有 LoadByFilePathAlternate（12.0.7 唯一命中）");
+
   // 按特征本身构造一段映像：固定字节照抄，通配位填 0x90，
   // 再断言「能在预期起点唯一命中、改写点 = 起点 + patch_offset」。
   // 这是对匹配器与偏移语义的验证，不代表客户端里真的有这个函数。
