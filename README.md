@@ -272,7 +272,7 @@ CLI 在真实编译产物上的表现：
 应当输出：
 
 ```
-wowmod_loader build: sigscan-dump-v3
+wowmod_loader build: sigscan-dump-v4
 modes: observe auto hook analyze diagnose sigscan
 ```
 
@@ -284,11 +284,10 @@ modes: observe auto hook analyze diagnose sigscan
 
 ---
 
-## 关键发现：客户端自带本地覆盖开关（不用 hook）
+## 踩坑记录一：`overrideArchive` 不是本地覆盖开关（已实测否证）
 
-在运行时 dump 出来的主模块明文代码里（113 MB 映像，90.4% 的页仍与磁盘相同，
-1313 页 = 5.4 MB 已解密，熵 5~7 属正常代码），找到一个真实函数
-`0x1fa1b0`（2840 字节），它一次性注册了这些 CVar：
+上上个版本里，我们在 dump 出来的明文代码中找到一个函数 `0x1fa1b0`（2840 字节），
+它注册了一串 CVar 和一个扩展名清单：
 
 ```
 0x1fab86  "overrideArchive"
@@ -298,31 +297,77 @@ modes: observe auto hook analyze diagnose sigscan
 0x1fa1f4  "casContainerSizeLimit"
 ```
 
-`overrideArchive` 是 **WoW 官方控制台变量**，官方定义：
-「Whether or not the client loads alternate data」，默认 `0`（关闭）。
+因为它是官方 CVar（默认 `0`，需要重启生效），当时的推论是"打开它就能加载松散文件"。
+**实测结果：无效。** 在 `WTF\Config.wtf` 里写入 `SET overrideArchive "1"`、
+完全重启客户端后，血精灵女性外观没有任何变化（89 个 `.blp` 已就位于
+`_midnight_\Character\BloodElf\Female\`）。
 
-也就是说：**客户端本来就实现了"加载本地替代数据"**，只是默认关着。
-Arctium 之所以要改代码，是因为 10.x 时代这条路径被分支跳转绕过了；
-而 12.0.7 的这个函数里，".blp/.tga/.jpg/.jpeg/.wav" 的覆盖扩展名清单
-和 CVar 注册是同一条代码路径 —— 值得先按官方开关试。
+否证它的证据来自 CASC 库本身：
+`CASCHandler.Root.SetFlags(locale, overrideArchive, preferHighResTextures)`
+—— `overrideArchive` 是**根清单（root manifest）的一个标志位**，
+它切换的是"加载哪一份资源清单"（中韩版亡灵模型那套替身资源），
+**不参与 FileDataID → 松散文件的解析**。所以它无法注入任意本地文件。
 
-### 怎么试（零风险，不改任何字节）
+结论：这条路彻底关闭，不要再试。要覆盖 FileDataID，只有 Arctium 那种
+在解析函数入口做 detour 一条路。
 
-在游戏目录的 `WTF\Config.wtf` 里加一行：
+## 踩坑记录二：CASC 根目录不是 exe 所在目录
+
+现场目录结构（用户实机）：
 
 ```
-SET overrideArchive "1"
+D:\Midnight Open Beta\
+    _midnight_\                        <- exe 在这里
+        WoW 12.0.7 - Firestorm.exe
+        wow_loader.dll
+        Cache/  Errors/  Fonts/  Interface/  Logs/  WTF/  wowmod/
+        Character\BloodElf\Female\*.blp   <- 89 个松散文件放这里
+    Data\                              <- CASC 数据根在这里（和 _midnight_ 同级）
 ```
 
-然后**完全退出客户端再启动**（该变量需要重启生效），直接双击 exe 正常进游戏，
-看血精灵女性外观有没有变化。
+我们此前的文档写过"客户端没有 `Data` 目录"，**这是错的** —— `Data` 存在，
+只是在 `D:\Midnight Open Beta\Data`，和 `_midnight_` 平级，而不是在 exe 旁边。
+也就是说 **exe 所在目录 `_midnight_\` 不是 CASC 数据根**：客户端能正常启动，
+只能说明它读的是同级 `Data\` 那一份。所以把松散文件丢进 exe 目录，
+从一开始就不在客户端的数据查找范围内 —— 这解释了为什么"放进去没反应"。
+（仍遵守用户定下的硬约束：绝不建议把文件放到 `D:\Midnight Open Beta\` 这一层。）
 
-注意：`overrideArchive` 官方用途是"中韩版亡灵模型/骷髅变面包"这套替身资源，
-能否让任意 FileDataID 的松散文件生效，需要实测确认。这一步的价值在于：
-**不需要注入、不需要改内存、没有任何崩溃风险**，是最便宜的一次验证。
+## 修复：导出时机（这才是上次只拿到 9.6% 明文的真正原因）
 
-如果这一行就能让外观变化，我们的路线总结为「CASC 官方覆盖 + 松散文件布局」，
-完全不需要 Arctium 那套 detour。
+壳是**按 4 KB 页惰性解密**的：只有客户端真正执行到的页才是明文，
+其余页永远保持磁盘上的密文（熵 8.00）。实测那一次的 113 MB 映像里
+只有 1313/13730 页（5.4 MB，9.6%）是明文。
 
-如果不能，再回到 hook 路线 —— 此时我们已经有 5.4 MB 已解密的明文代码
-和它们引用的字符串清单，不需要再重新 dump。
+原因是 `--dump-module` 在 `ResumeThread` 之后 **400 ms** 就抓内存 ——
+那时客户端还没登录，绝大部分代码页根本没被执行过。
+
+**修法（不再靠猜时间）：**
+
+`dump_module_full` 新增 `text_checked` / `text_low_entropy` 两个字段，
+导出前先**采样 256 个可执行页并估算每页熵**（密文≈8.0，x64 明文≈6.0~6.6），
+算出"明文页占比"。启动器随后**每秒采一次，直到比例连续 3 次不再上升**才真正导出，
+并打印全过程：
+
+```
+采样 .text 解密进度（等比例稳定后再导出）
+   1000 ms: 明文页 34/256 = 13.3%
+   3000 ms: 明文页 96/256 = 37.5%
+   ...
+  比例已稳定（连续 3 次没上升），开始导出。
+  导出完成，明文页: 168/256 = 65.6%
+```
+
+`--dump-module` 现在支持 `--wait MS`（默认 30000）作为上限；
+若最终明文比例仍低于 20%，会明确提示**先登进游戏、进出一次场景/换装再重跑**，
+因为只有那些被真正执行的页才会解密。
+
+正确用法（要覆盖的是模型加载，就必须让客户端先跑到那条路径）：
+
+```bat
+wowmod_loader.exe --exe "WoW 12.0.7 - Firestorm.exe" --mode sigscan --dump-module --wait 180000
+```
+
+导出后对照磁盘 exe 做逐页 diff，就能精确统计本次拿到了多少明文代码；
+有了完整明文，再按 Arctium 的 `CustomFileIdHook` 探针
+`48 89 5C 24 08 57 48 83 EC 20 48 8B ?? 48 ?? ?? 48 ?? ?? ?? ?? ?? ?? E8 ...`
+去匹配才有意义。

@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v3"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v4"
 #endif
 #include <tlhelp32.h>
 
@@ -715,12 +715,54 @@ int main(int argc, char** argv) {
       }
     }
     // 导出主模块：磁盘上的 .text 是加密的（熵 8.00），只有内存里才是明文代码。
-    // 这是离线提取 12.0.7 特征码的唯一数据来源。
+    //
+    // 关键：壳是【按页惰性解密】的 —— 只有客户端真正跑到过的页才是明文。
+    // 上一版在 ResumeThread 之后 400 ms 就抓，结果 113 MB 里只有 5.4 MB
+    // （9.6%）是明文，剩下全是密文，等于白导。
+    // 现在改成：反复采样"明文页占比"，直到它不再上升（或到达 --wait 上限）
+    // 才真正导出。判据是实测数据，不是猜的时间。
     if (o.dump_module) {
       const std::string mdir = wowmod::join_path(wowmod_dir, "dump");
       CreateDirectoryW(utf8_to_wide(to_native_path(mdir)).c_str(), nullptr);
-      say("导出主模块完整映像（含解密后的 .text）");
       const std::string mp = wowmod::join_path(mdir, "main-module.bin");
+
+      size_t best_low = 0, best_checked = 0;
+      double best_ratio = -1.0;
+      int stable = 0;
+      const DWORD t_start = GetTickCount();
+      say("采样 .text 解密进度（等比例稳定后再导出）");
+      for (;;) {
+        const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
+        if (!probe.text_checked) {
+          std::printf("  采样失败（模块尚未就绪），继续等...\n");
+        } else {
+          const double ratio = static_cast<double>(probe.text_low_entropy) /
+                               static_cast<double>(probe.text_checked);
+          std::printf("  %4.0f ms: 明文页 %zu/%zu = %.1f%%\n",
+                      static_cast<double>(GetTickCount() - t_start),
+                      probe.text_low_entropy, probe.text_checked, ratio * 100.0);
+          std::fflush(stdout);
+          if (ratio > best_ratio + 0.005) {
+            best_ratio = ratio;
+            best_low = probe.text_low_entropy;
+            best_checked = probe.text_checked;
+            stable = 0;
+          } else {
+            stable++;
+          }
+        }
+        if (stable >= 3) {
+          std::printf("  比例已稳定（连续 3 次没上升），开始导出。\n");
+          break;
+        }
+        if (GetTickCount() - t_start >= static_cast<DWORD>(o.wait_ms)) {
+          std::printf("  到达 --wait 上限 %d ms，按当前状态导出。\n", o.wait_ms);
+          break;
+        }
+        ::Sleep(1000);
+      }
+
+      say("导出主模块完整映像（含解密后的 .text）");
       const auto md = wowmod::win::dump_module_full(pi.hProcess, "", mp);
       if (!md.ok) {
         std::printf("  失败: %s\n", md.error.c_str());
@@ -729,12 +771,22 @@ int main(int argc, char** argv) {
                     wowmod::to_hex(md.base, 16).c_str(),
                     static_cast<double>(md.size_of_image) / (1024.0 * 1024.0),
                     static_cast<double>(md.written) / (1024.0 * 1024.0));
+        if (md.text_checked)
+          std::printf("  明文页: %zu/%zu = %.1f%%\n", md.text_low_entropy,
+                      md.text_checked,
+                      100.0 * static_cast<double>(md.text_low_entropy) /
+                          static_cast<double>(md.text_checked));
         std::printf("  节表:\n");
         for (const auto& sec : md.sections) std::printf("    %s\n", sec.c_str());
         std::printf("  文件: %s\n", md.path.c_str());
         std::printf("  说明: RVA 可直接当文件偏移用。\n");
-        if (md.written * 2 < md.size_of_image)
-          std::printf("  ！只读到不足一半，客户端可能还没解密完，建议重跑一次。\n");
+        // 比例很低说明客户端还没跑到那些代码 —— 只有真正进游戏、换装、
+        // 打开角色面板，才会把模型/文件名解析相关的页解密出来。
+        if (md.text_checked && md.text_low_entropy * 5 < md.text_checked)
+          std::printf("  ！明文只有 %.1f%%，偏少。\n"
+                      "    请先登进游戏、切一次角色/换一套模型，再重跑本命令导出。\n",
+                      100.0 * static_cast<double>(md.text_low_entropy) /
+                          static_cast<double>(md.text_checked));
       }
     }
 

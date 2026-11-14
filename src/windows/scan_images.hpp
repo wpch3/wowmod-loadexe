@@ -86,8 +86,15 @@ struct ModuleDump {
   bool ok = false;
   std::string error;
   std::vector<std::string> sections;   // 每节的 "名称 VA 大小 类型"，供报告
+  // ---- 解密进度度量（用来判断"现在抓是不是太早"）----
+  size_t text_checked = 0;   // 采样的可执行页数
+  size_t text_low_entropy = 0;  // 其中熵估算 < 7.0 的页数（= 明文代码）
 };
 
+// 用 4 KB 采样页估算可执行段里有几成已经是明文。
+// 壳是【按页惰性解密】的：没跑到的页仍是密文（熵≈8），跑到的页是明文（熵 5~7）。
+// 所以"明文页比例不再上升"就是一个可靠的导出时机信号，
+// 比固定 Sleep 靠谱 —— 之前 dump 只有 9.6% 明文就是这么来的。
 ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
                             const std::string& out_path);
 

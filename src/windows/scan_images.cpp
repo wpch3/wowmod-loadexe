@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -264,6 +265,20 @@ size_t read_into(HANDLE process, uint64_t addr, std::vector<uint8_t>* buf, size_
 
 }  // namespace
 
+// 估算一段字节的位熵（0..8）。密文页≈8.0，x64 明文代码≈6.0~6.6。
+static double byte_entropy(const uint8_t* p, size_t n) {
+  if (!n) return 0.0;
+  size_t hist[256] = {0};
+  for (size_t i = 0; i < n; ++i) hist[p[i]]++;
+  double h = 0.0;
+  for (size_t i = 0; i < 256; ++i) {
+    if (!hist[i]) continue;
+    const double q = static_cast<double>(hist[i]) / static_cast<double>(n);
+    h -= q * (q > 0 ? (std::log(q) / std::log(2.0)) : 0.0);
+  }
+  return h;
+}
+
 ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
                             const std::string& out_path) {
   ModuleDump out;
@@ -342,8 +357,13 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
   const size_t sec_off = opt + (magic == 0x20B ? 240 : 224);
 
   // 3) 整块按映像导出（RVA == 偏移），缺页填 0。
-  std::vector<uint8_t> img(size_of_image, 0);
-  out.written = read_into(process, base, &img, 0, size_of_image);
+  //    out_path 为空 = 只探测（采样解密进度），不读整块也不写盘 ——
+  //    否则光是轮询一次就要把 113 MB 读一遍。
+  std::vector<uint8_t> img;
+  if (!out_path.empty()) {
+    img.assign(size_of_image, 0);
+    out.written = read_into(process, base, &img, 0, size_of_image);
+  }
 
   // 4) 记下节表，供报告核对。
   static const char* kHex = "0123456789abcdef";
@@ -361,7 +381,31 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
                            "  可执行=" + ((ch & 0x20000000u) ? "是" : "否"));
   }
 
-  // 5) 写盘。
+  // 5) 采样 .text，估算明文比例（供调用方判断导出时机）。
+  //    只读第一页就知道内容可用不可用，代价远低于整块 113 MB。
+  for (uint16_t i = 0; i < nsec && sec_off + i * 40 + 40 <= hdr.size(); ++i) {
+    const uint8_t* s = hdr.data() + sec_off + i * 40;
+    const uint32_t ch = rd32(s + 36);
+    if (!(ch & 0x20000000u)) continue;  // 只看可执行段
+    const uint32_t vs = rd32(s + 8), va = rd32(s + 12);
+    const size_t pages = vs / 0x1000;
+    if (!pages) continue;
+    // 均匀抽 256 页，够稳定又不用读满 53 MB。
+    const size_t stride = pages > 256 ? pages / 256 : 1;
+    std::vector<uint8_t> page(0x1000);
+    for (size_t p = 0; p < pages; p += stride) {
+      const uint64_t at = base + va + static_cast<uint64_t>(p) * 0x1000;
+      if (read_into(process, at, &page, 0, 0x1000) < 0x1000) continue;
+      out.text_checked++;
+      if (byte_entropy(page.data(), 0x1000) < 7.0) out.text_low_entropy++;
+    }
+  }
+
+  // 6) 写盘。
+  if (out_path.empty()) {
+    out.ok = true;   // 探测模式：只回报采样结果
+    return out;
+  }
   FILE* f = nullptr;
   const std::wstring wpath = utf8_to_wide(to_native_path(out_path));
   if (_wfopen_s(&f, wpath.c_str(), L"wb") != 0 || !f) {
