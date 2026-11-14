@@ -1,0 +1,275 @@
+{
+  "analyzer": "wowmod-loose-file-analyzer",
+  "ok": true,
+  "imageSize": 113565696,
+  "baseVa": "0000000003b90000",
+  "orphanStrings": [
+    {
+      "marker": "overridden files",
+      "rva": "00000000035c4898",
+      "utf16": false
+    },
+    {
+      "marker": "CASC",
+      "rva": "0000000003914c88",
+      "utf16": false
+    },
+    {
+      "marker": "CASC",
+      "rva": "0000000003c544e1",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "000000000378b563",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003794d1f",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "00000000037a069f",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003a2229c",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003a229dd",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003a46b0c",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003abbaa8",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003ae1b85",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003af886f",
+      "utf16": false
+    },
+    {
+      "marker": "FileDataID",
+      "rva": "0000000003af8a51",
+      "utf16": false
+    }
+  ],
+  "usedFileRemap": false,
+  "stringHits": [
+    {
+      "marker": "Locally overridden files",
+      "rva": "35c4890",
+      "utf16": false,
+      "refCount": 1,
+      "refs": [
+        {
+          "at": "33e18aa",
+          "form": "lea"
+        }
+      ],
+      "functions": [
+        "33e1890"
+      ]
+    },
+    {
+      "marker": ".flavor.info",
+      "rva": "39719e0",
+      "utf16": false,
+      "refCount": 1,
+      "refs": [
+        {
+          "at": "2c4d7b1",
+          "form": "lea"
+        }
+      ],
+      "functions": []
+    }
+  ],
+  "sites": [
+    {
+      "marker": "Locally overridden files",
+      "functionRva": "33e1890",
+      "refRva": "33e18aa",
+      "hookable": true,
+      "copyLen": 15,
+      "relocatable": true,
+      "hasRipRelative": false,
+      "hasJump": false,
+      "reason": "可用：覆盖 15 字节完整指令",
+      "prologue": [
+        {
+          "rva": "33e1890",
+          "bytes": "40 53 "
+        },
+        {
+          "rva": "33e1892",
+          "bytes": "56 "
+        },
+        {
+          "rva": "33e1893",
+          "bytes": "41 56 "
+        },
+        {
+          "rva": "33e1895",
+          "bytes": "48 81 ec 40 01 00 00 "
+        },
+        {
+          "rva": "33e189c",
+          "bytes": "4c 8b f2 "
+        },
+        {
+          "rva": "33e189f",
+          "bytes": "4c 8d 8c 24 60 01 00 00 "
+        },
+        {
+          "rva": "33e18a7",
+          "bytes": "48 8b f1 "
+        },
+        {
+          "rva": "33e18aa",
+          "bytes": "48 8d 15 df 2f 1e 00                     ; -> 0000000007154890"
+        }
+      ]
+    }
+  ],
+  "idLookupCandidates": [
+    {
+      "functionRva": "33de3b9",
+      "cmpRva": "33de400",
+      "score": 45,
+      "scale": 8,
+      "evidence": "cmp 使用 [base + idx*8], base=r10, idx=r8"
+    },
+    {
+      "functionRva": "19f4f92",
+      "cmpRva": "19f4fb4",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r1, idx=r0"
+    },
+    {
+      "functionRva": "1a1507a",
+      "cmpRva": "1a150af",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r3, idx=r1"
+    },
+    {
+      "functionRva": "1a1b1a0",
+      "cmpRva": "1a1b200",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r3, idx=r1"
+    },
+    {
+      "functionRva": "1a1bac0",
+      "cmpRva": "1a1bae5",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r3, idx=r1"
+    },
+    {
+      "functionRva": "6b1c1c9",
+      "cmpRva": "6b1c428",
+      "score": 45,
+      "scale": 8,
+      "evidence": "cmp 使用 [base + idx*8], base=r2, idx=r1"
+    },
+    {
+      "functionRva": "1a1c3fb",
+      "cmpRva": "1a1c43a",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r1, idx=r1"
+    },
+    {
+      "functionRva": "6b1c1c9",
+      "cmpRva": "6b1c420",
+      "score": 45,
+      "scale": 8,
+      "evidence": "cmp 使用 [base + idx*8], base=r2, idx=r1"
+    },
+    {
+      "functionRva": "1a568ff",
+      "cmpRva": "1a56952",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r4, idx=r7"
+    },
+    {
+      "functionRva": "1a657c4",
+      "cmpRva": "1a657ee",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r1, idx=r1"
+    },
+    {
+      "functionRva": "186136a",
+      "cmpRva": "18613b9",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r7, idx=r7"
+    },
+    {
+      "functionRva": "1a65ed3",
+      "cmpRva": "1a66887",
+      "score": 45,
+      "scale": 8,
+      "evidence": "cmp 使用 [base + idx*8], base=r0, idx=r5"
+    },
+    {
+      "functionRva": "1a65ed3",
+      "cmpRva": "1a66f18",
+      "score": 45,
+      "scale": 8,
+      "evidence": "cmp 使用 [base + idx*8], base=r2, idx=r1"
+    },
+    {
+      "functionRva": "1a6e7b0",
+      "cmpRva": "1a6e7eb",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r1, idx=r1"
+    },
+    {
+      "functionRva": "1a9a784",
+      "cmpRva": "1a9a7cb",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r3, idx=r1"
+    },
+    {
+      "functionRva": "1a9b6b0",
+      "cmpRva": "1a9b713",
+      "score": 45,
+      "scale": 4,
+      "evidence": "cmp 使用 [base + idx*4], base=r0, idx=r6"
+    }
+  ],
+  "detourTargets": [
+    {
+      "marker": "Locally overridden files",
+      "functionRva": "33e1890",
+      "hookable": true,
+      "copyLen": 15,
+      "reason": "可用：覆盖 15 字节完整指令"
+    }
+  ],
+  "warning": "这是结构推断，不是 ABI 证明。未经运行期观察确认的 id 寄存器/返回值语义不得直接用于打补丁。"
+}
