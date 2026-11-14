@@ -318,7 +318,19 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
       return out;
     }
   } else {
-    // 主模块 = SizeOfImage 最大的那个 MEM_IMAGE 区域。
+    // 主模块 = 同时满足三个条件的区域：
+    //   a) 有合法 PE 头（MZ + PE\0\0 + 机器码 + SizeOfImage 合理）
+    //   b) SizeOfImage 最大
+    //   c) **VA 落在模块大小范围内是自洽的**
+    //
+    // v15 之前的 bug：这里只取 SizeOfImage 最大者，没有排除掉
+    // 「PE 头碰巧合法、但整个区域其实不在 0x140000000 附近」的情况。
+    // 实测把 VA 0x6F17976 当成主模块内地址（base 被认成别的值），
+    // 于是特征码命中被报告成「非映像 不可执行」，看起来像特征码失效，
+    // 实际是**基址选错了**。
+    //
+    // 加一条硬约束：区域必须覆盖 SizeOfImage，且 base 之后 SizeOfImage
+    // 的范围内确实可读（能读到最后一个页）。不满足的直接丢弃。
     uint32_t best = 0;
     for (const auto& r : images) {
       std::vector<uint8_t> hdr(0x1000);
@@ -329,6 +341,13 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
       const uint16_t mg = rd16(hdr.data() + pe_off + 24);
       const uint32_t soi = rd32(hdr.data() + pe_off + 24 + 56);
       if (mg != 0x20B && mg != 0x10B) continue;
+      if (soi < 0x10000) continue;                     // 太小，不是主模块
+      if (soi > r.size + 0x10000) continue;            // SizeOfImage 超出区域，假的
+      // 抽查镜像最后一个页，读不到就说明这不是完整映像
+      std::vector<uint8_t> tail(16, 0);
+      if (read_into(process, r.base + soi - tail.size(), &tail, 0, tail.size()) !=
+          tail.size())
+        continue;
       if (soi > best) { best = soi; base = r.base; }
     }
     if (!base) {

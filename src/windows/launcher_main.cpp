@@ -554,7 +554,7 @@ int main(int argc, char** argv) {
     else if (a == "--verbose") o.verbose = true;
     else if (a == "--version") {
       std::printf("wowmod_loader build: %s\n", WOWMOD_LOADER_BUILD_TAG);
-      std::printf("modes: observe auto hook analyze diagnose sigscan probe\n");
+      std::printf("modes: observe auto hook analyze diagnose sigscan probe scout patch\n");
       return 0;
     }
     else if (a == "-h" || a == "--help") {
@@ -665,6 +665,123 @@ int main(int argc, char** argv) {
   say("已恢复客户端主线程（让 ntdll 加载器完成初始化）");
   ::Sleep(400);  // 给加载器一点时间建立模块表
 
+  // 2b2) 侦察模式（--mode scout）：只报事实，【一个字节都不写】。
+  //
+  // 为什么需要它：前面几轮我们一直在猜「主模块基址是多少」「特征码命中
+  // 落在哪个模块里」，猜错的代价是几轮往返。这个模式把事实一次性导出：
+  //   主模块真实基址 / SizeOfImage / 明文比例
+  //   每条特征码在【每个】模块里的命中地址
+  //   两个目标 RVA 上现在的实际字节
+  // 有了它，下一步不用猜。
+  if (o.mode == "scout") {
+    const std::string scout_dir = wowmod::join_path(o.workdir, "wowmod");
+    CreateDirectoryW(utf8_to_wide(to_native_path(scout_dir)).c_str(), nullptr);
+    const std::string scout_path = wowmod::join_path(scout_dir, "wowmod-scout.txt");
+    std::printf("\n侦察模式：只读，不写客户端任何字节。\n");
+    std::printf("  最多等待 %d 毫秒，期间持续观察解密进度。\n\n", o.wait_ms);
+
+    std::string rep;
+    rep += "wowmod 侦察报告（只读）\n";
+    rep += "=======================================================\n\n";
+
+    // ---- 1. 模块清单：名字 / 基址 / 大小 ----
+    rep += "-- 已加载模块 --\n";
+    {
+      HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
+                                             GetProcessId(pi.hProcess));
+      if (snap != INVALID_HANDLE_VALUE) {
+        MODULEENTRY32W me{};
+        me.dwSize = sizeof(me);
+        if (Module32FirstW(snap, &me)) {
+          do {
+            char nm[512]{};
+            WideCharToMultiByte(CP_UTF8, 0, me.szModule, -1, nm, sizeof(nm) - 1, nullptr, nullptr);
+            char line[640];
+            std::snprintf(line, sizeof(line), "  %-40s base=0x%llX size=0x%X\n", nm,
+                          static_cast<unsigned long long>(
+                              reinterpret_cast<uintptr_t>(me.modBaseAddr)),
+                          me.modBaseSize);
+            rep += line;
+          } while (Module32NextW(snap, &me));
+        }
+        CloseHandle(snap);
+      } else {
+        rep += "  （模块表不可用）\n";
+      }
+    }
+
+    // ---- 2. 主模块与解密进度 ----
+    const auto md = wowmod::win::dump_module_full(pi.hProcess, "", "");
+    rep += "\n-- 主模块 --\n";
+    {
+      char line[512];
+      if (!md.ok) {
+        std::snprintf(line, sizeof(line), "  取主模块失败: %s\n", md.error.c_str());
+        rep += line;
+      } else {
+        std::snprintf(line, sizeof(line), "  base = 0x%llX\n  SizeOfImage = 0x%zX\n",
+                      static_cast<unsigned long long>(md.base), md.size_of_image);
+        rep += line;
+        std::snprintf(line, sizeof(line), "  明文页 %zu/%zu = %.1f%%\n", md.text_low_entropy,
+                      md.text_checked,
+                      md.text_checked ? 100.0 * static_cast<double>(md.text_low_entropy) /
+                                            static_cast<double>(md.text_checked)
+                                      : 0.0);
+        rep += line;
+        rep += "  节:\n";
+        for (const auto& sec : md.sections) rep += "    " + sec + "\n";
+      }
+    }
+
+    // ---- 3. 两个目标 RVA 上的现字节 ----
+    rep += "\n-- 目标 RVA 现状（主模块内）--\n";
+    if (md.ok) {
+      struct Target { const char* name; uint32_t rva; };
+      const Target targets[] = {
+          {"LoadByFileIdAlternate.match", 0x33d7976},
+          {"LoadByFileIdAlternate.je", 0x33d7977},
+          {"LoadByFileIdAlternate.rel32", 0x33d7979},
+          {"LoadByFilePathAlternate.match", 0x33d7b58},
+          {"LoadByFilePathAlternate.je", 0x33d7b59},
+          {"LoadByFilePathAlternate.rel32", 0x33d7b5b},
+      };
+      for (const auto& t : targets) {
+        uint8_t buf[16]{};
+        SIZE_T got = 0;
+        const uint64_t va = md.base + t.rva;
+        if (ReadProcessMemory(pi.hProcess, reinterpret_cast<const void*>(va), buf, sizeof(buf),
+                              &got) &&
+            got >= 8) {
+          char line[256];
+          std::snprintf(line, sizeof(line), "  %-32s rva=0x%X VA=0x%llX  %02X %02X %02X %02X | %02X %02X %02X %02X\n",
+                        t.name, t.rva, static_cast<unsigned long long>(va), buf[0], buf[1],
+                        buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+          rep += line;
+        } else {
+          char line[256];
+          std::snprintf(line, sizeof(line), "  %-32s rva=0x%X  【读不到】\n", t.name, t.rva);
+          rep += line;
+        }
+      }
+    }
+
+    // ---- 4. 特征码在所有模块里的命中 ----
+    rep += "\n-- 特征码命中分布 --\n";
+    auto pat_rep = wowmod::win::plan_branch_patches(pi.hProcess, {});
+    rep += wowmod::win::format_branch_patch_report(pat_rep);
+
+    rep += "\n以上均为只读结果，客户端未修改。\n";
+    std::string werr;
+    if (!wowmod::write_text_file(scout_path, rep, &werr))
+      std::printf("  ！写报告失败: %s\n", werr.c_str());
+    std::printf("%s\n", rep.c_str());
+    std::printf("\n报告: %s\n", scout_path.c_str());
+    std::printf("客户端保持运行。把这份报告发回来即可。\n");
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+  }
+
   // 2c) 诊断模式：只报事实，不做任何修改。
   if (o.mode == "diagnose") {
     const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
@@ -736,34 +853,78 @@ int main(int argc, char** argv) {
       }
     }
 
-    // 等代码解密。判据与 sigscan/--dump-module 相同：等可执行段的明文页数稳定，
-    // 只等标记串是假就绪（v4 的教训）。
+    // ---- 等代码解密：不再用「两次相同就算稳定」----
+    //
+    // v15 之前的判据是「明文页数不再增长 -> 认为解密完成」。这个判据是错的，
+    // 实测日志说明问题：
+    //     明文页 10/260 = 3.8%
+    //     明文页 22/260 = 8.5%
+    //     明文页 22/260 = 8.5%   <- 连续两轮相同，于是判定"稳定"，开始扫描
+    // 8.5% 的时候绝大多数 .text 还是密文，特征码扫到的是随机字节，
+    // 所以同一个特征码三次跑出 10 处 / 2 处 / 1 处的不同结果，而且地址
+    // （0x6F17976）连主模块范围都不在 —— 那不是代码，是密文里的巧合。
+    //
+    // 12.0.7 的 .text 是【按页惰性解密】：只有游戏真正执行到的页才会解密。
+    // 所以正确做法不是"等一会儿"，而是：
+    //   1) 等到明文比例超过阈值（默认 50%），或
+    //   2) 用户自己把游戏开到能进游戏（加载过角色模型）之后再扫。
+    // 选项 --wait-decrypt=<秒> 让用户把等待时间拉长到进入游戏之后。
+    const unsigned kMinPlainPct = 50;
     bool ready = false;
     size_t best_low = 0;
+    size_t last_checked = 0;
     int stable = 0;
     const DWORD ts = GetTickCount();
     for (int i = 0; i < 200; ++i) {
       const auto probe = wowmod::win::dump_module_full(pi.hProcess, "", "");
       if (probe.text_checked) {
+        const size_t pct =
+            probe.text_checked ? 100 * probe.text_low_entropy / probe.text_checked : 0;
         if (i % 2 == 0)
-          std::printf("  等待代码解密... 明文页 %zu/%zu = %.1f%%\n", probe.text_low_entropy,
-                      probe.text_checked,
-                      100.0 * static_cast<double>(probe.text_low_entropy) /
-                          static_cast<double>(probe.text_checked));
+          std::printf("  等待代码解密... 明文页 %zu/%zu = %zu%% (需要 >= %u%%)\n",
+                      probe.text_low_entropy, probe.text_checked, pct, kMinPlainPct);
         std::fflush(stdout);
+        last_checked = probe.text_checked;
         if (probe.text_low_entropy > best_low) {
           best_low = probe.text_low_entropy;
           stable = 0;
-        } else if (++stable >= 3 && best_low > 0) {
+        } else {
+          ++stable;
+        }
+        // 两个条件都满足才算就绪：比例够高，且已经不再增长（避免半解密状态）。
+        if (pct >= kMinPlainPct && stable >= 2) {
           ready = true;
           break;
         }
       }
+      // 用户可以用 --wait-exit / 更长的 --wait 把窗口拉到进入游戏之后。
       if (GetTickCount() - ts > static_cast<DWORD>(o.wait_ms)) break;
       ::Sleep(1000);
     }
-    if (!ready)
-      std::printf("  ！等到上限仍未稳定（明文页 %zu），仍会继续。\n", best_low);
+    if (!ready) {
+      const size_t pct = last_checked ? 100 * best_low / last_checked : 0;
+      std::printf("\n  [停止] 代码仍未解密到可用程度（明文 %zu/%zu = %zu%%，需要 >= %u%%）。\n",
+                  best_low, last_checked, pct, kMinPlainPct);
+      std::printf("  在密文上扫描得到的命中是随机字节，打上去会直接崩溃 —— 所以不打。\n\n");
+      std::printf("  12.0.7 的 .text 是按页惰性解密的：只有游戏真正执行到的代码页才是明文。\n");
+      std::printf("  因此必须在【游戏已经进到世界、加载过角色模型】之后再扫。做法：\n\n");
+      std::printf("    1) 先正常启动游戏，登录并进入世界，看到角色模型\n");
+      std::printf("    2) 记下等待时间，然后重跑本脚本并把等待加长，例如：\n");
+      std::printf("         wowmod_loader.exe --mode patch --apply --wait 180000\n");
+      std::printf("       （180000 毫秒 = 3 分钟，覆盖登录 + 读取角色）\n\n");
+      std::printf("  本次没有修改客户端任何字节。\n");
+      std::string werr;
+      wowmod::write_text_file(
+          log_path,
+          "分支补丁：未执行\n原因：代码未解密（明文 " + std::to_string(best_low) + "/" +
+              std::to_string(last_checked) + "，需要 >= " + std::to_string(kMinPlainPct) +
+              "%）\n在密文上扫描的命中不可信，已拒绝写入。\n",
+          &werr);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 6;
+    }
+    std::printf("  代码已解密到可用程度（明文 %zu，>= %u%%）\n", best_low, kMinPlainPct);
 
     say("定位分支补丁点（只读，不写入）");
     std::map<std::string, uint32_t> rva_map;

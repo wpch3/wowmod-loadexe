@@ -66,7 +66,7 @@ echo "==> 检查 cmd 脚本的编码安全字符"
 # 已两次踩到：cmd.exe 在 chcp 65001 下解析含【顿号 U+3001】或【行内方括号】的
 # echo 行会错位，把句子后半段当成命令执行（"'回切几个角色' is not recognized"）。
 # 这类错误在 Linux 上完全看不出来，只能靠硬性扫描拦住。
-for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd; do
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd; do
   [ -f "$_f" ] || continue
   if grep -q $'\xe3\x80\x81' "$_f"; then
     fail "$_f 含中文顿号（U+3001），cmd.exe 会把它后面的内容当命令执行"
@@ -77,7 +77,7 @@ echo "   无顿号，行内方括号已确认"
 echo "==> 检查 cmd 的 echo 行全为可安全解析的字符"
 # 已三次踩到：chcp 65001 下 cmd.exe 解析 echo 里的全角标点会错位，
 # 把句子后半段当成命令执行。凡 echo 行出现全角逗号/顿号/分号一律拦下。
-for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd; do
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd; do
   [ -f "$_f" ] || continue
   if grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x8c' "$_f" ||
      grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x81' "$_f" ||
@@ -99,6 +99,13 @@ done
 echo "   rem 行标点检查通过"
 
 echo "==> 检查一键旁路脚本"
+[ -f wowmod-scout.cmd ] || fail "缺少 wowmod-scout.cmd（只读侦察）"
+grep -aq -- "--mode scout" wowmod-scout.cmd || fail "wowmod-scout.cmd 没有调用 --mode scout"
+grep -aq "wowmod-scout.txt" wowmod-scout.cmd || fail "wowmod-scout.cmd 没有校验侦察产物"
+_s_lines=$(wc -l < wowmod-scout.cmd | tr -d ' ')
+_s_crlf=$(grep -c $'\r$' wowmod-scout.cmd || true)
+[ "$_s_lines" = "$_s_crlf" ] || fail "wowmod-scout.cmd 不是全 CRLF（cmd.exe 会解析出错）"
+
 [ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
 grep -aq -- "--mode probe" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有调用 --mode probe"
 grep -aq -- "--target %WM_TARGET%" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有传 --target"
