@@ -697,6 +697,45 @@ int main(int argc, char** argv) {
 
     say("Arctium 分支补丁模式：关闭「从 CASC 加载」的条件跳转");
 
+    // ---- 先确认数据侧有没有东西 ----
+    //
+    // 这一步是必须的：分支补丁本身只改变「客户端要不要去 CASC 加载」，
+    // 它不会凭空产生本地文件。如果 wowmod\mappings 是空的，打上补丁的结果
+    // 就是"客户端认为 CASC 里没有、本地也没有"—— 直接报文件缺失，
+    // 比不打更糟。所以先查，查不到就明确告诉用户该先做什么。
+    {
+      namespace fs = std::filesystem;
+      const std::string map_dir = wowmod::join_path(wowmod_dir, "mappings");
+      const std::string files_dir = wowmod::join_path(wowmod_dir, "files");
+      size_t map_files = 0, file_count = 0;
+      std::error_code ec;
+      if (fs::is_directory(std::filesystem::u8path(map_dir), ec)) {
+        for (const auto& e : fs::directory_iterator(std::filesystem::u8path(map_dir), ec)) {
+          if (e.is_regular_file(ec) &&
+              e.path().extension() == std::filesystem::u8path(".txt"))
+            ++map_files;
+        }
+      }
+      if (fs::is_directory(std::filesystem::u8path(files_dir), ec)) {
+        for (const auto& e : fs::recursive_directory_iterator(std::filesystem::u8path(files_dir), ec))
+          if (e.is_regular_file(ec)) ++file_count;
+      }
+      std::printf("  数据检查: mappings\\*.txt %zu 个, files\\ %zu 个文件\n", map_files,
+                  file_count);
+      if (map_files == 0 || file_count == 0) {
+        std::printf("\n[停止] 数据侧是空的，打补丁没有意义。\n");
+        std::printf("  分支补丁只改变「客户端要不要去 CASC 加载」，它不会凭空产生本地文件。\n");
+        std::printf("  现在打上去，客户端会认为 CASC 里没有、本地也没有 —— 直接报文件缺失。\n\n");
+        std::printf("  请先跑 wowmod-mod.cmd 准备好这两样：\n");
+        std::printf("    %s\\*.txt\n", map_dir.c_str());
+        std::printf("    %s\\\n", files_dir.c_str());
+        std::printf("  然后再回来跑本脚本。\n\n");
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return 5;
+      }
+    }
+
     // 等代码解密。判据与 sigscan/--dump-module 相同：等可执行段的明文页数稳定，
     // 只等标记串是假就绪（v4 的教训）。
     bool ready = false;

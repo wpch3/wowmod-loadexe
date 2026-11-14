@@ -27,6 +27,7 @@ SPDX-License-Identifier: MIT
 """
 import argparse
 import os
+import re
 import shutil
 import sys
 
@@ -53,8 +54,20 @@ MOD_PREFIXES = (
 
 
 def load_listfile(paths):
-    """读一个或多个 "id;path" 文件，返回 {lower_path: id}。"""
-    table = {}
+    """读一个或多个 "id;path" 文件。
+
+    返回三个映射：
+      by_key   : 归一化键(小写/去空格) -> id     —— 只用于【查找】
+      by_id    : id -> 表里的原始路径             —— 用于回查官方写法
+      path_of  : 归一化键 -> 表里的原始路径
+    必须区分"查找键"和"输出路径"：listfile 里确实有 31944 条路径
+    自带空格（例如 "Creature/Lord Kezzak/LordKezzak.M2"），
+    而游戏用的名字就是那个带空格的形式。归一化只用来容错查找，
+    绝不能拿它去覆盖写进 mappings 的路径。
+    """
+    table = {}          # key -> id
+    path_of = {}        # key -> 原始路径
+    by_id = {}          # id -> 原始路径
     dup = 0
     for p in paths:
         if not os.path.isfile(p):
@@ -68,15 +81,18 @@ def load_listfile(paths):
                 a, b = line.split(";", 1)
                 if not a.isdigit():
                     continue
-                key = b.replace("\\", "/").strip().lower()
+                raw = b.replace("\\", "/").strip()
+                key = raw.replace(" ", "").lower()
                 fid = int(a)
                 if key in table:
                     dup += 1
                     continue
                 table[key] = fid
+                path_of[key] = raw
+                by_id.setdefault(fid, raw)
     if dup:
         print(f"  [提示] listfile 里有 {dup} 条重复路径，已保留第一次出现的 id")
-    return table
+    return table, path_of, by_id
 
 
 def normalize_key(path):
@@ -93,7 +109,7 @@ def normalize_key(path):
     return path.replace("\\", "/").replace(" ", "").strip().lower()
 
 
-def lookup_variants(table, rel):
+def lookup_variants(table, table_path, rel):
     """按 prio 顺序尝试几个变体，返回 (id, 命中的键) 或 (None, None)。
 
     顺序很重要：精确匹配优先，其次才是"加/去 _HD"这类推断。
@@ -102,7 +118,7 @@ def lookup_variants(table, rel):
     """
     k = normalize_key(rel)
     if k in table:
-        return table[k], k, "exact"
+        return table[k], table_path[k], "exact"
 
     # HD 后缀的有无。只在这一个维度上推断，不做别的模糊匹配：
     # 别的推断（比如改数字）都是凭空猜，猜错就是别的部位变样。
@@ -115,8 +131,56 @@ def lookup_variants(table, rel):
             cands.append(base + "_hd.blp")
     for c in cands:
         if c in table:
-            return table[c], c, "hd_variant"
+            return table[c], table_path[c], "hd_variant"
     return None, None, None
+
+
+FAMILY_NUM = re.compile(r"_?(\d+)(_hd)?\.blp$", re.I)
+
+
+def family_stem(name):
+    """去掉 _HD 后缀和末尾编号，得到"同族"前缀。"""
+    n = os.path.basename(name).lower().replace(" ", "")
+    n = re.sub(r"(_hd)?\.blp$", "", n)
+    return re.sub(r"_?\d+$", "", n)
+
+
+def guess_by_family(table, table_path, rel):
+    """用「同族编号」推断：同一目录、同一前缀、但编号不同的文件。
+
+    注意这是【凭位置猜】，比 _HD 推断危险得多：
+      * 编号在 listfile 里通常连续（如 DwarfFemaleNakedPelvisSkin00_00..15
+        对应 118316..118331），所以缺号时按位置可以大致确定；
+      * 但列表里可能缺号、也可能有编号跳变（Dwarf 就有 _18 而没有 _16/_17），
+        按"第几个"去对齐会整体错位，结果就是别的部位用了这张图。
+    所以：
+      * 默认【不做】这个推断；
+      * 打开时只输出候选，全部标 guess，让用户自己核对；
+      * 绝不静默使用。
+    返回 [(候选 id, 候选路径)]，按编号排序。
+    """
+    d, f = os.path.split(rel)
+    stem = family_stem(f)
+    want = None
+    m = FAMILY_NUM.search(os.path.basename(f).lower().replace(" ", ""))
+    if m:
+        want = int(m.group(1))
+    out = []
+    prefix = (d + "/").lower().replace(" ", "") if d else ""
+    for key, fid in table.items():
+        if not key.startswith(prefix):
+            continue
+        base = os.path.basename(key)
+        if family_stem(base) != stem:
+            continue
+        mm = FAMILY_NUM.search(base)
+        if not mm:
+            continue
+        out.append((int(mm.group(1)), fid, table_path[key]))
+    out.sort()
+    if want is None:
+        return []
+    return [(fid, path) for num, fid, path in out if num != want]
 
 
 def walk_mod(mod_root):
@@ -173,6 +237,8 @@ def main():
     ap.add_argument("--mapping-name", default="mod.txt", help="生成的 mappings 文件名")
     ap.add_argument("--copy", action="store_true", help="复制而不是硬链接")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不写任何文件")
+    ap.add_argument("--guess-family", action="store_true",
+                    help="对匹配不到的编号，尝试用同族编号推断（危险，需人工核对）")
     args = ap.parse_args()
 
     missing_lf = [p for p in args.listfile if not os.path.isfile(p)]
@@ -190,7 +256,7 @@ def main():
         return 2
 
     print(f"==> 读 listfile")
-    table = load_listfile(args.listfile)
+    table, table_path, table_by_id = load_listfile(args.listfile)
     print(f"    条目 {len(table)}")
 
     print(f"==> 扫描模组树: {args.mod}")
@@ -202,15 +268,55 @@ def main():
               file=sys.stderr)
         return 2
 
+    # ---- 三步走，顺序很重要 ----
+    #
+    # 1) 每个本地文件 -> FileDataID
+    # 2) 输出路径改用【listfile 里的官方写法】
+    # 3) 按 id 去重（一个 id 只能有一个生效文件）
+    #
+    # 第 2 步是这版的关键修正。上一版直接把本地路径写进 mappings，
+    # 于是出现 "humanfemalenakedtorsoskin00_ 15.blp" 这种带空格的名字
+    # 和官方 "HumanFemaleNakedTorsoSkin00_15_HD.blp" 同时映射到 1348798。
+    # 客户端只会用其中一个，而带空格的那个是错的 —— 表现就是"没反应"。
+    # 既然 listfile 已经明确告诉我们官方名字，就该用官方的。
     matched, missing, inferred = [], [], []
     for rel in sorted(files):
-        fid, hit_key, how = lookup_variants(table, rel)
+        fid, official, how = lookup_variants(table, table_path, rel)
         if fid is None:
             missing.append(rel)
-        else:
-            matched.append((fid, rel))
-            if how != "exact":
-                inferred.append((rel, hit_key, fid, how))
+            continue
+        # 官方路径缺失时退回本地路径（极少见，但要能工作）
+        out_rel = official or rel
+        matched.append((fid, out_rel, rel))
+        if how != "exact":
+            inferred.append((rel, official, fid, how))
+
+    # ---- 按 FileDataID 去重 ----
+    #
+    # 同一个 id 对应多个本地文件时，只有一个会生效，而且顺序不确定 ——
+    # 那是最难排查的一类故障（有时生效有时不生效）。
+    # 这里明确挑一个，并把被丢弃的打印出来。
+    deduped = []
+    dropped = []
+    seen = {}
+    for fid, out_rel, src_rel in matched:
+        if fid in seen:
+            kept = seen[fid]
+            # 优先保留路径更长更具体的那条（真实文件名通常比占位名长），
+            # 长度相同时保留本地文件名与官方名完全一致的那条。
+            k_same = kept[2].replace(" ", "").lower() == kept[1].replace(" ", "").lower()
+            n_same = src_rel.replace(" ", "").lower() == out_rel.replace(" ", "").lower()
+            if n_same and not k_same:
+                dropped.append((fid, kept[2], kept[1], src_rel))
+                deduped = [x for x in deduped if x[0] != fid]
+                deduped.append((fid, out_rel, src_rel))
+                seen[fid] = (fid, out_rel, src_rel)
+            else:
+                dropped.append((fid, src_rel, out_rel, kept[2]))
+            continue
+        seen[fid] = (fid, out_rel, src_rel)
+        deduped.append((fid, out_rel, src_rel))
+    matched = deduped
 
     print(f"==> 对 listfile")
     print(f"    匹配到 FileDataID: {len(matched)}")
@@ -226,6 +332,20 @@ def main():
         print("    推断的依据只有「_HD 后缀的有无」这一个维度。若模型出现错位/串色，")
         print("    优先检查这几条。")
 
+    family_cands = []
+    if args.guess_family and missing:
+        print("\n    --guess-family：对找不到 id 的文件给出同族候选（仅供参考，不会写进 mappings）")
+        for rel in missing:
+            cands = guess_by_family(table, table_path, rel)
+            if not cands:
+                print(f"      {rel}")
+                print(f"        -> 同族里也没有可参考的编号")
+                continue
+            print(f"      {rel}")
+            for fid, path in cands[:4]:
+                print(f"        ? {fid}  {path}")
+            family_cands.append((rel, cands))
+
     if missing:
         print("\n    以下文件在公开 listfile 里没有 id（不会生效，但也不影响其它文件）:")
         for rel in missing[:20]:
@@ -237,23 +357,18 @@ def main():
         print("\n[失败] 一个都没匹配上，生成的 mappings 会是空的。", file=sys.stderr)
         return 2
 
-    # id 冲突检查：同一个 FileDataID 对应两个本地文件时，只有一个会生效，
-    # 而且顺序不确定 —— 必须报出来，不能让它静默发生。
-    by_id = {}
-    for fid, rel in matched:
-        by_id.setdefault(fid, []).append(rel)
-    conflicts = {k: v for k, v in by_id.items() if len(v) > 1}
-    if conflicts:
-        print(f"\n    [警告] {len(conflicts)} 个 FileDataID 对应多个本地文件（只有一个会生效）:")
-        for fid, rels in list(conflicts.items())[:10]:
-            print(f"      {fid}: {', '.join(rels)}")
+    if dropped:
+        print(f"\n    [已处理] {len(dropped)} 个 FileDataID 对应多个本地文件，已各留一条:")
+        for fid, lose, lose_path, keep in dropped[:10]:
+            print(f"      {fid}: 保留 {lose_path}")
+            print(f"           丢弃 {keep}")
 
     if args.dry_run:
         print("\n[演练] 没有写任何文件。去掉 --dry-run 才会真正生成。")
         print(f"    将生成 {len(matched)} 条映射，链接 {len(matched)} 个文件。")
         print("\n    前 5 条示例:")
-        for fid, rel in matched[:5]:
-            print(f"      {fid};{rel}")
+        for fid, out_rel, _src in matched[:5]:
+            print(f"      {fid};{out_rel}")
         return 0
 
     if not args.out:
@@ -274,27 +389,26 @@ def main():
         if inferred:
             f.write(f"# 注意: 其中 {len(inferred)} 条是靠 _HD 后缀推断得到的：\n")
             for rel, key, fid, how in inferred:
-                f.write(f"#   {fid} <- {rel}  (实际匹配 {key})\n")
+                f.write(f"#   {fid} <- {rel}  (官方路径 {key})\n")
         # 不能在这行后面追加 "# inferred"：加载器按第一个 ';' 切分，
         # 注释会直接成为路径的一部分，那条映射反而永远匹配不上。
         # 推断明细只写在文件头，不放进行内。
-        inferred_set = {r for r, _k, _f, _h in inferred}
-        for fid, rel in matched:
-            f.write(f"{fid};{rel}\n")
+        for fid, out_rel, _src in matched:
+            f.write(f"{fid};{out_rel}\n")
     print(f"    {len(matched)} 条")
 
     print(f"==> 铺设 files: {file_dir}")
     n_link = n_copy = 0
-    for fid, rel in matched:
-        src = files[rel]
-        dst = os.path.join(file_dir, rel.replace("/", os.sep))
+    for fid, out_rel, src_rel in matched:
+        src = files[src_rel]
+        dst = os.path.join(file_dir, out_rel.replace("/", os.sep))
         how = link_or_copy(src, dst)
         if how == "copy":
             n_copy += 1
         elif how == "link":
             n_link += 1
 
-    total = sum(os.path.getsize(files[rel]) for _, rel in matched)
+    total = sum(os.path.getsize(files[src_rel]) for _, _o, src_rel in matched)
     print(f"    硬链接 {n_link} 个，复制 {n_copy} 个（源文件合计 {total / 1048576:.1f} MB）")
     if args.copy:
         print("    （用了 --copy，全部是复制）")

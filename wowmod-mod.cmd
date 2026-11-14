@@ -4,9 +4,13 @@ rem  wowmod - prepare mod data (one click)
 rem
 rem  What this does:
 rem    Turn a full mod folder (e.g. _midnight_\Character with 21 races)
-rem    into the two things the Arctium mechanism needs:
-rem      wowmod\mappings\mod.txt    one line per file: <FileDataID>;<game path>
-rem      wowmod\files\              the actual files, same relative layout
+rem    into the two things the loader reads:
+rem      <gameDir>\wowmod\mappings\mod.txt   one line: <FileDataID>;<game path>
+rem      <gameDir>\wowmod\files\             the actual files, same layout
+rem
+rem  Output location matters: everything goes under the wowmod subfolder,
+rem  because that is the only place the loader looks. Writing to the game
+rem  root produces files nobody reads.
 rem
 rem  Why this is required:
 rem    The client only knows FileDataID. It never scans your folder tree.
@@ -33,6 +37,8 @@ set "WM_HOME=%~dp0"
 rem Use delayed expansion for the trailing-backslash test: with %VAR% the
 rem closing quote after a backslash gets escaped and cmd reports a syntax error.
 if "!WM_HOME:~-1!"=="\" set "WM_HOME=!WM_HOME:~0,-1!"
+set "WM_OUTROOT=%WM_HOME%\wowmod"
+for %%I in ("%WM_HOME%") do if /i "%%~nxI"=="wowmod" set "WM_OUTROOT=%WM_HOME%"
 set "WM_LF=%WM_DIR%.lf\wow-listfile.csv"
 set "WM_MOD=%~1"
 
@@ -95,7 +101,7 @@ echo.
 rem ------------------------------------------------ 3. 扫描 + 生成
 echo   [3/4] scanning and building mappings ...
 echo.
-python "%WM_DIR%tools\build-mod-mappings.py" --mod "!WM_MOD!" --listfile "%WM_LF%" --out "%WM_HOME%"
+python "%WM_DIR%tools\build-mod-mappings.py" --mod "!WM_MOD!" --listfile "%WM_LF%" --out "%WM_OUTROOT%"
 set "WM_RC=!errorlevel!"
 echo.
 
@@ -109,7 +115,7 @@ if not "!WM_RC!"=="0" (
 
 rem ------------------------------------------------ 4. 校验产物
 echo   [4/4] verifying output ...
-set "WM_MAP=%WM_DIR%mappings\mod.txt"
+set "WM_MAP=%WM_OUTROOT%\mappings\mod.txt"
 if not exist "%WM_MAP%" (
   echo   [FAIL] mapping file not created: %WM_MAP%
   pause
@@ -118,7 +124,7 @@ if not exist "%WM_MAP%" (
 powershell.exe -NoLogo -NoProfile -Command ^
   "$m='%WM_MAP%';" ^
   "$n=@(Get-Content -LiteralPath $m -Encoding UTF8 | Where-Object { $_ -match '^\d+;' }).Count;" ^
-  "$f=(Get-ChildItem -LiteralPath '%WM_DIR%files' -Recurse -File -ErrorAction SilentlyContinue).Count;" ^
+  "$f=(Get-ChildItem -LiteralPath '%WM_OUTROOT%\files' -Recurse -File -ErrorAction SilentlyContinue).Count;" ^
   "Write-Host ('        mappings: ' + $n + ' entries');" ^
   "Write-Host ('        files   : ' + $f + ' files');" ^
   "if($n -eq 0){ Write-Host '        [FAIL] no mappings written' }" ^
@@ -126,7 +132,7 @@ powershell.exe -NoLogo -NoProfile -Command ^
 
 echo.
 echo   mappings: %WM_MAP%
-echo   files   : %WM_DIR%files\
+echo   files   : %WM_OUTROOT%\files\
 echo.
 pause
 endlocal
