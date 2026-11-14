@@ -71,7 +71,8 @@ echo   client: %WM_GAME%
 echo.
 echo   What will happen:
 echo     1. launch the client suspended, then resume it
-echo     2. wait until enough of .text is decrypted (lazy page decryption)
+echo     2. wait until the client has executed enough code to decrypt it
+echo        (12.0.7 decrypts .text page by page, only where it actually runs)
 echo     3. install the FileDataID lookup stub   (half 2)
 echo     4. apply the two NoJump branch patches  (half 1)
 echo     5. leave the game running for you to look at the character

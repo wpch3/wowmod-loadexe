@@ -211,10 +211,26 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
 
   // ---- 1. 等代码解密 ----
   //
-  // 12.0.7 的 .text 是按页惰性解密的：只有游戏真正执行到的页才是明文。
-  // 在密文上扫描得到的命中是随机字节（实测同一特征码三次跑出 10/2/1 处命中，
-  // 且地址连主模块范围都不在）。所以必须等到明文比例足够才开始找。
-  const unsigned kMinPlainPct = 50;
+  // 12.0.7 的 .text 是【按页惰性解密】的：只有游戏真正执行到的页才是明文。
+  // 因此明文比例有天花板 —— 实测稳定在 138~139 页就不再增长，
+  // 因为剩下的页客户端根本还没执行到。
+  //
+  // 踩过的两个坑（都记录在这，别再犯）：
+  //
+  //   a) 判据写成 "比例 >= 50% 且连续两轮不增长" 永远不成立：
+  //      138 页在所有采样里占比都远低于 50%，于是每次都判定"未就绪"。
+  //
+  //   b) 更隐蔽：采样循环里有 `if (i % 3 != 0) { Sleep(1000); continue; }`
+  //      这种写法时，前两轮（i=0,1）不采样也不休眠，1 毫秒内读出两次
+  //      【同一个快照】，stable 立刻凑够 2 -> 误判"已解密"。
+  //      现在改成每轮都真休眠，并且只在"这一轮读到了新数据"时才算数。
+  //
+  // 所以判据改成：
+  //   1) 明文页数【绝对够用】（>= kMinPlainPages，覆盖到目标函数所在段）
+  //   2) 且已经稳定（连续 N 轮真实休眠后不再增长）
+  //   3) 兜底：即使比例不高，只要扫描真的命中了高分目标就继续
+  const size_t kMinPlainPages = 100;
+  const int kStableRounds = 3;
   bool ready = false;
   size_t best_low = 0, last_checked = 0;
   int stable = 0;
@@ -224,8 +240,8 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     if (probe.text_checked) {
       const size_t pct = 100 * probe.text_low_entropy / probe.text_checked;
       if (i % 3 == 0) {
-        std::printf("  等待代码解密... 明文页 %zu/%zu = %zu%% (需要 >= %u%%)\n",
-                    probe.text_low_entropy, probe.text_checked, pct, kMinPlainPct);
+        std::printf("  等待代码解密... 明文页 %zu/%zu = %zu%% (需要 >= %zu 页且稳定)\n",
+                    probe.text_low_entropy, probe.text_checked, pct, kMinPlainPages);
         std::fflush(stdout);
       }
       last_checked = probe.text_checked;
@@ -235,22 +251,28 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
       } else {
         ++stable;
       }
-      if (pct >= kMinPlainPct && stable >= 2) {
+      // 两个条件都要满足：绝对页数够 + 连续多轮不再增长
+      if (best_low >= kMinPlainPages && stable >= kStableRounds) {
         ready = true;
         break;
       }
     }
+    // 必须【每轮】都休眠。少了这句，循环会在一毫秒内跑完 400 轮，
+    // 而读到的是同一份内存 —— stable 会被瞬间凑满，判定完全失真。
     if (GetTickCount() - t0 > wait_ms) break;
     ::Sleep(1000);
   }
   if (!ready) {
-    const size_t pct = last_checked ? 100 * best_low / last_checked : 0;
-    r.error = "代码未解密到可用程度（明文 " + std::to_string(best_low) + "/" +
-              std::to_string(last_checked) + " = " + std::to_string(pct) +
-              "%，需要 >= " + std::to_string(kMinPlainPct) + "%）。在密文上扫描不可信，已拒绝。";
-    return r;
+    std::printf("  [提示] 解密页数停在 %zu（稳定判据未满足），仍会尝试扫描 ——\n"
+                "         如果命中高分目标就继续，否则再报错。\n", best_low);
+    std::fflush(stdout);
+    if (best_low == 0) {
+      r.error = "一个明文页都没读到（客户端可能还没开始执行代码）";
+      return r;
+    }
   }
-  step("代码已解密到可用程度（明文 " + std::to_string(best_low) + " 页）");
+  step("解密进度: 明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
+       " 页（惰性解密，目标是 138 页左右就够）");
 
   // ---- 2. 读数据 ----
   const auto data = load_mappings(wowmod_dir);
@@ -268,29 +290,77 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     step("警告: " + std::to_string(data.bad_lines) + " 行格式不对，已跳过");
 
   // ---- 3. 找 hook 点 ----
-  const auto sig = scan_arctium_signatures(process, "");
+  //
+  // 关键教训：这里【只扫一次】是错的。
+  // 用户实测两次都停在「CustomFileIdHook 没找到可执行目标（语义分 0/8）」，
+  // 而同一台机器稍早些时候能拿到 8/8 —— 中间只差"多等了一会儿"。
+  // 原因是惰性解密：目标函数所在页只有在客户端真正执行到它之后才是明文，
+  // 而客户端启动后要过一阵才走到 CAS 加载路径。
+  //
+  // 所以改成：边等边扫，最多等 wait_ms。一旦拿到可执行且语义分达标的
+  // 命中就立刻停。这比"等够了再扫一次"可靠得多 —— 我们不知道确切时刻。
   uint64_t target = 0;
   int best = 0;
   bool best_rx = false;
-  for (const auto& h : sig.hits) {
-    if (h.name != "CustomFileIdHook") continue;
-    std::printf("    候选 0x%llX  语义 %d/8  %s\n",
-                static_cast<unsigned long long>(h.match_va), h.semantic_score,
-                h.has_rx ? "可执行" : "【不可执行】");
-    const bool better = (h.semantic_score > best) ||
-                        (h.semantic_score == best && h.has_rx && !best_rx);
-    if (better && h.has_rx) {
-      best = h.semantic_score;
-      best_rx = h.has_rx;
-      target = h.match_va;
+  const int kNeedScore = 6;   // 满分 8；6 分 = 三个手指印里至少命中两个
+  const DWORD scan_t0 = GetTickCount();
+  int scan_round = 0;
+  for (;;) {
+    const auto sig = scan_arctium_signatures(process, "");
+    int round_best = 0;
+    bool round_rx = false;
+    uint64_t round_target = 0;
+    size_t cands = 0, hits_n = 0;
+    for (const auto& h : sig.hits) {
+      if (h.name != "CustomFileIdHook") continue;
+      ++hits_n;
+      ++cands;
+      if (h.has_rx) {
+        const bool better = (h.semantic_score > round_best);
+        if (better) {
+          round_best = h.semantic_score;
+          round_rx = true;
+          round_target = h.match_va;
+        }
+      }
     }
+    if (cands == 0) {
+      std::printf("  第 %d 轮: 特征码 0 处命中（目标页还没解密）\n", scan_round + 1);
+    } else {
+      std::printf("  第 %d 轮: %zu 处命中, 最佳可执行 %d/8\n", scan_round + 1, hits_n, round_best);
+    }
+    std::fflush(stdout);
+
+    if (round_target && round_best >= kNeedScore) {
+      target = round_target;
+      best = round_best;
+      best_rx = true;
+      break;
+    }
+    // 记住目前最好的（即使分不够），最后报错时能说清楚差多少
+    if (round_target && round_best > best) {
+      best = round_best;
+      target = round_target;
+      best_rx = true;
+    }
+    if (GetTickCount() - scan_t0 > wait_ms) break;
+    ::Sleep(2000);
+    ++scan_round;
   }
   if (!target || !best_rx) {
-    r.error = "CustomFileIdHook 没找到可执行目标（最高语义分 " + std::to_string(best) +
-              "/8）。代码可能仍未解密到那一段。";
+    r.error = "CustomFileIdHook 在等待期内始终没有可执行命中（最佳语义分 " +
+              std::to_string(best) + "/8, 需要 >= " + std::to_string(kNeedScore) +
+              "/8）。说明客户端还没执行到文件加载那段代码 —— "
+              "请先让游戏进到登录界面/角色选择界面，再重跑。";
     return r;
   }
-  step("hook 目标 0x" + to_hex(target, 16) + "（语义分 " + std::to_string(best) + "/8）");
+  if (best < kNeedScore) {
+    r.error = "CustomFileIdHook 最佳只有 " + std::to_string(best) + "/8，低于所需 " +
+              std::to_string(kNeedScore) + "/8。为避免 hook 错函数，已拒绝。";
+    return r;
+  }
+  step("hook 目标 0x" + to_hex(target, 16) + "（语义分 " + std::to_string(best) + "/8, 第 " +
+       std::to_string(scan_round + 1) + " 轮命中）");
 
   // ---- 3b. 先【规划】NoJump（只读，不写）----
   //
