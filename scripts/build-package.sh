@@ -30,8 +30,8 @@ done
 
 echo "==> 检查 loader 能力标记"
 # 这三条是脚本与 exe 的「握手协议」，缺一条就说明版本不匹配。
-grep -aq "sigscan-dump-v10" "$ROOT/wowmod_loader.exe" \
-  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v10"
+grep -aq "sigscan-dump-v11" "$ROOT/wowmod_loader.exe" \
+  || fail "wowmod_loader.exe 不含构建标记 sigscan-dump-v11"
 grep -aq "modes: observe auto hook analyze diagnose sigscan" "$ROOT/wowmod_loader.exe" \
   || fail "wowmod_loader.exe 不含模式清单（--version 会失败）"
 grep -aq "未知模式" "$ROOT/wowmod_loader.exe" \
@@ -90,6 +90,8 @@ echo "   echo 行标点检查通过"
 echo "==> 检查一键旁路脚本"
 [ -f wowmod-probe.cmd ] || fail "缺少 wowmod-probe.cmd（一键旁路记录）"
 grep -aq -- "--mode probe" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有调用 --mode probe"
+grep -aq -- "--target %WM_TARGET%" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有传 --target"
+grep -aq 'WM_TARGET=FileIdLookupFNV' wowmod-probe.cmd || fail "wowmod-probe.cmd 默认目标不是 FileIdLookupFNV"
 grep -aq "wowmod-probe.txt" wowmod-probe.cmd || fail "wowmod-probe.cmd 没有校验记录产物"
 _p_lines=$(wc -l < wowmod-probe.cmd | tr -d ' ')
 _p_crlf=$(grep -c $'\r$' wowmod-probe.cmd || true)
@@ -119,7 +121,7 @@ trap 'rm -rf "$STAGE" "$VERIFY"' EXIT
 a=$(md5sum "$VERIFY/wowmod_loader.exe" | cut -d' ' -f1)
 b=$(md5sum "$DIST/wowmod_loader.exe" | cut -d' ' -f1)
 [ "$a" = "$b" ] || fail "zip 里的 loader 与 dist 不一致"
-grep -aq "sigscan-dump-v10" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
+grep -aq "sigscan-dump-v11" "$VERIFY/wowmod_loader.exe" || fail "zip 里的 loader 缺构建标记"
 grep -aq "sigscan" "$VERIFY/scripts/wowmod-start.ps1" || fail "zip 里的脚本没有 sigscan 菜单"
 [ -f "$VERIFY/wowmod-dump.cmd" ] || fail "zip 里缺 wowmod-dump.cmd"
 grep -aq "dump-module" "$VERIFY/wowmod-dump.cmd" || fail "zip 里的 wowmod-dump.cmd 内容不完整"
@@ -129,5 +131,5 @@ grep -aq "character/bloodelf/female" "$VERIFY/tools/listid.py" || fail "listid.p
 
 echo
 echo "OK  $ZIP  ($(stat -c%s "$ZIP") 字节)"
-echo "    loader build tag: sigscan-dump-v10"
+echo "    loader build tag: sigscan-dump-v11"
 echo "    用户可用 \`wowmod_loader.exe --version\` 自查版本"

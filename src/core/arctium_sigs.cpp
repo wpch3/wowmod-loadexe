@@ -13,6 +13,21 @@ const std::vector<ArctiumSignatureSpec> kSpecs = {
      "48 ?? ?? ?? ?? ?? ?? 48 ?? ?? 74 ?? 48 ?? CD",
      0, "Arctium 直接在这些字节处装 15 字节 jmp，换成查表 stub"},
 
+    // 第二张 FileDataID 哈希表（12.0.7 新增发现，实测唯一命中 RVA 0x33e05c0）。
+    //
+    // 与上面的 CustomFileIdHook 是【两张不同的表】：
+    //   CustomFileIdHook : murmur(0xff51afd7ed558ccd) + 桶指针 + 节点 16 字节
+    //   本特征码        : FNV-1a(0xcbf29ce484222325 / 0x100000001b3) + 元素 44 字节
+    // 判据来自反汇编：mov r10,[rcx] / movabs rax,0xcbf29ce484222325 /
+    // mov r11d,edx / 逐字节混合 dl、>>8、>>16、>>24 / imul rax,r8,0x2c
+    //
+    // 为什么要加它：CustomFileIdHook 那个函数经探针实测只加载 interface/ 与 sound/，
+    // character/ 一次都没有。角色模型贴图必然走别的查找路径，这一张是最有可能的。
+    {"FileIdLookupFNV",
+     "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 8B 11 48 B8 25 23 22 84 E4 9C F2 CB "
+     "44 8B DA",
+     0, "FNV-1a 哈希的 FileDataID 查找（元素步长 0x2C）"},
+
     // 「按 FileDataID 从 CASC 加载」分支。
     {"LoadByFileId",
      "41 ?? ?? 01 0F 84 ?? 00 00 00 48 8B ?? ?? ?? ?? ?? 8B", 6,

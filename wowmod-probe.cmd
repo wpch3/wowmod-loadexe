@@ -18,6 +18,7 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
 set "WM_WAIT_MS=300000"
+set "WM_TARGET=FileIdLookupFNV"
 set "WM_LOADER=%~dp0wowmod_loader.exe"
 set "WM_RT=%~dp0wowmod_rt.dll"
 set "WM_GAME=%~1"
@@ -91,7 +92,7 @@ pause
 rem ------------------------------------------------- 2. 跑
 echo   [2/4] launching client and installing probe ...
 echo.
-"%WM_LOADER%" --exe "%WM_GAME%" --mode probe --wait %WM_WAIT_MS%
+"%WM_LOADER%" --exe "%WM_GAME%" --mode probe --target %WM_TARGET% --wait %WM_WAIT_MS%
 set "WM_RC=!errorlevel!"
 echo.
 

@@ -272,7 +272,7 @@ CLI 在真实编译产物上的表现：
 应当输出：
 
 ```
-wowmod_loader build: sigscan-dump-v10
+wowmod_loader build: sigscan-dump-v11
 modes: observe auto hook analyze diagnose sigscan
 ```
 
@@ -979,3 +979,109 @@ python3 tools/listid.py --probe wowmod-probe.txt --listfile parts/*.csv \
 处理：进度行改纯 ASCII；并加了一条**通用硬门禁** —— 三个 `.cmd` 里
 只要 `echo` 行出现 `E3 80 8C`（，）/ `E3 80 81`（、）/ `EF BC 9B`（；）的字节序列，
 就拒绝打包。已用"含全角逗号/纯 ASCII"两个样表双向验证。
+
+---
+
+## 第二次探针：换用 FNV 那张表（`--target FileIdLookupFNV`）
+
+### 先确认第一次的结论不是偶然
+
+第二次探针（v10）跑了 **2844 次调用 / 1881 个唯一 id**，用 listfile 对账：
+
+```
+可查到路径: 1140/1881 = 60.6%
+
+按调用次数分布:
+    1591 次   interface/
+     354 次   sound/
+       5 次   fonts/
+       3 次   (其它.blp)
+
+--filter character/       -> listfile 里匹配 51305 个 id, 探针抓到 0 个
+--filter character/bloodelf -> listfile 里匹配 3216 个 id, 探针抓到 0 个
+```
+
+两次独立运行、共 4739 次调用，`character/` **一次都没有**。
+`CustomFileIdHook` 那个函数（RVA `0x33e06a0`）可以**判定为不适用于模型替换**。
+
+### `probe-hits.txt` 给出了新线索
+
+v10 新增的候选字节 dump 立刻有了回报。在目标函数**前面 0xE0 字节**处，
+是另一张完全不同的 FileDataID 哈希表：
+
+```asm
+1433e05c0: 48 89 5c 24 08        mov  [rsp+8], rbx
+1433e05c5: 48 89 74 24 10        mov  [rsp+0x10], rsi
+1433e05ca: 48 89 7c 24 18        mov  [rsp+0x18], rdi
+1433e05cf: 4c 8b 11              mov  r10, [rcx]              ; 表对象
+1433e05d2: 48 b8 25 23 22 84 e4 9c f2 cb  movabs rax, 0xcbf29ce484222325  ; FNV-1a offset
+1433e05dc: 44 8b da              mov  r11d, edx               ; ★ 键 = edx
+1433e05e0: 44 0f b6 c2           movzx r8d, dl
+1433e05e4: 33 f6                 xor  esi, esi
+1433e05e6: 4c 33 c0              xor  r8, rax
+1433e05e9: 48 ba b3 01 00 00 00 01 00 00  movabs rdx, 0x100000001b3       ; FNV prime
+1433e05f6: 41 8b c3              mov  eax, r11d
+1433e05f9: 4c 0f af c2           imul r8, rdx
+1433e05fd: c1 e8 08              shr  eax, 8                  ; ★ 第 2 字节
+1433e0610: 4c 0f af c2           imul r8, rdx
+1433e0614: c1 e8 10              shr  eax, 0x10               ; ★ 第 3 字节
+1433e0620: 48 c1 e8 18           shr  rax, 0x18               ; ★ 第 4 字节
+1433e062f: 49 8b 52 08           mov  rdx, [r10+8]
+1433e0633: 4c 23 c3              and  r8, rbx
+1433e0636: 49 6b c0 2c           imul rax, r8, 0x2c          ; ★ 元素步长 44 字节
+1433e063d: 8b 48 08              mov  ecx, [rax+8]           ; 键在 +8
+1433e0640: 85 c9                 test ecx, ecx
+1433e0642: 74 2a                 je   ...                    ; 空槽
+1433e064d: 83 f9 ff              cmp  ecx, -1
+1433e0652: 41 3b cb              cmp  ecx, r11d              ; ★ 与完整键比较
+1433e0657: 49 ff c1              inc  r9
+1433e065a: 4d 03 c1              add  r8, r9                 ; ★ 线性探测
+```
+
+**这是标准的 FNV-1a 32 位哈希 + 开放寻址表**，键来自 `edx`，
+元素 44 字节、键在 `+8`、空槽用 `-1` 表示。
+
+### 两张表的区别
+
+| | `CustomFileIdHook` (0x33e06a0) | `FileIdLookupFNV` (0x33e05c0) |
+|---|---|---|
+| 哈希 | murmur（`ff51afd7ed558ccd`） | **FNV-1a**（`cbf29ce484222325` / `100000001b3`） |
+| 键来源 | `edx` | `edx`（另存 `r11d` 二次比较） |
+| 元素 | 桶指针 8B + 节点 16B | **元素 44B，键在 +8** |
+| 空槽标记 | 链表 NULL | **`-1`** |
+| 探测方式 | 链式 | **开放寻址（线性探测）** |
+| 探针实测 | interface/ + sound/，`character/` 0 个 | **尚未测** |
+
+两张表结构完全不同，说明 12.0.7 的 FileDataID 查找是**分表**的。
+`CustomFileIdHook` 抓到的只是"界面/音效"表。
+
+### 新特征码（31 字节，全映像唯一命中）
+
+```
+48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 8B 11
+48 B8 25 23 22 84 E4 9C F2 CB 44 8B DA
+```
+
+用 113 MB dump（28.4% 明文）验证：**全映像只命中 `0x33e05c0` 一处**。
+
+### v11 的变化
+
+1. 特征码表新增 `FileIdLookupFNV`
+2. `--mode probe --target FileIdLookupFNV` 可指定目标（默认已切到 FNV）
+3. 序言校验按目标分别校验（两个函数前 13 字节不同）
+4. `wowmod-probe.cmd` 默认用 FNV 目标
+
+### 判定标准（这次是明确的）
+
+跑完 `wowmod-probe.cmd` 之后：
+
+```bash
+python3 tools/listid.py --probe wowmod-probe.txt \
+                        --listfile parts/*.csv --filter character/bloodelf
+```
+
+- **有命中** → 这就是模型贴图的查找入口，可以开始做替换
+- **仍然 0 命中** → 说明还有第三张表，继续按同样方法找（`probe-hits.txt` +
+  探针 + listid 对账这个闭环已经跑通了）
+
+这个闭环的关键是：**先证明它会加载 `character/`，再谈替换**。不再靠特征码命中就上。

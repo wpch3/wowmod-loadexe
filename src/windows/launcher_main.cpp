@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v10"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v11"
 #endif
 #include <tlhelp32.h>
 
@@ -324,6 +324,9 @@ struct Options {
   bool dump_images = false;   // --dump：把可执行映像导出供离线分析
   bool dump_module = false;   // --dump-module：按 PE 节导出主模块完整映像
   bool dry_run_set = false;
+  // probe 用哪个特征码定位目标。默认 CustomFileIdHook（老目标），
+  // 但实测它只加载 interface/sound，所以允许切换到 FileIdLookupFNV。
+  std::string probe_sig = "CustomFileIdHook";
 };
 
 void say(const std::string& s) {
@@ -528,6 +531,7 @@ int main(int argc, char** argv) {
     else if (a == "--dry-run") o.dry_run = true;
     else if (a == "--apply") { o.dry_run = false; o.dry_run_set = true; }
     else if (a == "--wait") o.wait_ms = std::atoi(next("30000").c_str());
+    else if (a == "--target") o.probe_sig = next("CustomFileIdHook");
     else if (a == "--terminate-on-fail") o.keep_client = false;
     else if (a == "--wait-exit") o.detach = false;
     else if (a == "--no-detach") o.detach = false;
@@ -550,6 +554,8 @@ int main(int argc, char** argv) {
           "                   传入了哪些 id，不改变任何返回值（无风险，用来确认 ABI）\n"
           "  --dump           sigscan 时把可执行映像导出到 wowmod\\dump（供 IDA 分析）\n"
           "  --dump-module    sigscan 时把【主模块】完整内存映像导出（含解密后的 .text）\n"
+          "  --target NAME    probe 用哪条特征码定位目标（默认 CustomFileIdHook；\n"
+          "                   另一条是 FileIdLookupFNV，实测更可能加载角色资源）\n"
           "  --wait MS        等待客户端解密完成的最长时间（默认 30000）\n"
           "  --terminate-on-fail  失败时终止客户端（默认保留）\n"
           "  --wait-exit      一直等到客户端退出再返回（默认启动后即返回）\n\n"
@@ -706,8 +712,9 @@ int main(int argc, char** argv) {
     bool best_image = false;
     bool best_rx = false;
     std::printf("  候选（语义分 / 是否可执行 / 区域类型）：\n");
+    std::printf("  目标特征码: %s\n", o.probe_sig.c_str());
     for (const auto& h : res.hits) {
-      if (h.name != "CustomFileIdHook") continue;
+      if (h.name != o.probe_sig) continue;
       std::printf("    0x%s  语义 %d/8  %s  %s  RVA 0x%s  Protect 0x%lx\n",
                   wowmod::to_hex(h.match_va, 16).c_str(), h.semantic_score,
                   h.has_rx ? "可执行" : "【不可执行·不能用】",
@@ -737,9 +744,10 @@ int main(int argc, char** argv) {
       CloseHandle(pi.hProcess);
       return 4;
     }
-    if (!target || best_score < 8) {
-      std::printf("  [失败] 没有找到语义确证的 FileDataID 查找函数（最高语义分 %d/8）\n",
-                  best_score);
+    const int min_score = (o.probe_sig == "CustomFileIdHook") ? 8 : 0;
+    if (!target || best_score < min_score) {
+      std::printf("  [失败] 特征码 %s 没有找到可用目标（最高语义分 %d/8）\n",
+                  o.probe_sig.c_str(), best_score);
       std::printf("  可能原因：代码还没解密到那一段。请先登进游戏、切几次角色，再重跑本命令。\n");
       std::printf("  本次没有修改客户端任何字节。\n");
       CloseHandle(pi.hThread);
@@ -799,9 +807,14 @@ int main(int argc, char** argv) {
     // 这块内存。所以装之前必须重新读一遍，确认起始字节仍是目标函数的序言。
     // 不一致 = 这块内存已经不是我们分析时的那份代码，绝不能写。
     {
-      const std::vector<uint8_t> kPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57,
-                                              0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9};
-      uint8_t now[sizeof(kPrologue) ? 13 : 13];
+      // 两个目标的序言不同，按实际选择的特征码校验
+      std::vector<uint8_t> kPrologue;
+      if (o.probe_sig == "FileIdLookupFNV") {
+        kPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C};
+      } else {
+        kPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9};
+      }
+      uint8_t now[13];
       SIZE_T got = 0;
       const bool ok = ReadProcessMemory(pi.hProcess,
                                         reinterpret_cast<const void*>(target), now,
