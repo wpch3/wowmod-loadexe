@@ -10,6 +10,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 namespace wowmod {
@@ -21,6 +22,21 @@ struct ArctiumSignatureSpec {
   const char* pattern;   // IDA 风格，?? = 通配
   int patch_offset;      // 从匹配起点到要改写的分支偏移
   const char* note;
+
+  // ---- 可选：强校验信息 ----
+  //
+  // 为什么需要：Arctium 的原始特征码通配位极多（17 字节里 13 个 ??），
+  // 只约束了 4 个字节。它只扫「主模块」且默认唯一，所以够用；
+  // 而我们为了覆盖壳把代码解密到别的分配的情况，要扫全进程 200+ MB，
+  // 同一段代码的多个副本 + 其他函数的巧合序言会让它命中十几处。
+  //
+  // 所以补两条硬约束：
+  //   strong_pattern : 由实测反汇编导出、【无通配】的长签名，全映像唯一
+  //   known_rva      : 在已确证的客户端版本上的 RVA，只在该版本上作为附加校验
+  // 两者都为空时，行为退回「纯 Arctium 特征码」，即旧逻辑。
+  const char* strong_pattern = nullptr;  // 可空
+  uint32_t known_rva = 0;                // 0 = 不知道
+  uint32_t known_build = 0;              // 该 known_rva 对应的 build 号，0 = 通用
 };
 
 // 指针失效风险：返回的是静态表的引用，进程生命周期内有效。

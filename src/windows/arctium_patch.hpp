@@ -22,20 +22,41 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace wowmod {
 namespace win {
 
+// 一处原始命中（写进报告，供人核对「到底命中在哪」）。
+// 用户实测过「命中 10 处」这种局面，不给证据就无法继续判断。
+struct PatchHitInfo {
+  uint64_t va = 0;               // 绝对虚拟地址
+  size_t rva_in_image = 0;       // 相对所在映像的 RVA
+  uint64_t image_base = 0;
+  size_t image_size = 0;
+  std::string module;            // 所属模块名（空 = 匿名分配区）
+  bool image_backed = false;     // MEM_IMAGE（模块本体）才是该改写的副本
+  bool executable = false;
+  std::string context;           // 命中处前 16 字节，用于判断是否同一段代码
+};
+
 // 一个待打的条件跳转。
 struct BranchPatch {
   std::string name;              // 特征码名（LoadByFileIdAlternate / ...）
-  std::string pattern;           // IDA 风格特征串
+  std::string pattern;           // 实际用到的特征串（强签名或原始）
   int patch_offset = 0;          // 匹配起点 → 4 字节 rel32 的偏移
   uint64_t match_va = 0;         // 匹配到的虚拟地址
   uint64_t patch_va = 0;         // match_va + patch_offset
+  size_t rva_in_image = 0;       // 采用点的 RVA
+  uint64_t image_base = 0;
+  uint64_t jump_target = 0;      // 原 je 跳到哪里（0 = 未知）
+  bool used_strong = false;      // 是否用的无通配长签名
+  bool overridden = false;       // 是否由 --rva 点名
+  bool matched_known_rva = false;  // 是否由离线确证的 RVA 命中
   uint8_t original[4] = {0, 0, 0, 0};  // 原始 rel32（卸载时写回）
+  std::vector<PatchHitInfo> hits;      // 全部原始命中
   bool applied = false;
   std::string error;             // 失败原因（人话，不是错误码）
 };
@@ -45,11 +66,17 @@ struct BranchPatchReport {
   std::string error;             // 整体失败原因
   bool ok = false;
   size_t applied_count = 0;
+  size_t plannable = 0;          // 通过全部校验、可以安全写入的条数
 };
 
 // 只搜索、不写入。用于「演练」和给用户看命中位置。
 // 命中数 != 1 的目标会被标记 error 并跳过 —— 特征太弱的绝不能打。
-BranchPatchReport plan_branch_patches(HANDLE process);
+//
+// rva_override: 名称 → RVA。当自动判定因「同一段代码被映射多份」而拒绝时，
+// 用它可以点名要改哪一份（RVA 相对主模块）。空 map = 纯自动判定。
+BranchPatchReport plan_branch_patches(
+    HANDLE process,
+    const std::map<std::string, uint32_t>& rva_override = {});
 
 // 真正写入：把 patch_va 处的 4 字节改成 00 00 00 00。
 // 写入前会重新读一遍，确认那 4 字节此刻仍是 0F 84（je rel32）：

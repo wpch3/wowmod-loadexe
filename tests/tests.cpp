@@ -1640,6 +1640,33 @@ static void test_arctium_signature_table() {
   CHECK(saw_id_alt, "有 LoadByFileIdAlternate（12.0.7 唯一命中，Arctium 实际打的是这条）");
   CHECK(saw_path_alt, "有 LoadByFilePathAlternate（12.0.7 唯一命中）");
 
+  // ---- 强签名自检 ----
+  //
+  // 用户实测过「运行时命中 10 处」：Arctium 原始特征码 17 字节里 13 个通配位，
+  // 只约束 4 个字节，全进程扫描必然撞车。所以必须有一条【无通配】的长签名兜底。
+  // 这里验证：强签名存在、不含通配、比原始特征码长、以 010F84 开头（je rel32）。
+  for (const auto& sg : sigs) {
+    const std::string n = sg.name;
+    if (n != "LoadByFileIdAlternate" && n != "LoadByFilePathAlternate") continue;
+    CHECK(sg.strong_pattern != nullptr, std::string("有强签名: ") + n);
+    if (!sg.strong_pattern) continue;
+    const std::string sp = sg.strong_pattern;
+    CHECK(sp.find('?') == std::string::npos, std::string("强签名不含通配位: ") + n);
+
+    wowmod::Pattern sp2 = wowmod::Pattern::parse(sp, nullptr);
+    CHECK(sp2.valid(), std::string("强签名可解析: ") + n);
+    CHECK(sp2.size() > 30, std::string("强签名足够长(>30B): ") + n);
+    // 注意：比的是【解析后的字节数】，不是特征串文本长度
+    // （文本里 "?? " 占 3 个字符但只代表 1 个字节，拿字符串长度比会误判）。
+    wowmod::Pattern wp = wowmod::Pattern::parse(sg.pattern, nullptr);
+    CHECK(sp2.size() > wp.size(), std::string("强签名字节数多于原始特征码: ") + n);
+    // 前 3 字节必须是 01 0F 84 —— 这是 je rel32 的形态，patch_offset=3 落点才对。
+    if (sp2.size() >= 3) {
+      CHECK_EQ(sp2.bytes[1], 0x0F);
+      CHECK_EQ(sp2.bytes[2], 0x84);
+    }
+  }
+
   // 按特征本身构造一段映像：固定字节照抄，通配位填 0x90，
   // 再断言「能在预期起点唯一命中、改写点 = 起点 + patch_offset」。
   // 这是对匹配器与偏移语义的验证，不代表客户端里真的有这个函数。

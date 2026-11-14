@@ -27,13 +27,14 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "patch-v12"
+#define WOWMOD_LOADER_BUILD_TAG "patch-v13"
 #endif
 #include <tlhelp32.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <cstring>
 #include <string>
 #include <conio.h>
@@ -328,6 +329,9 @@ struct Options {
   // probe 用哪个特征码定位目标。默认 CustomFileIdHook（老目标），
   // 但实测它只加载 interface/sound，所以允许切换到 FileIdLookupFNV。
   std::string probe_sig = "CustomFileIdHook";
+  // patch 模式的兜底：当同一段代码被映射多份、无法自动判定该改哪一份时，
+  // 允许用 --rva NAME=0x... 点名。值是【相对主模块的 RVA】，来自离线 dump 的实测。
+  std::vector<std::pair<std::string, uint32_t>> patch_rva;
 };
 
 void say(const std::string& s) {
@@ -533,6 +537,17 @@ int main(int argc, char** argv) {
     else if (a == "--apply") { o.dry_run = false; o.dry_run_set = true; }
     else if (a == "--wait") o.wait_ms = std::atoi(next("30000").c_str());
     else if (a == "--target") o.probe_sig = next("CustomFileIdHook");
+    else if (a == "--rva") {
+      // 形式：--rva LoadByFileIdAlternate=0x33d7976
+      const std::string v = next("");
+      const size_t eq = v.find('=');
+      if (eq != std::string::npos) {
+        const std::string nm = v.substr(0, eq);
+        const uint32_t rv = static_cast<uint32_t>(
+            std::strtoull(v.c_str() + eq + 1, nullptr, 0));
+        o.patch_rva.push_back({nm, rv});
+      }
+    }
     else if (a == "--terminate-on-fail") o.keep_client = false;
     else if (a == "--wait-exit") o.detach = false;
     else if (a == "--no-detach") o.detach = false;
@@ -558,6 +573,9 @@ int main(int argc, char** argv) {
           "                   这是 Arctium 真正用的做法，不加 hook、不搬指令、不写跳板\n"
           "  --dump           sigscan 时把可执行映像导出到 wowmod\\dump（供 IDA 分析）\n"
           "  --dump-module    sigscan 时把【主模块】完整内存映像导出（含解密后的 .text）\n"
+          "  --rva NAME=0xRVA patch 模式兜底：点名要改哪一份副本（相对主模块的 RVA）。\n"
+          "                   只在自动判定拒绝安装时才需要，例如\n"
+          "                   --rva LoadByFileIdAlternate=0x33d7976\n"
           "  --target NAME    probe 用哪条特征码定位目标（默认 CustomFileIdHook；\n"
           "                   另一条是 FileIdLookupFNV，实测更可能加载角色资源）\n"
           "  --wait MS        等待客户端解密完成的最长时间（默认 30000）\n"
@@ -709,7 +727,11 @@ int main(int argc, char** argv) {
       std::printf("  ！等到上限仍未稳定（明文页 %zu），仍会继续。\n", best_low);
 
     say("定位分支补丁点（只读，不写入）");
-    auto rep = wowmod::win::plan_branch_patches(pi.hProcess);
+    std::map<std::string, uint32_t> rva_map;
+    for (const auto& kv : o.patch_rva) rva_map[kv.first] = kv.second;
+    if (!rva_map.empty())
+      std::printf("  使用 --rva 点名 %zu 条（跳过自动判定）\n", rva_map.size());
+    auto rep = wowmod::win::plan_branch_patches(pi.hProcess, rva_map);
     std::string report = wowmod::win::format_branch_patch_report(rep);
     std::printf("%s", report.c_str());
     std::fflush(stdout);
@@ -717,6 +739,13 @@ int main(int argc, char** argv) {
     if (!rep.ok) {
       std::printf("\n[失败] %s\n", rep.error.c_str());
       std::printf("本次没有修改客户端任何字节。\n");
+      // 自动判定拒绝时，给出可执行的下一步，而不是让用户干等。
+      std::printf("\n  如果某条是「同一段代码被映射多份」而跳过，可以用 --rva 点名:\n");
+      for (const auto& pp : rep.patches) {
+        if (pp.error.find("映射多份") == std::string::npos) continue;
+        std::printf("    --rva %s=<RVA>    （该条在本次扫描里命中的 RVA 见上面报告）\n",
+                    pp.name.c_str());
+      }
       std::string werr;
       wowmod::write_text_file(log_path, report + "\n[失败] " + rep.error + "\n", &werr);
       std::printf("报告: %s\n", log_path.c_str());
