@@ -298,3 +298,52 @@ id 为负   -> js 跳到 +50 执行原始指令（完全旁路）
 
 客户端拿到路径指针后做什么（是否打开文件、是否走 CASC 回退）。
 这一层是客户端自己的代码，不在 Arctium 也不在我们手里。
+
+---
+
+## 8. 为什么 Arctium 不需要用户配合（而我们需要）
+
+这一节回答一个反复被问的问题：「为什么要扫数据？Arctium 怎么就不用？」
+
+**Arctium 也在扫、也在等。差别在判据。**
+
+### 8.1 Arctium 的启动时序（`src/Launcher.cs` 原文）
+
+```csharp
+CreateProcess(..., CREATE_SUSPENDED, ...);                 // 挂起创建
+using var gameAppData = new MemoryStream(File.ReadAllBytes(appPath));
+var memory = new WinMemory(processInfo, gameAppData.Length); // 从 PEB 读基址
+NtResumeProcess(handle);                                    // 恢复
+while (VirtualQueryEx(...) == 0 || mbi.RegionSize <= 0x1000) { }  // 等区域就绪
+NtSuspendProcess(handle);
+
+WaitForUnpack(...):
+    initOffset = Read(...).FindPattern(Patterns.Windows.Init) ?? 0;
+    while (initOffset == 0) { 重读; }                       // 等 Init 特征码
+    while (Read(initOffset + base, 1)?[0] == 0) 重读;
+    memory.RefreshMemoryData((int)mbi.RegionSize);
+```
+
+### 8.2 三个关键差别
+
+| | Arctium | 本项目过去 |
+|---|---|---|
+| 映像基址 | **PEB `ImageBaseAddress`**（权威，零猜测） | 猜「SizeOfImage 最大的 PE 区域」 |
+| 就绪判据 | **`Patterns.Init` 特征码出现**（直接指标） | 明文页比例 ≥ 50%（间接指标） |
+| 找不到时 | **无限重读直到出现** | 扫一次就失败退出 |
+
+**「明文页比例」是我自己发明的间接指标，而且在这个客户端上永远达不到**：
+惰性解密下明文页稳定在 138~139 就不再增长（没执行到的页不会解密），
+占比远低于 50%，于是每次都误报未就绪。这就是连续几次 `语义分 0/8` 的成因。
+
+### 8.3 现在的做法（照抄 Arctium）
+
+- 基址：`NtQueryInformationProcess(ProcessBasicInformation)` → PEB + 0x10
+- 就绪：反复扫 `Init` 特征码，出现即继续
+- 扫描：边等边扫，拿到 `>= 6/8` 的可执行命中才收工
+
+`Init` 特征码（Arctium 原样，25 字节）：
+
+```
+C7 05 ?? ?? ?? ?? 01 00 00 00 48 8D ?? ?? ?? ?? ?? 48 8D ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 85
+```

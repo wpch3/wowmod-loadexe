@@ -20,6 +20,53 @@ namespace win {
 
 namespace {
 
+// 从 PEB 读映像基址。等价于 Arctium 的 ReadImageBaseFromPEB：
+//   ntdll!NtQueryInformationProcess(ProcessBasicInformation) 拿 PEB 地址，
+//   再读 PEB+0x10（x64 的 ImageBaseAddress）。
+uint64_t read_peb_image_base(HANDLE process) {
+#ifdef _WIN32
+  using NtQueryInformationProcessFn = LONG(WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+  static NtQueryInformationProcessFn fn = []() -> NtQueryInformationProcessFn {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return nullptr;
+    return reinterpret_cast<NtQueryInformationProcessFn>(
+        GetProcAddress(ntdll, "NtQueryInformationProcess"));
+  }();
+  if (!fn) return 0;
+
+  struct ProcessBasicInformation {
+    LONG ExitStatus;
+    PVOID PebBaseAddress;
+    ULONG_PTR AffinityMask;
+    LONG BasePriority;
+    ULONG_PTR UniqueProcessId;
+    ULONG_PTR InheritedFromUniqueProcessId;
+  } pbi{};
+  ULONG len = 0;
+  if (fn(process, 0 /*ProcessBasicInformation*/, &pbi, sizeof(pbi), &len) != 0) return 0;
+  if (!pbi.PebBaseAddress) return 0;
+
+  // x64 PEB: +0x10 = ImageBaseAddress
+  uint64_t image_base = 0;
+  SIZE_T got = 0;
+  if (!ReadProcessMemory(process,
+                         reinterpret_cast<const void*>(reinterpret_cast<uint8_t*>(
+                                                           pbi.PebBaseAddress) + 0x10),
+                         &image_base, sizeof(image_base), &got) ||
+      got != sizeof(image_base)) {
+    return 0;
+  }
+  return image_base;
+#else
+  (void)process;
+  return 0;
+#endif
+}
+
+}  // namespace
+
+namespace {
+
 bool readable(DWORD protect) {
   if (protect & PAGE_GUARD) return false;
   if (protect & PAGE_NOACCESS) return false;
@@ -318,6 +365,33 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
       return out;
     }
   } else {
+    // ---- 首选：从 PEB 读 ImageBaseAddress（Arctium 的做法）----
+    //
+    // Arctium 的 WinMemory 构造函数第一件事就是
+    //     BaseAddress = ReadImageBaseFromPEB(handle);
+    // 这是最权威的来源：进程自己记录的映像基址，不用猜。
+    //
+    // 我们过去靠「SizeOfImage 最大的那个 PE 区域」猜，实测会选中
+    // 假区域（PE 头碰巧合法），于是特征码命中被报成「非映像 不可执行」。
+    // 这里先试 PEB，失败才退回扫描。
+    {
+      const uint64_t peb_base = read_peb_image_base(process);
+      if (peb_base) {
+        std::vector<uint8_t> hdr(0x1000);
+        if (read_into(process, peb_base, &hdr, 0, 0x1000) >= 0x400 && hdr[0] == 'M' &&
+            hdr[1] == 'Z') {
+          const uint32_t pe_off = rd32(hdr.data() + 0x3C);
+          if (pe_off <= 0x1000 && rd32(hdr.data() + pe_off) == 0x00004550u) {
+            const uint32_t soi = rd32(hdr.data() + pe_off + 24 + 56);
+            if (soi >= 0x10000) {
+              base = peb_base;
+              out.error.clear();
+            }
+          }
+        }
+      }
+    }
+
     // 主模块 = 同时满足三个条件的区域：
     //   a) 有合法 PE 头（MZ + PE\0\0 + 机器码 + SizeOfImage 合理）
     //   b) SizeOfImage 最大
@@ -333,6 +407,7 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
     // 的范围内确实可读（能读到最后一个页）。不满足的直接丢弃。
     uint32_t best = 0;
     for (const auto& r : images) {
+      if (base) break;   // PEB 已经给出答案
       std::vector<uint8_t> hdr(0x1000);
       if (read_into(process, r.base, &hdr, 0, 0x1000) < 0x400) continue;
       if (hdr[0] != 'M' || hdr[1] != 'Z') continue;

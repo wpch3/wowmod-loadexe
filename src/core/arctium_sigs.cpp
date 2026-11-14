@@ -30,6 +30,27 @@ const std::vector<ArctiumSignatureSpec> kSpecs = {
      0, "FNV-1a 哈希的 FileDataID 查找（元素步长 0x2C）"},
 
     // ------------------------------------------------------------------
+    // Arctium 用来判断「客户端初始化完成、代码可以扫了」的特征码。
+    //
+    // 这是它 WaitForUnpack() 的判据，源码原文：
+    //     var initOffset = memory.Read(...)?.FindPattern(Patterns.Windows.Init) ?? 0;
+    //     while (initOffset == 0) { ... 重读 ... }
+    //     while (memory.Read(initOffset + base, 1)?[0] == 0)
+    //         memory.Data = memory.Read(mbi.BaseAddress, (int)mbi.RegionSize);
+    //
+    // 关键点：它等的【不是】「明文页比例够高」，而是「这条特征码出现了」。
+    // 前者是我们自己发明、且在你机器上永远达不到的间接指标（惰性解密下
+    // 明文比例稳定在 ~139 页就不再涨）；后者是直接指标，客户端初始化完
+    // 就成立，不需要用户先进到登录界面。
+    //
+    // 原始（Arctium）: C7 05 ?? ?? ?? ?? 01 00 00 00 48 8D ?? ?? ?? ?? ?? 48 8D
+    //                  ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 85            25 字节，6 个通配段
+    {"Init",
+     "C7 05 ?? ?? ?? ?? 01 00 00 00 48 8D ?? ?? ?? ?? ?? 48 8D ?? ?? ?? ?? ?? E8 "
+     "?? ?? ?? ?? 85",
+     0, "客户端初始化完成的标志（Arctium WaitForUnpack 的判据）"},
+
+    // ------------------------------------------------------------------
     // Arctium 的【真正 mod 机制】：不是替换 CustomFileIdHook 的返回值，
     // 而是把这两处「按 FileDataID / 按路径从 CASC 加载」的条件跳转【改成不跳】。
     //

@@ -209,70 +209,62 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     std::fflush(stdout);
   };
 
-  // ---- 1. 等代码解密 ----
+  // ---- 1. 等客户端初始化（用 Arctium 的判据，不用熵估算）----
   //
-  // 12.0.7 的 .text 是【按页惰性解密】的：只有游戏真正执行到的页才是明文。
-  // 因此明文比例有天花板 —— 实测稳定在 138~139 页就不再增长，
-  // 因为剩下的页客户端根本还没执行到。
+  // 这里换掉了之前那套「明文页比例」判据。原因：
   //
-  // 踩过的两个坑（都记录在这，别再犯）：
+  //   12.0.7 的 .text 惰性解密，实测明文页稳定在 138~139 就不再涨，
+  //   占比远低于我们设的阈值。那是个【间接指标】，而且在你机器上
+  //   永远达不到 —— 于是每次都误报"未就绪"。
   //
-  //   a) 判据写成 "比例 >= 50% 且连续两轮不增长" 永远不成立：
-  //      138 页在所有采样里占比都远低于 50%，于是每次都判定"未就绪"。
+  // Arctium 的做法（src/Launcher.cs WaitForUnpack）是【直接指标】：
+  //     while (initOffset == 0)
+  //         initOffset = Read(...).FindPattern(Patterns.Windows.Init)
+  //   —— 等那条 Init 特征码出现。客户端初始化完就成立，
+  //      不要求用户先进到登录界面。
   //
-  //   b) 更隐蔽：采样循环里有 `if (i % 3 != 0) { Sleep(1000); continue; }`
-  //      这种写法时，前两轮（i=0,1）不采样也不休眠，1 毫秒内读出两次
-  //      【同一个快照】，stable 立刻凑够 2 -> 误判"已解密"。
-  //      现在改成每轮都真休眠，并且只在"这一轮读到了新数据"时才算数。
-  //
-  // 所以判据改成：
-  //   1) 明文页数【绝对够用】（>= kMinPlainPages，覆盖到目标函数所在段）
-  //   2) 且已经稳定（连续 N 轮真实休眠后不再增长）
-  //   3) 兜底：即使比例不高，只要扫描真的命中了高分目标就继续
-  const size_t kMinPlainPages = 100;
-  const int kStableRounds = 3;
+  // 我们照做：反复扫 Init，出现即认为可以继续。
+  // 熵估算只用来打印进度和做最后兜底，不再作为门槛。
   bool ready = false;
   size_t best_low = 0, last_checked = 0;
-  int stable = 0;
   const DWORD t0 = GetTickCount();
-  for (int i = 0; i < 400; ++i) {
-    const auto probe = dump_module_full(process, "", "");
-    if (probe.text_checked) {
-      const size_t pct = 100 * probe.text_low_entropy / probe.text_checked;
-      if (i % 3 == 0) {
-        std::printf("  等待代码解密... 明文页 %zu/%zu = %zu%% (需要 >= %zu 页且稳定)\n",
-                    probe.text_low_entropy, probe.text_checked, pct, kMinPlainPages);
-        std::fflush(stdout);
-      }
-      last_checked = probe.text_checked;
-      if (probe.text_low_entropy > best_low) {
-        best_low = probe.text_low_entropy;
-        stable = 0;
-      } else {
-        ++stable;
-      }
-      // 两个条件都要满足：绝对页数够 + 连续多轮不再增长
-      if (best_low >= kMinPlainPages && stable >= kStableRounds) {
-        ready = true;
+  int init_round = 0;
+  for (;;) {
+    const auto sig = scan_arctium_signatures(process, "");
+    bool init_found = false;
+    uint64_t init_va = 0;
+    for (const auto& h : sig.hits) {
+      if (h.name == "Init" && h.has_rx) {
+        init_found = true;
+        init_va = h.match_va;
         break;
       }
     }
-    // 必须【每轮】都休眠。少了这句，循环会在一毫秒内跑完 400 轮，
-    // 而读到的是同一份内存 —— stable 会被瞬间凑满，判定完全失真。
+    const auto probe = dump_module_full(process, "", "");
+    if (probe.text_checked) {
+      best_low = probe.text_low_entropy;
+      last_checked = probe.text_checked;
+    }
+    std::printf("  第 %d 轮: Init 特征码 %s, 明文页 %zu/%zu\n", init_round + 1,
+                init_found ? ("已出现 @" + to_hex(init_va, 16)).c_str() : "未出现", best_low,
+                last_checked);
+    std::fflush(stdout);
+    if (init_found) {
+      ready = true;
+      break;
+    }
     if (GetTickCount() - t0 > wait_ms) break;
-    ::Sleep(1000);
+    ::Sleep(2000);
+    ++init_round;
   }
   if (!ready) {
-    std::printf("  [提示] 解密页数停在 %zu（稳定判据未满足），仍会尝试扫描 ——\n"
-                "         如果命中高分目标就继续，否则再报错。\n", best_low);
-    std::fflush(stdout);
-    if (best_low == 0) {
-      r.error = "一个明文页都没读到（客户端可能还没开始执行代码）";
-      return r;
-    }
+    r.error = "等待期内始终没看到 Init 特征码（客户端未完成初始化）。"
+              "明文页 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
+              "。请让客户端正常启动到登录界面后重跑。";
+    return r;
   }
-  step("解密进度: 明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
-       " 页（惰性解密，目标是 138 页左右就够）");
+  step("客户端已初始化（Init 特征码出现, 第 " + std::to_string(init_round + 1) +
+       " 轮; 明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) + " 页）");
 
   // ---- 2. 读数据 ----
   const auto data = load_mappings(wowmod_dir);
