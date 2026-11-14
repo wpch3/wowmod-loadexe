@@ -55,6 +55,7 @@
 #include "windows/remote_load.hpp"
 #include "windows/arctium_sig.hpp"
 #include "windows/arctium_patch.hpp"
+#include "windows/mod_loader.hpp"
 #include "windows/probe_reader.hpp"
 #include "windows/crash_evidence.hpp"
 #include "windows/fd_hook.hpp"
@@ -554,7 +555,7 @@ int main(int argc, char** argv) {
     else if (a == "--verbose") o.verbose = true;
     else if (a == "--version") {
       std::printf("wowmod_loader build: %s\n", WOWMOD_LOADER_BUILD_TAG);
-      std::printf("modes: observe auto hook analyze diagnose sigscan probe scout patch\n");
+      std::printf("modes: observe auto hook analyze diagnose sigscan probe scout patch mods\n");
       return 0;
     }
     else if (a == "-h" || a == "--help") {
@@ -664,6 +665,63 @@ int main(int argc, char** argv) {
   ResumeThread(pi.hThread);
   say("已恢复客户端主线程（让 ntdll 加载器完成初始化）");
   ::Sleep(400);  // 给加载器一点时间建立模块表
+
+  // 2b1) 模组加载模式（--mode mods）：这是本项目真正的目标。
+  //
+  // 与 patch / probe 的区别：
+  //   patch 只做「第一半」—— 改掉 je，让客户端不去 CASC 取。
+  //   probe 只做「旁路记录」—— 记下 id，不改返回值。
+  //   mods  做【完整两半】—— 装 FileDataID 查表跳板 + 打 NoJump。
+  //
+  // 缺任何一半都不生效：只有 NoJump 时客户端会认为「CASC 没有、本地也没有」；
+  // 只有跳板时客户端根本不会去查表。
+  if (o.mode == "mods") {
+    const std::string wowmod_dir = wowmod::join_path(o.workdir, "wowmod");
+    CreateDirectoryW(utf8_to_wide(to_native_path(wowmod_dir)).c_str(), nullptr);
+    const std::string log_path = wowmod::join_path(wowmod_dir, "wowmod-mods.txt");
+
+    say("模组加载器：装 FileDataID 查表跳板 + 打 NoJump");
+    std::printf("  这是 Arctium 机制的完整版：两半一起上。\n");
+    std::printf("  数据来源: %s\\mappings\\*.txt + %s\\files\\\n\n",
+                wowmod_dir.c_str(), wowmod_dir.c_str());
+    std::fflush(stdout);
+
+    const auto r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms);
+    const std::string text = wowmod::win::format_mod_loader_report(r);
+    std::printf("\n%s", text.c_str());
+    std::fflush(stdout);
+
+    std::string werr;
+    wowmod::write_text_file(log_path, text, &werr);
+    std::printf("\n报告: %s\n", log_path.c_str());
+
+    if (!r.ok) {
+      std::printf("\n[失败] %s\n", r.error.c_str());
+      std::printf("本次没有在客户端留下可用的模组加载器。\n");
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
+    }
+
+    std::printf("\n[成功] 模组加载器已生效。\n");
+    std::printf("  现在进游戏看角色模型 —— 这是第一次两半同时装上。\n");
+    std::printf("  Ctrl+C 退出；关掉游戏所有改动自然消失（只改内存）。\n\n");
+    std::fflush(stdout);
+
+    if (o.detach) {
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 0;
+    }
+    // 等客户端退出，期间不碰任何东西
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    std::printf("客户端已退出（0x%08X）\n", code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+  }
 
   // 2b2) 侦察模式（--mode scout）：只报事实，【一个字节都不写】。
   //

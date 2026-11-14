@@ -1232,6 +1232,43 @@ static void test_fileid_stub() {
     CHECK_EQ(r.code.back(), 0xC3);
   }
 
+  // 循环上界必须是【字节数】而不是【项数】。
+  //
+  // 曾经的实现是 `cmp r11d, count / jb`，而 r11 是字节偏移、每轮 +16。
+  // 于是条件变成「偏移 < 项数」，1096 项时循环只扫到第 68 项就退出，
+  // 绝大多数文件永远匹配不到 —— 而且 32 位比较让 r11 高 32 位从不归零。
+  // 这里直接把生成的字节里那条 cmp 的立即数取出来比对。
+  {
+    StubConfig cfg;
+    cfg.id_register = "rdx";
+    cfg.return_register = "rax";
+    const uint32_t count = 1096;
+    auto r = build_fileid_stub(cfg, 0x20000000000ULL, count);
+    CHECK(r.ok(), "应能生成跳板");
+    if (r.ok()) {
+      // 找 `49 81 FB imm32`（cmp r11, imm32）
+      bool found = false;
+      uint32_t imm = 0;
+      for (size_t i = 0; i + 7 <= r.code.size(); ++i) {
+        if (r.code[i] == 0x49 && r.code[i + 1] == 0x81 && r.code[i + 2] == 0xFB) {
+          std::memcpy(&imm, r.code.data() + i + 3, 4);
+          found = true;
+          break;
+        }
+      }
+      CHECK(found, "跳板里必须有 cmp r11, imm32 做为循环上界");
+      if (found) {
+        CHECK_EQ(imm, count * 16u);
+        CHECK(imm != count, "循环上界不能是项数");
+      }
+      // 不允许出现 32 位的 `41 81 FB`（cmp r11d, imm32）
+      bool bad32 = false;
+      for (size_t i = 0; i + 6 <= r.code.size(); ++i)
+        if (r.code[i] == 0x41 && r.code[i + 1] == 0x81 && r.code[i + 2] == 0xFB) bad32 = true;
+      CHECK(!bad32, "循环上界不能用 32 位比较");
+    }
+  }
+
   // 不支持的寄存器必须被拒绝，而不是生成坏代码
   {
     StubConfig cfg;

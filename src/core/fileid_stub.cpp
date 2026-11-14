@@ -206,9 +206,27 @@ StubResult build_fileid_stub(const StubConfig& cfg, uint64_t id_table_va, uint32
   a.db(0x1A);
   a.jcc8(0x74, L_hit);       // je 命中
   a.db({0x49, 0x83, 0xC3, 0x10});  // add r11, 16
-  // cmp r11d, count   41 81 FB imm32
-  a.db({0x41, 0x81, 0xFB});
-  a.dd(count);
+
+  // 循环上界必须是【字节数】而不是【项数】。
+  //
+  // 这里曾经写成 `cmp r11d, count / jb`，而 r11 是字节偏移、每轮 +16，
+  // 于是条件变成「偏移 < 项数」，循环在偏移刚到 count 时就退出 ——
+  // 1096 项时只能扫到第 68 项（1096/16），绝大多数文件永远匹配不到。
+  // 而且用的是 32 位比较，r11 高 32 位从不归零，比较结果不可靠。
+  //
+  // 正确写法：与 count * kStride 比，且用 64 位（REX.W + 81 /7 imm32 符号扩展）。
+  {
+    const uint64_t limit = static_cast<uint64_t>(count) * FileIdEntryLayout::kStride;
+    if (limit <= 0x7FFFFFFFULL) {
+      a.db({0x49, 0x81, 0xFB});   // cmp r11, imm32（REX.W+B, 81 /7）
+      a.dd(static_cast<uint32_t>(limit));
+    } else {
+      // 超过 2^31 的表不可能出现（count <= 0x7FFF * 16 = 0x7FFF0），保险起见
+      a.db({0x49, 0xC7, 0xC3});   // mov r11, imm32（会破坏偏移，故直接报错）
+      r.errors.push_back("映射表字节长度超出 imm32，不支持");
+      return r;
+    }
+  }
   a.jcc8(0x72, L_loop);      // jb 继续（无符号比较，count 已保证 >0）
 
   // ---- 4) 未命中：执行原始指令 ----
