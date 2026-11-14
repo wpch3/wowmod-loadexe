@@ -1,10 +1,11 @@
 # 构建产物（dist/ 里是本地交叉编译产物，不入库）
 dist/
 
-# 例外：根目录的 wowmod.exe / wowmod_hook.dll / wowmod-12.0.7-game-dir.zip 是
+# 例外：根目录的 wowmod.exe / wowmod_hook.dll / wowmod_rt.dll / wowmod_loader.exe
+# 以及 wowmod-12.0.7-game-dir.zip 是
 # 【有意入库】的 Windows x64 预编译包与游戏目录傻瓜包，
 # 让用户下载分支 ZIP 后可直接运行（GitHub release asset 上传在本环境受限）。
-# 重新生成: ./scripts/build-windows-release.sh && cp dist/windows-x64/{wowmod.exe,wowmod_hook.dll} .
+# 重新生成: ./scripts/build-windows-release.sh && cp dist/windows-x64/{wowmod.exe,wowmod_hook.dll,wowmod_rt.dll,wowmod_loader.exe} .
 build/
 out/
 CMakeFiles/
@@ -38,3 +39,10 @@ __pycache__/
 runtime-dumps/
 *.img
 *.candidates.json
+# 本地预编译包（有意入库，见上方说明）
+!/wowmod.exe
+!/wowmod_hook.dll
+!/wowmod_rt.dll
+!/wowmod_loader.exe
+!/wowmod-start.cmd
+!/wowmod-oneclick.zip

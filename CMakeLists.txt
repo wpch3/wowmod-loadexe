@@ -18,6 +18,11 @@ set(WOWMOD_CORE_SOURCES
   src/core/hooks.cpp
   src/core/discover.cpp
   src/core/arctium.cpp
+  src/core/x64_decode.cpp
+  src/core/xref.cpp
+  src/core/analyze.cpp
+  src/core/fileid_stub.cpp
+  src/core/launcher_stub.cpp
 )
 
 add_library(wowmod_core STATIC ${WOWMOD_CORE_SOURCES})
@@ -40,6 +45,38 @@ if(WIN32)
   target_link_libraries(wowmod PRIVATE kernel32 user32 shell32)
 else()
   target_sources(wowmod PRIVATE src/platform/launch_stub.cpp)
+endif()
+
+# ---- Runtime DLL (Windows): 分析 + 安装 loose-file hook ----
+if(WIN32)
+  add_library(wowmod_rt SHARED
+    src/windows/rt_dll.cpp
+    src/windows/rt_entry.cpp
+    src/windows/detour.cpp
+    src/windows/fd_hook.cpp
+    src/windows/scan_images.cpp
+  )
+  target_include_directories(wowmod_rt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(wowmod_rt PRIVATE wowmod_core)
+  target_compile_definitions(wowmod_rt PRIVATE UNICODE _UNICODE WOWMOD_WINDOWS)
+  set_target_properties(wowmod_rt PROPERTIES OUTPUT_NAME "wowmod_rt")
+
+  # ---- 启动器 exe ----
+  add_executable(wowmod_loader
+    src/windows/launcher_main.cpp
+    src/windows/remote_load.cpp
+    src/windows/inject_first.cpp
+    src/windows/agent_code.cpp
+    src/windows/remote_analyze.cpp
+    src/windows/diagnose.cpp
+    src/windows/detour.cpp
+    src/windows/fd_hook.cpp
+    src/windows/scan_images.cpp
+    src/windows/arctium_sig.cpp
+  )
+  target_include_directories(wowmod_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(wowmod_loader PRIVATE wowmod_core)
+  target_compile_definitions(wowmod_loader PRIVATE UNICODE _UNICODE WOWMOD_WINDOWS)
 endif()
 
 # ---- Injected overlay DLL (Windows) ----

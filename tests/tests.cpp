@@ -9,9 +9,16 @@
 #include <string>
 #include <vector>
 
+#include "wowmod/analyze.hpp"
+#include "wowmod/protect_plan.hpp"
 #include "wowmod/arctium.hpp"
+#include "wowmod/fileid_stub.hpp"
+#include "wowmod/launcher_stub.hpp"
+#include "wowmod/x64_decode.hpp"
+#include "wowmod/xref.hpp"
 #include "wowmod/config.hpp"
 #include "wowmod/discover.hpp"
+#include "wowmod/arctium_sigs.hpp"
 #include "wowmod/hooks.hpp"
 #include "wowmod/json.hpp"
 #include "wowmod/mapping.hpp"
@@ -832,6 +839,625 @@ static void test_real_client() {
   CHECK_EQ(dll_images, size_t(1));
 }
 
+
+// ---------------------------------------------------------------------------
+// x86-64 长度解码：这些字节序列取自真实编译器输出，长度写错就会截断指令。
+static void test_x64_decode() {
+  group("x64_decode");
+
+  auto len = [](std::initializer_list<uint8_t> bs) {
+    std::vector<uint8_t> v(bs);
+    return x64::decode(v.data(), v.size()).length;
+  };
+
+  CHECK_EQ(len({0x48, 0x89, 0x5C, 0x24, 0x08}), 5);            // mov [rsp+8], rbx
+  CHECK_EQ(len({0x48, 0x83, 0xEC, 0x20}), 4);                  // sub rsp, 0x20
+  CHECK_EQ(len({0x48, 0x8D, 0x15, 0x11, 0x22, 0x33, 0x44}), 7);// lea rdx,[rip+disp32]
+  CHECK_EQ(len({0xE8, 0x00, 0x00, 0x00, 0x00}), 5);            // call rel32
+  CHECK_EQ(len({0x74, 0x0C}), 2);                              // je rel8
+  CHECK_EQ(len({0x0F, 0x84, 0x00, 0x01, 0x00, 0x00}), 6);      // je rel32
+  CHECK_EQ(len({0x48, 0xB8, 1, 2, 3, 4, 5, 6, 7, 8}), 10);     // mov rax, imm64
+  CHECK_EQ(len({0xB8, 0x01, 0x02, 0x03, 0x04}), 5);            // mov eax, imm32
+  CHECK_EQ(len({0xF7, 0xD0}), 2);                              // not eax（无立即数）
+  CHECK_EQ(len({0xF7, 0xC0, 1, 2, 3, 4}), 6);                  // test eax, imm32
+  CHECK_EQ(len({0x49, 0x83, 0xC3, 0x10}), 4);                  // add r11, 0x10
+  CHECK_EQ(len({0xC3}), 1);                                    // ret
+  CHECK_EQ(len({0x43, 0x3B, 0x14, 0x1A}), 4);                  // cmp edx,[r10+r11]
+  CHECK_EQ(len({0x4B, 0x8B, 0x44, 0x1A, 0x08}), 5);            // mov rax,[r10+r11+8]
+  CHECK_EQ(len({0xC5, 0xF8, 0x77}), 3);                        // vzeroupper
+  CHECK_EQ(len({0x62, 0xF1, 0x7C, 0x48, 0x28, 0xC0}), 6);      // EVEX vmovaps
+  CHECK_EQ(len({0xF3, 0x48, 0x0F, 0x10, 0x01}), 5);            // movss xmm0,[rcx]
+
+  // 指令边界：必须覆盖至少 14 字节且不切断指令
+  const std::vector<uint8_t> code = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x83, 0xEC,
+                                     0x20, 0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00};
+  CHECK_EQ(x64::find_safe_split(code.data(), code.size(), 0, 14), 16u);
+  CHECK(x64::is_instruction_aligned(code.data(), code.size(), 0, 16), "16 字节正好是指令边界");
+  CHECK(!x64::is_instruction_aligned(code.data(), code.size(), 0, 14), "14 字节会切断 lea");
+
+  // 重定位：RIP 相对位移按新地址重算
+  {
+    std::vector<uint8_t> blk = {0x48, 0x8D, 0x15, 0x00, 0x00, 0x00, 0x00};  // lea rdx,[rip+0]
+    const uint64_t src = 0x1000, dst = 0x8000;
+    CHECK(x64::relocate_block(blk, src, dst), "可重定位");
+    int32_t d = 0;
+    std::memcpy(&d, blk.data() + 3, 4);
+    // 原指令在 0x1000 时 RIP+0 指向 0x1007；搬到 0x8000 后应指向同一个绝对地址
+    CHECK_EQ(static_cast<int64_t>(dst + 7 + d), static_cast<int64_t>(src + 7));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 启动器前置 stub：.pdata 驱动的 padding cave 选址 + 早期执行代码生成。
+// 这是"在客户端任何用户线程存在之前就跑我们代码"的唯一干净途径，
+// 所以选址逻辑必须逐字节可验证。
+static std::vector<uint8_t> make_synthetic_pe() {
+  std::vector<uint8_t> f(0x2000, 0);
+  f[0] = 'M'; f[1] = 'Z';
+  auto w32 = [&](size_t o, uint32_t v) { std::memcpy(&f[o], &v, 4); };
+  auto w64 = [&](size_t o, uint64_t v) { std::memcpy(&f[o], &v, 8); };
+  auto w16 = [&](size_t o, uint16_t v) { std::memcpy(&f[o], &v, 2); };
+  w32(0x3C, 0x40);
+  w32(0x40, 0x00004550);
+  w16(0x44, 0x8664); w16(0x46, 2); w16(0x54, 0xF0);
+  const size_t opt = 0x58;
+  w16(opt, 0x20B);
+  w32(opt + 16, 0x1000);       // entry
+  w64(opt + 24, 0x140000000);  // image base
+  w32(opt + 56, 0x4000);       // size of image
+  w32(opt + 108, 16);          // number of dirs
+  w32(opt + 112 + 3 * 8, 0x2000);  // .pdata RVA
+  w32(opt + 112 + 3 * 8 + 4, 24);  // .pdata size
+  const size_t sec = opt + 0xF0;
+  auto setsec = [&](int i, const char* name, uint32_t va, uint32_t vs, uint32_t rs,
+                    uint32_t rp, uint32_t ch) {
+    const size_t o = sec + i * 40;
+    std::memcpy(&f[o], name, std::strlen(name) < 8 ? std::strlen(name) : 8);
+    w32(o + 8, vs); w32(o + 12, va); w32(o + 16, rs); w32(o + 20, rp); w32(o + 36, ch);
+  };
+  setsec(0, ".text", 0x1000, 0x800, 0x800, 0x400, 0x60000020);
+  setsec(1, ".pdata", 0x2000, 0x200, 0x200, 0xC00, 0x40000040);
+  // 函数入口 0x1400 之前放 128 字节 0xCC 填充（真实 PE 里这是链接器的 int3 padding）
+  for (size_t i = 0x400 + 0x380; i < 0x400 + 0x400; ++i) f[i] = 0xCC;
+  const uint8_t prologue[] = {0x48, 0x89, 0x5C, 0x24, 0x08};  // mov [rsp+8], rbx
+  std::memcpy(&f[0x400 + 0x400], prologue, sizeof(prologue));
+  const size_t pd = 0xC00;
+  w32(pd + 0, 0x1100); w32(pd + 4, 0x1130); w32(pd + 8, 0x2000);
+  w32(pd + 12, 0x1400); w32(pd + 16, 0x1500); w32(pd + 20, 0x2010);
+  return f;
+}
+
+static void test_launcher_stub() {
+  group("launcher_stub");
+
+  const auto f = make_synthetic_pe();
+  const PeLayout pe = parse_pe_file(f);
+  CHECK(pe.ok, "合成 PE 应能解析");
+  CHECK_EQ(pe.image_base, 0x140000000ull);
+  CHECK_EQ(pe.pdata.size(), 2u);
+  if (pe.pdata.size() == 2) {
+    CHECK_EQ(pe.pdata[1].begin_rva, 0x1400u);
+    CHECK_EQ(pe.pdata[1].end_rva, 0x1500u);
+    const PeLayout::Section* sc = pe.section_of(0x1400);
+    CHECK(sc != nullptr, "0x1400 应属于某个节");
+    if (sc) CHECK(sc->executable(), "所在节必须可执行");
+  }
+
+  const StubPlan plan = plan_launcher_stub(pe, f, 64, true);
+  CHECK(plan.ok, "应找到紧邻函数入口的填充区");
+  if (plan.ok) {
+    // cave 必须完整落在 padding 之内，且不覆盖函数本身
+    CHECK_EQ(plan.cave_rva, 0x10C0u);
+    CHECK_EQ(plan.cave_size, 64u);
+    CHECK(plan.cave_rva + plan.cave_size <= 0x1400u, "cave 不能压到函数入口");
+    CHECK(plan.begin_field_rva < f.size(), "begin 字段偏移必须在文件内");
+  }
+
+  // 整个 .text 前部最多只有 1024 字节可作填充（0x1000..0x1400），
+  // 要 2048 字节时必须拒绝，而不是越界 / 压到别的代码上。
+  const StubPlan too_big = plan_launcher_stub(pe, f, 2048, true);
+  CHECK(!too_big.ok, "填充区不够大时必须拒绝，而不是硬写");
+
+  // 代码生成：85 字节，结构固定，可逐字节校验
+  const std::vector<uint8_t> stolen = {0x48, 0x89, 0x5C, 0x24, 0x08};
+  const auto code = build_launcher_stub(0x140100000ULL, 0x140001380ULL, stolen);
+  CHECK_EQ(code.size(), 85u);
+  if (code.size() == 85) {
+    CHECK_EQ(code[0], 0x9Cu);  // pushfq
+    CHECK_EQ(code[1], 0x50u);  // push rax
+    // 所有 push/pop 必须成对：14 个 push 之后跟 14 个 pop
+    // 逐条解码，统计 push/pop 是否配平（stub 里任何一次不配平都会毁掉调用者栈）
+    size_t pushes = 0, pops = 0, off = 0;
+    while (off < code.size()) {
+      const auto insn = x64::decode(code.data() + off, code.size() - off);
+      if (insn.length == 0) break;
+      if (insn.opcode == 0x50 || insn.opcode == 0x51 || insn.opcode == 0x52 ||
+          insn.opcode == 0x53 || insn.opcode == 0x54 || insn.opcode == 0x55 ||
+          insn.opcode == 0x56 || insn.opcode == 0x57 || insn.opcode == 0x9C ||
+          insn.opcode == 0x41 || insn.opcode == 0x48 || insn.opcode == 0x49)
+        ++pushes;  // 粗略计数，下面用精确字节校验代替
+      ++off;
+    }
+    // 精确校验：stub 开头必须是 pushfq + 14 个寄存器压栈的固定字节序列
+    static const uint8_t kPrologue[] = {0x9C, 0x50, 0x51, 0x52, 0x53, 0x56, 0x57,
+                                        0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53,
+                                        0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+    CHECK_EQ(sizeof(kPrologue), 23u);
+    CHECK(std::equal(kPrologue, kPrologue + sizeof(kPrologue), code.begin()),
+          "开头必须是 pushfq + 14 个通用寄存器压栈");
+    static const uint8_t kEpilogue[] = {0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C,
+                                        0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58,
+                                        0x5F, 0x5E, 0x5B, 0x5A, 0x59, 0x58, 0x9D};
+    CHECK(std::search(code.begin(), code.end(), kEpilogue, kEpilogue + sizeof(kEpilogue)) !=
+              code.end(),
+          "寄存器恢复必须是逆序 pop + popfq");
+    (void)pushes; (void)pops;
+    // 最后必须是 movabs rax, <跳回地址>; jmp rax
+    // 约束：cave 紧贴函数入口，所以「stub 末尾」就是真实入口地址。
+    // build_launcher_stub 据此把跳回目标算成 stub_va + stub 长度。
+    const uint64_t stub_va = 0x140001380ULL;
+    uint64_t back = 0;
+    std::memcpy(&back, code.data() + code.size() - 10, 8);  // movabs 的 imm64
+    CHECK_EQ(back, stub_va + code.size());
+    CHECK_EQ(code[code.size() - 12], 0x48u);
+    CHECK_EQ(code[code.size() - 11], 0xB8u);
+    CHECK_EQ(code[code.size() - 2], 0xFFu);
+    CHECK_EQ(code[code.size() - 1], 0xE0u);
+  }
+
+  // 被偷的指令必须原样出现在跳回之前
+  CHECK(std::search(code.begin(), code.end(), stolen.begin(), stolen.end()) != code.end(),
+        "被顶替的原始指令必须原样搬进 stub");
+}
+
+// ---------------------------------------------------------------------------
+// 跳板生成：编码必须真的能跳到正确的标签，寄存器必须真的被读到。
+static void test_fileid_stub() {
+  group("fileid_stub");
+
+  for (const char* idr : {"rdx", "rcx", "r8", "r9", "rsi", "rdi", "rax", "r10", "r11"}) {
+    StubConfig cfg;
+    cfg.id_register = idr;
+    cfg.return_register = "rax";
+    auto r = build_fileid_stub(cfg, 0x10000000ULL, 8);
+    CHECK(r.ok(), std::string("应该能生成跳板: ") + idr);
+    if (!r.ok()) continue;
+    CHECK_EQ(r.patch_slots.size(), 2u);
+    // 所有指令都必须能完整解码（否则运行期必然崩）
+    size_t p = 0;
+    bool all_decoded = true;
+    while (p < r.code.size()) {
+      const auto insn = x64::decode(r.code.data() + p, r.code.size() - p);
+      if (insn.length == 0) { all_decoded = false; break; }
+      p += insn.length;
+    }
+    CHECK(all_decoded, std::string("生成的跳板必须全部可解码: ") + idr);
+    // 最后一个指令必须是 ret
+    CHECK_EQ(r.code.back(), 0xC3);
+  }
+
+  // 不支持的寄存器必须被拒绝，而不是生成坏代码
+  {
+    StubConfig cfg;
+    cfg.id_register = "r12";
+    CHECK(!build_fileid_stub(cfg, 0, 4).ok(), "r12 必须被拒绝");
+    cfg.id_register = "esp";
+    CHECK(!build_fileid_stub(cfg, 0, 4).ok(), "esp 必须被拒绝");
+    cfg.id_register = "rbx";
+    CHECK(!build_fileid_stub(cfg, 0, 0).ok(), "空表必须被拒绝");
+  }
+
+  // 表序列化
+  {
+    std::vector<std::pair<uint64_t, std::string>> entries = {{100, "a\\b.blp"}, {200, "c.blp"}};
+    std::vector<uint8_t> blob;
+    std::vector<std::pair<int, uint32_t>> offs;
+    auto table = serialize_id_table(entries, &blob, &offs);
+    CHECK_EQ(table.size(), 2 * FileIdEntryLayout::kStride);
+    CHECK_EQ(offs.size(), 2u);
+    CHECK_EQ(offs[0].second, 0u);
+    CHECK_EQ(offs[1].second, 8u);  // "a\\b.blp" + NUL
+    uint64_t id0 = 0;
+    std::memcpy(&id0, table.data(), 8);
+    CHECK_EQ(id0, 100ull);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 映像分析：字符串 -> 交叉引用 -> 函数起点 -> hook 点
+static void test_analyze() {
+  group("analyze");
+
+  std::vector<uint8_t> img(0x9000, 0xCC);
+  const char* s = "Locally overridden files";
+  std::memcpy(img.data() + 0x8000, s, std::strlen(s) + 1);
+  const uint64_t base = 0x140000000ull;
+
+  size_t p = 0x1000;
+  const uint8_t pro[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x83, 0xEC, 0x20};
+  std::memcpy(img.data() + p, pro, sizeof(pro));
+  p += sizeof(pro);
+  img[p++] = 0x48; img[p++] = 0x8D; img[p++] = 0x15;
+  int64_t disp = static_cast<int64_t>(base + 0x8000) - static_cast<int64_t>(base + p + 4);
+  std::memcpy(img.data() + p, &disp, 4);
+  p += 4;
+  img[p++] = 0xE8;
+  int32_t rel = 0x20;
+  std::memcpy(img.data() + p, &rel, 4);
+  p += 4;
+  const uint8_t epi[] = {0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3};
+  std::memcpy(img.data() + p, epi, sizeof(epi));
+
+  ImageView v;
+  v.data = img.data();
+  v.size = img.size();
+  v.base_va = base;
+  auto res = analyze_image(v);
+  CHECK(res.ok, "分析应成功");
+  CHECK(!res.string_hits.empty(), "应找到标记字符串");
+  CHECK(!res.sites.empty(), "应推导出至少一个 hook 点方案");
+  if (!res.sites.empty()) {
+    CHECK_EQ(res.sites[0].function_rva, size_t(0x1000));
+    CHECK(res.sites[0].site.ok, "函数起点应可 hook");
+    CHECK(res.sites[0].site.copy_len >= 14, "覆盖长度应 >= 14");
+  }
+
+  // 空映像不能崩
+  ImageView empty;
+  auto bad = analyze_image(empty);
+  CHECK(!bad.ok, "空映像应报错");
+}
+
+// ---------------------------------------------------------------------------
+// 回归测试（2026-11-13）：真实客户端分析卡死 32 分钟的原因有两个
+//   1. find_code_refs_to 给整幅映像建了个用完就丢的 std::map 索引
+//   2. 分析阶段对「每个字符串命中」各扫一遍全图
+//   3. 而且 REX 前缀判断写错，48 8D 0D ... 这种最常见的 lea 永远匹配不到
+// 这里锁死第 3 点（正确性）和第 2 点（多目标必须一次扫描）。
+static void test_xref_multi_target() {
+  group("xref(多目标一次扫描)");
+
+  std::vector<uint8_t> img(0x10000, 0xCC);
+  const uint64_t base = 0x140000000ull;
+  // 三个字符串，各自被一条带 REX 前缀的 lea 引用
+  const char* strs[3] = {"Locally overridden files", "CASC", "FileDataID"};
+  size_t str_off[3] = {0x8000, 0x9000, 0xa000};
+
+  std::vector<uint64_t> targets;
+  for (int k = 0; k < 3; ++k) {
+    std::memcpy(img.data() + str_off[k], strs[k], std::strlen(strs[k]) + 1);
+    const size_t fn_off = 0x1000 + static_cast<size_t>(k) * 0x100;
+    img[fn_off] = 0x55;              // push rbp
+    img[fn_off + 1] = 0x48;          // REX.W
+    img[fn_off + 2] = 0x8D;          // lea
+    img[fn_off + 3] = 0x0D;          // rcx, [rip+disp32]
+    img[fn_off + 8] = 0xC3;          // ret
+    const int64_t disp = static_cast<int64_t>(base + str_off[k]) -
+                         static_cast<int64_t>(base + fn_off + 8);
+    std::memcpy(img.data() + fn_off + 4, &disp, 4);
+    targets.push_back(base + str_off[k]);
+  }
+
+  ImageView v;
+  v.data = img.data();
+  v.size = img.size();
+  v.base_va = base;
+
+  // 带 REX 前缀的 lea 必须被识别（旧实现漏掉这一整类）
+  auto one = find_code_refs_to(v, targets[0]);
+  CHECK_EQ(one.size(), size_t(1));
+  if (!one.empty()) CHECK_EQ(one[0].at, size_t(0x1001));  // 0x1000 是 push rbp，lea 从 0x1001 起
+
+  // 多目标一次扫描，结果必须和逐个调用一致
+  auto many = find_code_refs_to_many(v, targets, 64);
+  CHECK_EQ(many.size(), size_t(3));
+  for (int k = 0; k < 3; ++k) {
+    auto it = many.find(targets[k]);
+    CHECK(it != many.end(), "每个目标都应有引用");
+    if (it != many.end()) {
+      CHECK_EQ(it->second.size(), size_t(1));
+      if (!it->second.empty())
+        CHECK_EQ(it->second[0].at, 0x1001 + static_cast<size_t>(k) * 0x100);
+    }
+  }
+
+  // 整个分析流程要在秒级完成，且三个标记都要出来
+  AnalyzeOptions opt;
+  opt.refs_budget_seconds = 5.0;
+  opt.id_budget_seconds = 5.0;
+  auto res = analyze_image(v, opt);
+  CHECK(res.ok, "分析应成功");
+  CHECK_EQ(res.string_hits.size(), size_t(3));
+  CHECK_EQ(res.detour_targets.size(), size_t(3));
+}
+
+// ---------------------------------------------------------------------------
+// 回归测试（2026-11-13，第二次）：真实客户端那块 108MB 内存是【磁盘文件布局】
+// （MZ 头、SizeOfImage 全对，标记字符串也在，但 xref 一个引用都没有）。
+// 原因：RIP 相对引用的 disp32 按 RVA 编码，而文件布局里节数据在
+// PointerToRawData 处，两者差 delta -> 必然对不上。
+// 修法：原样扫不到引用时按节表重映射成内存布局再分析（结果自证，不猜）。
+static void test_file_layout_remap() {
+  group("文件布局自动重映射");
+
+  // 造 PE：.text va=0x1000 raw=0x400，.data va=0x5000 raw=0x3400
+  // 两个节的 delta 不同，这样文件布局下位移关系一定破坏。
+  const size_t kSize = 0x9000;
+  std::vector<uint8_t> mem(kSize, 0x00);
+  mem[0] = 'M'; mem[1] = 'Z';
+  auto w32 = [&](size_t off, uint32_t v) { std::memcpy(mem.data() + off, &v, 4); };
+  auto w16 = [&](size_t off, uint16_t v) { std::memcpy(mem.data() + off, &v, 2); };
+  w32(0x3C, 0x80);
+  std::memcpy(mem.data() + 0x80, "PE\0\0", 4);
+  w16(0x84, 0x8664);      // machine
+  w16(0x86, 2);           // NumberOfSections
+  w16(0x94, 0xE0);        // SizeOfOptionalHeader
+  w16(0x98, 0x20B);       // PE32+
+  w32(0x98 + 16, 0x1000); // EntryPoint
+  w32(0x98 + 56, kSize);  // SizeOfImage
+  const size_t sh = 0x98 + 0xE0;
+  auto section = [&](size_t off, const char* name, uint32_t vsize, uint32_t va,
+                     uint32_t rsize, uint32_t rptr) {
+    std::memcpy(mem.data() + off, name, std::strlen(name));
+    w32(off + 8, vsize); w32(off + 12, va); w32(off + 16, rsize); w32(off + 20, rptr);
+  };
+  section(sh, ".text", 0x4000, 0x1000, 0x4000, 0x400);
+  section(sh + 40, ".data", 0x2000, 0x5000, 0x2000, 0x3400);
+
+  const char* strs[3] = {"Locally overridden files", "CASC", "FileDataID"};
+  for (int k = 0; k < 3; ++k) {
+    const size_t sva = 0x5100 + static_cast<size_t>(k) * 0x100;
+    std::memcpy(mem.data() + sva, strs[k], std::strlen(strs[k]) + 1);
+    const size_t insn_va = 0x1100 + static_cast<size_t>(k) * 0x40;
+    mem[insn_va] = 0x55;
+    mem[insn_va + 1] = 0x48; mem[insn_va + 2] = 0x8D; mem[insn_va + 3] = 0x0D;
+    mem[insn_va + 8] = 0xC3;
+    const int64_t disp = static_cast<int64_t>(sva) - static_cast<int64_t>(insn_va + 8);
+    std::memcpy(mem.data() + insn_va + 4, &disp, 4);
+  }
+
+  // 造文件布局：把节数据搬到各自的 raw_ptr 处
+  std::vector<uint8_t> file(kSize, 0x00);
+  std::memcpy(file.data(), mem.data(), 0x400);          // 头 + 节表
+  std::memcpy(file.data() + 0x400, mem.data() + 0x1000, 0x4000);   // .text
+  std::memcpy(file.data() + 0x3400, mem.data() + 0x5000, 0x2000);  // .data
+
+  // 文件布局：字符串找得到，但直接 xref 一定 0 个引用
+  ImageView fv;
+  fv.data = file.data();
+  fv.size = file.size();
+  fv.base_va = 0x140000000ull;
+  {
+    AnalyzeOptions o;
+    o.allow_file_remap = false;   // 关掉自动重映射，验证"原样扫不到"
+    o.refs_budget_seconds = 10;
+    o.id_budget_seconds = 5;
+    auto r = analyze_image(fv, o);
+    CHECK(r.ok, "文件布局分析应成功返回");
+    CHECK(r.string_hits.empty(), "文件布局下原样扫描不应找到代码引用");
+    CHECK(!r.orphan_strings.empty(), "字符串本身应该找得到（只是无引用）");
+    CHECK(!r.used_file_remap, "关掉重映射时不应报告使用过重映射");
+  }
+
+  // 打开自动重映射：应该救回来
+  {
+    AnalyzeOptions o;
+    o.refs_budget_seconds = 10;
+    o.id_budget_seconds = 5;
+    auto r = analyze_image(fv, o);
+    CHECK(r.ok, "自动重映射分析应成功");
+    CHECK(r.used_file_remap, "应报告使用了文件布局重映射");
+    CHECK_EQ(r.string_hits.size(), size_t(3));
+    CHECK_EQ(r.detour_targets.size(), size_t(3));
+    if (r.detour_targets.size() == 3) {
+      CHECK_EQ(r.detour_targets[0].function_rva, size_t(0x1100));
+      CHECK(r.detour_targets[0].hookable, "重映射后的函数起点应可 hook");
+    }
+  }
+
+  // 内存布局不受影响
+  {
+    ImageView mv;
+    mv.data = mem.data();
+    mv.size = mem.size();
+    mv.base_va = 0x140000000ull;
+    AnalyzeOptions o;
+    o.refs_budget_seconds = 10;
+    o.id_budget_seconds = 5;
+    auto r = analyze_image(mv, o);
+    CHECK(r.ok, "内存布局分析应成功");
+    CHECK(!r.used_file_remap, "内存布局不应触发重映射");
+    CHECK_EQ(r.string_hits.size(), size_t(3));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 回归测试（2026-11-13，第三次）：真实客户端的假阴性
+//
+// 现象：同一块内存 0x3ac0000，上一版给出「字符串 2 个 / detour 1 个」，
+// 这一版给出「字符串 0 个 / detour 0 个」，而代码根本没改。
+// 原因：客户端同时保留多份同尺寸的映像副本，其中有的只有数据段、
+// 没有可执行节。挑中那种副本就会得到"字符串找得到、但一个 RIP 相对引用
+// 都没有"的假阴性 —— 看起来像分析算法坏了。
+//
+// 这里锁死两件事：
+//   1) 真正有 lea 引用的映像必须被正确解析出来（不能假阴性）
+//   2) 标记字符串出现次数超过 scan 上限时不能漏掉后面的引用
+static void test_no_false_negative() {
+  group("不能出现假阴性");
+
+  const size_t kSize = 0x9000;
+  std::vector<uint8_t> img(kSize, 0x00);
+  auto w32 = [&](size_t off, uint32_t v) { std::memcpy(img.data() + off, &v, 4); };
+  auto w16 = [&](size_t off, uint16_t v) { std::memcpy(img.data() + off, &v, 2); };
+
+  img[0] = 'M'; img[1] = 'Z';
+  w32(0x3C, 0x80);
+  std::memcpy(img.data() + 0x80, "PE\0\0", 4);
+  w16(0x84, 0x8664);
+  w16(0x86, 2);
+  w16(0x94, 0xE0);
+  w16(0x98, 0x20B);
+  w32(0x98 + 16, 0x1200);   // 入口点放在代码节内
+  w32(0x98 + 56, kSize);
+  const size_t sh = 0x98 + 0xE0;
+  // .text: 可执行（0x60000020 = CODE|EXECUTE|READ）
+  std::memcpy(img.data() + sh, ".text", 5);
+  w32(sh + 8, 0x7000); w32(sh + 12, 0x1000); w32(sh + 16, 0x7000); w32(sh + 20, 0x1000);
+  w32(sh + 36, 0x60000020u);
+  // .data: 可读写（0xC0000040）
+  std::memcpy(img.data() + sh + 40, ".data", 5);
+  w32(sh + 40 + 8, 0x1000); w32(sh + 40 + 12, 0x8000);
+  w32(sh + 40 + 16, 0x1000); w32(sh + 40 + 20, 0x8000);
+  w32(sh + 40 + 36, 0xC0000040u);
+
+  // 一条 lea 引用 "Locally overridden files"
+  auto place_lea = [&](size_t insn_rva, size_t target_rva) {
+    img[insn_rva] = 0x55;
+    img[insn_rva + 1] = 0x48; img[insn_rva + 2] = 0x8D; img[insn_rva + 3] = 0x0D;
+    img[insn_rva + 8] = 0xC3;
+    const int64_t disp = static_cast<int64_t>(target_rva) - static_cast<int64_t>(insn_rva + 8);
+    std::memcpy(img.data() + insn_rva + 4, &disp, 4);
+  };
+  const size_t s_loose = 0x8000;
+  std::memcpy(img.data() + s_loose, "Locally overridden files", 25);
+  place_lea(0x1100, s_loose);
+
+  // 超过 scan 上限：FileDataID 铺 12 处，只有最后一处被引用
+  for (int i = 0; i < 12; ++i) {
+    const size_t o = 0x8200 + static_cast<size_t>(i) * 0x40;
+    std::memcpy(img.data() + o, "FileDataID", 11);
+  }
+  place_lea(0x1200, 0x8200 + 11 * 0x40);
+
+  ImageView v;
+  v.data = img.data();
+  v.size = img.size();
+  v.base_va = 0x140000000ull;
+
+  AnalyzeOptions o;
+  o.refs_budget_seconds = 20;
+  o.id_budget_seconds = 10;
+  auto r = analyze_image(v, o);
+
+  CHECK(r.ok, "分析应成功");
+  CHECK(!r.used_file_remap, "内存布局不应触发重映射");
+  // 决定性断言：两处引用都必须找到
+  CHECK_EQ(r.string_hits.size(), size_t(2));
+  CHECK_EQ(r.detour_targets.size(), size_t(2));
+  // 未被引用的 11 处 FileDataID 应当作为孤儿如实报告（不是被静默丢弃），
+  // 但真正的引用不能被挤掉。上面两条 string_hits/detour 断言已经锁死这点。
+  // 12 个孤儿 = 11 处未引用的 FileDataID + 1 处 "overridden files"
+  // （它是 "Locally overridden files" 的子串，也命中一次且无 lea 引用）
+  CHECK_EQ(r.orphan_strings.size(), size_t(12));
+  // 关键：被引用的必须是最后那处（第 12 个），证明上限没有截断到它
+  bool found_last = false;
+  for (const auto& h : r.string_hits) {
+    if (h.marker == "FileDataID" && h.rva == 0x8200 + 11 * 0x40) found_last = true;
+  }
+  CHECK(found_last, "第 12 处 FileDataID 的引用不能被 scan 上限挤掉");
+}
+
+// ---------------------------------------------------------------------------
+// 回归测试（2026-11-13，第四次）：MEM_MAPPED 映像节的保护属性
+//
+// 现象：分析全部成功（拿到了 rva=0x33e1890），安装拦截器时
+//   VirtualProtectEx(RWX) 失败, GetLastError=87
+// 原因：客户端映像那块 108MB 是 MEM_MAPPED 的映像节。对它请求
+// PAGE_EXECUTE_READWRITE 是非法参数 —— 映像节的页保护必须与原始节属性
+// 兼容，不能中途把非执行页变成可执行页。正确值是与 RWX 语义等价、
+// 但映像节合法的 PAGE_EXECUTE_WRITECOPY（写时复制，不落盘）。
+static void test_protect_plan() {
+  group("保护属性选择");
+
+  using namespace wowmod;
+  // MEM_MAPPED 的只读映像页：首选必须是 WRITECOPY 系列，绝不能是 RWX
+  {
+    auto c = writable_protect_candidates(kMemMapped, 0x04 /*PAGE_READWRITE*/);
+    CHECK(!c.empty(), "应给出候选");
+    CHECK(c[0] != kPageExecuteReadWrite, "MEM_MAPPED 不能首选 RWX（会 87）");
+    bool has_wc = false;
+    for (uint32_t v : c)
+      if (v == kPageWriteCopy || v == kPageExecuteWriteCopy) has_wc = true;
+    CHECK(has_wc, "MEM_MAPPED 候选中必须含 WRITECOPY");
+  }
+  // MEM_IMAGE 同理
+  {
+    auto c = writable_protect_candidates(kMemImage, 0x04);
+    CHECK(!c.empty(), "MEM_IMAGE 应给出候选");
+    CHECK(c[0] != kPageExecuteReadWrite, "MEM_IMAGE 不能首选 RWX（会 87）");
+  }
+  // 私有内存可以用 RWX
+  {
+    auto c = writable_protect_candidates(0x20000 /*MEM_PRIVATE*/, 0x04);
+    CHECK(!c.empty(), "私有内存应给出候选");
+    CHECK_EQ(c[0], kPageExecuteReadWrite);
+  }
+  // 可执行的映像节：仍优先 WRITECOPY（保执行 + 可写）
+  {
+    auto c = writable_protect_candidates(kMemImage, 0x20 /*PAGE_EXECUTE_READ*/);
+    CHECK(!c.empty(), "可执行映像节应给出候选");
+    CHECK_EQ(c[0], kPageExecuteWriteCopy);
+  }
+}
+
+// Arctium 特征码表的自检：不依赖客户端，只用合成映像验证
+// 「特征码能解析、能在已知字节处唯一命中、改写点偏移指向预期位置」。
+// 真正的 12.0.7 匹配结果由 launcher --mode sigscan 现场给出，这里不伪造。
+static void test_arctium_signature_table() {
+  group("arctium-signature-table");
+  const auto& sigs = wowmod::arctium_signature_specs();
+  CHECK(sigs.size() >= 3, "至少包含 CustomFileIdHook / LoadByFileId / LoadByFilePath");
+
+  bool saw_custom = false, saw_loadbyid = false, saw_loadbypath = false;
+  for (const auto& sg : sigs) {
+    std::string err;
+    wowmod::Pattern p = wowmod::Pattern::parse(sg.pattern, &err);
+    CHECK(p.valid(), std::string("特征码可解析: ") + sg.name + " " + err);
+    CHECK(p.size() > 8, std::string("特征码长度合理: ") + sg.name);
+    CHECK(sg.patch_offset >= 0, std::string("改写偏移非负: ") + sg.name);
+    if (std::string(sg.name) == "CustomFileIdHook") saw_custom = true;
+    if (std::string(sg.name) == "LoadByFileId") saw_loadbyid = true;
+    if (std::string(sg.name) == "LoadByFilePath") saw_loadbypath = true;
+  }
+  CHECK(saw_custom, "有文件打开函数本身的特征");
+  CHECK(saw_loadbyid, "有 LoadByFileId 分支特征");
+  CHECK(saw_loadbypath, "有 LoadByFilePath 分支特征");
+
+  // 按特征本身构造一段映像：固定字节照抄，通配位填 0x90，
+  // 再断言「能在预期起点唯一命中、改写点 = 起点 + patch_offset」。
+  // 这是对匹配器与偏移语义的验证，不代表客户端里真的有这个函数。
+  for (const auto& sg : sigs) {
+    std::string err2;
+    wowmod::Pattern pat = wowmod::Pattern::parse(sg.pattern, &err2);
+    if (!pat.valid()) continue;
+
+    const size_t pad = 16;
+    std::vector<uint8_t> img(pad + pat.size() + pad, 0xCC);
+    for (size_t k = 0; k < pat.size(); ++k)
+      img[pad + k] = pat.bytes[k] >= 0 ? static_cast<uint8_t>(pat.bytes[k]) : 0x90;
+
+    const auto hits = pat.find_all(img);
+    CHECK_EQ(hits.size(), size_t(1));
+    if (!hits.empty()) {
+      CHECK_EQ(hits[0], pad);
+      const uint64_t match_va = 0x140001000ull + pad;
+      const uint64_t patch_va = match_va + static_cast<uint64_t>(sg.patch_offset);
+      CHECK_EQ(patch_va, 0x140001000ull + pad + static_cast<uint64_t>(sg.patch_offset));
+      CHECK(sg.patch_offset < static_cast<int>(pat.size()),
+            std::string("改写点落在特征范围内: ") + sg.name);
+    }
+  }
+
+  // 空/垃圾特征不应崩，也不应误报。
+  std::string err3;
+  wowmod::Pattern bogus = wowmod::Pattern::parse("ZZ ZZ", &err3);
+  CHECK(!bogus.valid(), "非法特征码不合法");
+}
+
+// 拦截跳板语义测试（定义在 tests/intercept_test.cpp）
+namespace wowmod { namespace test { int run_intercept_stub_tests(int* checks); } }
+
 int main() {
   std::cout << "wowmod 核心测试\n";
   std::cout << std::string(50, '-') << "\n";
@@ -845,6 +1471,20 @@ int main() {
   test_vfs();
   test_hooks();
   test_discover();
+  test_x64_decode();
+  test_fileid_stub();
+  test_launcher_stub();
+  test_analyze();
+  test_xref_multi_target();
+  test_file_layout_remap();
+  test_no_false_negative();
+  test_protect_plan();
+  test_arctium_signature_table();
+  {
+    int extra = 0;
+    g_failed += wowmod::test::run_intercept_stub_tests(&extra);
+    g_total += extra;
+  }
   test_real_client();
   teardown();
   std::cout << std::string(50, '-') << "\n";

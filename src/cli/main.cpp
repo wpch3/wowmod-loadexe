@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -16,7 +17,12 @@
 #include <windows.h>
 #endif
 
+#include "wowmod/analyze.hpp"
 #include "wowmod/arctium.hpp"
+#include "wowmod/fileid_stub.hpp"
+#include "wowmod/launcher_stub.hpp"
+#include "wowmod/x64_decode.hpp"
+#include "wowmod/xref.hpp"
 #include "wowmod/config.hpp"
 #include "wowmod/discover.hpp"
 #include "wowmod/hooks.hpp"
@@ -167,6 +173,11 @@ std::string help_text() {
       "  adapt      把邻近版本的特征自动放宽成你的 exe 上唯一匹配的特征\n"
       "  discover   只用自己的 exe 自动找出候选 hook 点（无需上传任何文件）\n"
       "  arctium-plan  生成 Arctium 风格 FileDataID -> 松散文件预检表（不修改/启动客户端）\n"
+      "  xref       在映像里找字符串交叉引用（定位 loose-file 相关函数）\n"
+      "  site       为指定 RVA 规划 hook 点（完整指令边界 + 可重定位性）\n"
+      "  stub       生成 FileDataID 跳板机器码并打印反汇编（不接触任何进程）\n"
+      "  stub-plan  规划 .pdata 早期执行跳板（启动器路线）\n"
+      "  analyze    对映像做完整分析，输出 hook 点方案 + id 查找候选（JSON/文本）\n"
       "  launch     启动客户端并注入覆盖层（Windows；其他平台给出提示）\n"
       "  version    显示加载器版本\n\n"
       "选项:\n"
@@ -185,6 +196,14 @@ std::string help_text() {
       "  --module DLL     特征属于哪个模块（私服壳 exe 时通常是 Wow_loader.dll）\n"
       "  --mapped         --exe 指向运行时内存转储（.img），按 RVA=偏移分析加密壳客户端\n"
       "  --materialize DIR  plan 时把内存生成文件写到 DIR 便于检查\n"
+      "  --base VA        映像基址（analyze/xref，十六进制，如 0x140000000）\n"
+      "  --rva RVA        hook 点 RVA（site）\n"
+      "  --auto           site: 自动使用分析推荐的 hook 点\n"
+      "  --min-cover N    detour 至少覆盖多少字节（site，默认 14）\n"
+      "  --id-register R  跳板里 FileDataID 所在寄存器（stub/analyze，默认 rdx）\n"
+      "  --ret-register R 命中时返回路径指针的寄存器（stub，默认 rax）\n"
+      "  --count N        跳板测试用的表项数量（stub，默认 8）\n"
+      "  --out-rva FILE   把可用 hook 点写成 id;rva 清单（analyze）\n"
       "  --json           机器可读输出\n"
       "  --force          init 时覆盖已有文件\n\n"
       "示例:\n"
@@ -270,6 +289,283 @@ int cmd_arctium_plan(const Args& a) {
     if (!diag.items().empty()) std::cout << "\n" << diag.render(false);
   }
   return plan.error.empty() && !diag.has_errors() ? 0 : 1;
+}
+
+
+uint64_t parse_hex_opt(const Args& a, const char* key, uint64_t def) {
+  if (!a.has(key)) return def;
+  const std::string v = a.opt(key);
+  uint64_t out = 0;
+  if (!parse_u64(v, &out, 0)) return def;
+  return out;
+}
+
+// 读取映像：--exe 指向 .img / .bin / exe（磁盘 PE 用 mapped=false，运行时转储用 --mapped）
+// 读取映像。默认：磁盘 PE 会自动展开成映像布局（文件偏移 == RVA）；
+// --mapped 表示输入已经是运行时转储，原样使用。
+std::vector<uint8_t> g_image_base_fix;  // 保持返回的 base 在 cmd 内可用
+bool load_image_bytes(const Args& a, std::vector<uint8_t>* out, std::string* err,
+                      uint64_t* base_from_pe = nullptr) {
+  std::string path = a.opt("image");
+  if (path.empty()) path = a.opt("exe");
+  if (path.empty()) {
+    *err = "需要 --exe FILE 或 --image FILE 指定映像";
+    return false;
+  }
+  if (!load_analysis_image(absolute_path(path), a.has("mapped"), out, base_from_pe, err)) {
+    return false;
+  }
+  return true;
+}
+
+int cmd_xref(const Args& a) {
+  std::vector<uint8_t> bytes;
+  std::string err;
+  uint64_t auto_base = 0;
+  if (!load_image_bytes(a, &bytes, &err, &auto_base)) {
+    std::cerr << err << "\n";
+    return 1;
+  }
+  ImageView img;
+  img.data = bytes.data();
+  img.size = bytes.size();
+  img.base_va = parse_hex_opt(a, "base", auto_base);
+  const std::string needle = a.opt("string");
+  if (needle.empty()) {
+    std::cerr << "需要 --string \"要找的字符串\"\n";
+    return 1;
+  }
+  const auto hits = find_bytes(img, needle, a.has("utf16"), 64);
+  if (a.json) {
+    Json j = Json::make_object();
+    j.set("needle", Json::make_string(needle));
+    Json arr = Json::make_array();
+    for (size_t h : hits) {
+      Json o = Json::make_object();
+      o.set("rva", Json::make_string(to_hex(h, 1)));
+      const auto refs = find_code_refs_to(img, img.va_of(h), 64);
+      Json ra = Json::make_array();
+      for (const auto& r : refs) {
+        Json ro = Json::make_object();
+        ro.set("at", Json::make_string(to_hex(r.at, 1)));
+        ro.set("form", Json::make_string(r.form));
+        const size_t fn = find_function_start(img, r.at, 0x3000);
+        if (fn != SIZE_MAX) ro.set("function", Json::make_string(to_hex(fn, 1)));
+        ra.push(ro);
+      }
+      o.set("refs", ra);
+      arr.push(o);
+    }
+    j.set("hits", arr);
+    std::cout << j.dump(2) << "\n";
+    return hits.empty() ? 2 : 0;
+  }
+  std::cout << "字符串 \"" << needle << "\": " << hits.size() << " 处\n";
+  for (size_t h : hits) {
+    std::cout << "  rva 0x" << to_hex(h, 1) << "\n";
+    for (const auto& r : find_code_refs_to(img, img.va_of(h), 64)) {
+      const size_t fn = find_function_start(img, r.at, 0x3000);
+      std::cout << "      引用 0x" << to_hex(r.at, 1) << " (" << r.form << ")"
+                << (fn == SIZE_MAX ? "" : "  函数起点 0x" + to_hex(fn, 1)) << "\n";
+    }
+  }
+  return hits.empty() ? 2 : 0;
+}
+
+int cmd_site(const Args& a) {
+  std::vector<uint8_t> bytes;
+  std::string err;
+  uint64_t auto_base = 0;
+  if (!load_image_bytes(a, &bytes, &err, &auto_base)) {
+    std::cerr << err << "\n";
+    return 1;
+  }
+  ImageView img;
+  img.data = bytes.data();
+  img.size = bytes.size();
+  img.base_va = parse_hex_opt(a, "base", auto_base);
+  // --auto: 先跑分析，直接给出它推荐的那批 hook 点（不用手工抄 RVA）。
+  if (a.has("auto")) {
+    AnalyzeOptions opt;
+    opt.max_functions = 16;
+    const auto res = analyze_image(img, opt);
+    if (!res.ok) {
+      std::cerr << "分析失败: " << res.error << "\n";
+      return 1;
+    }
+    if (res.detour_targets.empty()) {
+      std::cerr << "分析没有找到任何引用 loose-file 标记的函数。\n";
+      return 2;
+    }
+    std::cout << "自动挑选的 hook 点（每个引用标记字符串的函数一条）：\n";
+    size_t usable = 0;
+    for (const auto& t : res.detour_targets) {
+      std::cout << "  fn=0x" << to_hex(t.function_rva, 1) << "  " << (t.hookable ? "可用" : "不可用")
+                << "  覆盖 " << t.copy_len << " 字节  [" << t.marker << "]\n";
+      if (t.hookable) {
+        ++usable;
+        const auto plan = plan_hook_site(img, t.function_rva, 14);
+        std::cout << "      -> 安装地址 = 映像基址 + 0x" << to_hex(t.function_rva, 1)
+                  << "   序言: ";
+        for (const auto& w : plan.prologue) std::cout << w.text << " ; ";
+        std::cout << "\n";
+      }
+    }
+    std::cout << "\n可直接用于 wowmod_loader --mode hook（需要先确认 FileDataID 参数位置）\n";
+    return usable ? 0 : 2;
+  }
+
+  const uint64_t rva = parse_hex_opt(a, "rva", UINT64_MAX);
+  if (rva == UINT64_MAX || rva >= bytes.size()) {
+    std::cerr << "需要 --rva 0x...（或 --auto 自动挑选）且必须落在映像范围内\n";
+    return 1;
+  }
+  const size_t min_cover = static_cast<size_t>(parse_hex_opt(a, "min-cover", 14));
+  const auto plan = plan_hook_site(img, static_cast<size_t>(rva), min_cover);
+  if (a.json) {
+    Json j = Json::make_object();
+    j.set("rva", Json::make_string(to_hex(rva, 1)));
+    j.set("hookable", Json::make_bool(plan.ok));
+    j.set("copyLen", Json::make_number(static_cast<double>(plan.copy_len)));
+    j.set("reason", Json::make_string(plan.reason));
+    j.set("relocatable", Json::make_bool(plan.relocatable));
+    j.set("hasRipRelative", Json::make_bool(plan.has_rip_relative));
+    j.set("hasJump", Json::make_bool(plan.has_jump));
+    std::cout << j.dump(2) << "\n";
+    return plan.ok ? 0 : 2;
+  }
+  std::cout << "hook 点 0x" << to_hex(rva, 1) << ": " << (plan.ok ? "可用" : "不可用") << "\n"
+            << "  覆盖字节: " << plan.copy_len << "\n"
+            << "  可重定位: " << (plan.relocatable ? "是" : "否")
+            << "  RIP 相对: " << (plan.has_rip_relative ? "有" : "无")
+            << "  跳转: " << (plan.has_jump ? "有" : "无") << "\n"
+            << "  说明: " << plan.reason << "\n"
+            << "  序言:\n";
+  for (const auto& w : plan.prologue)
+    std::cout << "    +0x" << to_hex(w.rva, 1) << "  " << w.text << "\n";
+  return plan.ok ? 0 : 2;
+}
+
+int cmd_stub(const Args& a) {
+  StubConfig cfg;
+  cfg.id_register = a.opt("id-register", "rdx");
+  cfg.return_register = a.opt("ret-register", "rax");
+  const uint32_t count = static_cast<uint32_t>(parse_hex_opt(a, "count", 8));
+  const uint64_t table_va = parse_hex_opt(a, "table", 0x10000000ull);
+  auto r = build_fileid_stub(cfg, table_va, count);
+  if (!r.ok()) {
+    std::cerr << "生成失败:\n";
+    for (const auto& e : r.errors) std::cerr << "  " << e << "\n";
+    return 1;
+  }
+  // 回填占位地址，方便直接反汇编查看
+  std::vector<uint8_t> code = r.code;
+  for (const auto& slot : r.patch_slots) {
+    uint64_t v = slot.second == "id_table_va" ? table_va : 0x1FF000ull;
+    std::memcpy(code.data() + slot.first, &v, 8);
+  }
+  if (a.json) {
+    Json j = Json::make_object();
+    j.set("bytes", Json::make_number(static_cast<double>(code.size())));
+    std::string hex;
+    for (uint8_t b : code) hex += to_hex(b, 2);
+    j.set("hex", Json::make_string(hex));
+    j.set("idRegister", Json::make_string(cfg.id_register));
+    j.set("returnRegister", Json::make_string(cfg.return_register));
+    std::cout << j.dump(2) << "\n";
+    return 0;
+  }
+  std::cout << "FileDataID 跳板: " << code.size() << " 字节, id=" << cfg.id_register
+            << " ret=" << cfg.return_register << "\n";
+  ImageView img;
+  img.data = code.data();
+  img.size = code.size();
+  img.base_va = 0;
+  for (const auto& w : disassemble_window(img, 0, code.size()))
+    std::cout << "  +0x" << to_hex(w.rva, 2) << "  " << w.text << "\n";
+  return 0;
+}
+
+int cmd_stub_plan(const Args& a) {
+  std::vector<uint8_t> bytes;
+  std::string err;
+  // stub-plan 必须在【磁盘 PE】上跑（.pdata 就是要改写磁盘文件），不能用展开后的布局
+  {
+    std::string path = a.opt("image");
+    if (path.empty()) path = a.opt("exe");
+    if (path.empty() || !read_binary_file(absolute_path(path), &bytes, &err)) {
+      std::cerr << (err.empty() ? "需要 --exe FILE" : err) << "\n";
+      return 1;
+    }
+  }
+  if (false) {
+    std::cerr << err << "\n";
+    return 1;
+  }
+  const auto pe = parse_pe_file(bytes);
+  if (!pe.ok) {
+    std::cerr << "解析 PE 失败: " << pe.error << "\n";
+    return 1;
+  }
+  const size_t need = static_cast<size_t>(parse_hex_opt(a, "min-cover", 96));
+  const auto plan = plan_launcher_stub(pe, bytes, need, true);
+  if (a.json) {
+    Json j = Json::make_object();
+    j.set("ok", Json::make_bool(plan.ok));
+    j.set("reason", Json::make_string(plan.reason));
+    if (plan.ok) {
+      j.set("beginRva", Json::make_string(to_hex(plan.entry.begin_rva, 1)));
+      j.set("beginFieldFileOffset", Json::make_number(plan.begin_field_rva));
+      j.set("caveRva", Json::make_string(to_hex(plan.cave_rva, 1)));
+      j.set("caveSize", Json::make_number(static_cast<double>(plan.cave_size)));
+    }
+    std::cout << j.dump(2) << "\n";
+    return plan.ok ? 0 : 2;
+  }
+  std::cout << "早期执行跳板（.pdata 覆盖）: " << (plan.ok ? "可用" : "不可用") << "\n"
+            << "  " << plan.reason << "\n";
+  if (plan.ok) {
+    std::cout << "  被改写记录: begin 0x" << to_hex(plan.entry.begin_rva, 1) << " (文件偏移 "
+              << plan.begin_field_rva << ")\n"
+              << "  填充区: 0x" << to_hex(plan.cave_rva, 1) << " 起 " << plan.cave_size << " 字节\n";
+  }
+  return plan.ok ? 0 : 2;
+}
+
+int cmd_analyze(const Args& a) {
+  std::vector<uint8_t> bytes;
+  std::string err;
+  uint64_t auto_base = 0;
+  if (!load_image_bytes(a, &bytes, &err, &auto_base)) {
+    std::cerr << err << "\n";
+    return 1;
+  }
+  ImageView img;
+  img.data = bytes.data();
+  img.size = bytes.size();
+  img.base_va = parse_hex_opt(a, "base", auto_base);
+  AnalyzeOptions opt;
+  opt.max_functions = static_cast<size_t>(parse_hex_opt(a, "max-functions", 16));
+  opt.scan_id_lookup = !a.has("no-id-scan");
+  auto res = analyze_image(img, opt);
+
+  if (!a.opt("out-rva").empty()) {
+    std::string lines;
+    for (const auto& s : res.sites)
+      if (s.site.ok) lines += to_hex(s.function_rva, 1) + ";" + s.marker + "\n";
+    std::string werr;
+    if (!write_text_file(a.opt("out-rva"), lines, &werr)) std::cerr << werr << "\n";
+    else std::cout << "已写出 " << res.sites.size() << " 条候选到 " << a.opt("out-rva") << "\n";
+  }
+  if (a.has("out")) {
+    std::string werr;
+    std::string body = a.has("json-text") ? res.to_json().dump(2) : res.to_text();
+    if (!write_text_file(a.opt("out"), body, &werr)) std::cerr << werr << "\n";
+    else std::cout << "报告已写出: " << a.opt("out") << "\n";
+  }
+  if (a.json) std::cout << res.to_json().dump(2) << "\n";
+  else std::cout << res.to_text();
+  return res.ok ? 0 : 1;
 }
 
 bool prepare(const Args& a, Session* s) {
@@ -691,12 +987,17 @@ int main(int argc, char** argv) {
 
   if (a.help || a.command.empty()) { std::cout << kBanner << "\n" << help_text(); return 0; }
   if (a.command == "version" || a.command == "--version" || a.command == "-v") {
-    std::cout << "wowmod-loadexe 1.0.0 (Arctium-style preflight; runtime hook not verified)\n";
+    std::cout << "wowmod-loadexe 2.0.0 (loose-file runtime hook; analyzer + detour engine)\n";
     return 0;
   }
   if (a.command == "help") { std::cout << help_text(); return 0; }
   if (a.command == "init") return cmd_init(a);
   if (a.command == "arctium-plan") return cmd_arctium_plan(a);
+  if (a.command == "xref") return cmd_xref(a);
+  if (a.command == "site") return cmd_site(a);
+  if (a.command == "stub") return cmd_stub(a);
+  if (a.command == "stub-plan") return cmd_stub_plan(a);
+  if (a.command == "analyze") return cmd_analyze(a);
 
   Session s;
   if (!prepare(a, &s)) {
