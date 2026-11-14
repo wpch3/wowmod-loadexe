@@ -49,6 +49,8 @@ struct SigHit {
   uint32_t region_type = 0;   // MEM_IMAGE / MEM_MAPPED / MEM_PRIVATE
   uint32_t region_protect = 0;
   uint64_t image_rva = 0;     // 相对所在映像的 RVA（判断"同一份代码被映射两次"）
+  bool executable = false;    // 该页是否真的可执行（PAGE_EXECUTE*/）
+  bool has_rx = false;        // 该页是否【同时】可读 + 可执行（真正能当代码跑）
   std::string verdict;        // 结论：unique / ambiguous / near-miss
 };
 

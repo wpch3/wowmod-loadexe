@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v9"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v10"
 #endif
 #include <tlhelp32.h>
 
@@ -704,23 +704,38 @@ int main(int argc, char** argv) {
     uint64_t target = 0;
     int best_score = 0;
     bool best_image = false;
-    std::printf("  候选（按语义分 / 是否模块本体 排序）：\n");
+    bool best_rx = false;
+    std::printf("  候选（语义分 / 是否可执行 / 区域类型）：\n");
     for (const auto& h : res.hits) {
       if (h.name != "CustomFileIdHook") continue;
-      std::printf("    0x%s  语义 %d/8  %s  RVA 0x%s  Protect 0x%lx\n",
+      std::printf("    0x%s  语义 %d/8  %s  %s  RVA 0x%s  Protect 0x%lx\n",
                   wowmod::to_hex(h.match_va, 16).c_str(), h.semantic_score,
+                  h.has_rx ? "可执行" : "【不可执行·不能用】",
                   h.image_backed ? "MEM_IMAGE(模块本体)"
                                  : (h.region_type == 0x40000 ? "MEM_MAPPED(映射视图)" : "私有内存"),
                   wowmod::to_hex(h.image_rva, 16).c_str(),
                   static_cast<unsigned long>(h.region_protect));
-      // 选优顺序：语义分 > 模块本体 > 先出现的
+      // 选优顺序：语义分 > 可执行（硬条件）> 模块本体 > 先出现的
+      //
+      // 上一版只看 "语义分 + 是否 MEM_IMAGE"，结果挑中了一处 Protect=0x04
+      // （PAGE_READWRITE，根本不可执行）的映射页 —— 跳转写进了一块数据页，
+      // 客户端执行不到它，而那块数据页本身可能被壳当成校验数据。
       const bool better = (h.semantic_score > best_score) ||
-                          (h.semantic_score == best_score && h.image_backed && !best_image);
+                          (h.semantic_score == best_score && h.has_rx && !best_rx);
       if (better) {
         best_score = h.semantic_score;
         best_image = h.image_backed;
+        best_rx = h.has_rx;
         target = h.match_va;
       }
+    }
+    if (target && !best_rx) {
+      std::printf("\n  [拒绝] 唯一可用的候选所在页不可执行（Protect 不含 PAGE_EXECUTE*）。\n"
+                  "         往不可执行的页上写跳转是无意义的，而且可能破坏壳的数据。\n"
+                  "         本次不安装任何东西。\n");
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 4;
     }
     if (!target || best_score < 8) {
       std::printf("  [失败] 没有找到语义确证的 FileDataID 查找函数（最高语义分 %d/8）\n",
@@ -734,6 +749,84 @@ int main(int argc, char** argv) {
     std::printf("  [成功] 目标 0x%s（语义分 %d/8，%s）\n",
                 wowmod::to_hex(target, 16).c_str(), best_score,
                 best_image ? "模块本体，写入安全" : "映射视图，写入可能影响共享映射");
+
+    // ---- 把所有候选附近的字节 dump 到文件（崩溃后分析用，只读）----
+    //
+    // 前三次失败最大的问题不是"崩了"，而是"崩了之后我们手上没有任何证据能说明
+    // 我们到底改的是哪块内存"。这里把每处候选前后各 128 字节写到文件，
+    // 即使客户端崩了，我们也能离线对比两处命中的差异。
+    {
+      const std::string hp = wowmod::join_path(wowmod_dir, "probe-hits.txt");
+      std::string dump;
+      char line[256];
+      for (const auto& h : res.hits) {
+        if (h.name != "CustomFileIdHook") continue;
+        std::snprintf(line, sizeof(line),
+                      "== 0x%s  语义 %d/8  区域 %s  Protect 0x%lx  可执行=%s\n",
+                      wowmod::to_hex(h.match_va, 16).c_str(), h.semantic_score,
+                      h.image_backed ? "MEM_IMAGE"
+                                     : (h.region_type == 0x40000 ? "MEM_MAPPED" : "PRIVATE"),
+                      static_cast<unsigned long>(h.region_protect), h.has_rx ? "是" : "否");
+        dump += line;
+        const uint64_t from = h.match_va > 128 ? h.match_va - 128 : h.match_va;
+        std::vector<uint8_t> buf(384, 0);
+        SIZE_T got = 0;
+        if (ReadProcessMemory(pi.hProcess, reinterpret_cast<const void*>(from), buf.data(),
+                              buf.size(), &got) && got > 0) {
+          for (size_t i = 0; i < got; i += 16) {
+            std::snprintf(line, sizeof(line), "  %012llx  ",
+                          static_cast<unsigned long long>(from + i));
+            dump += line;
+            for (size_t k = 0; k < 16 && i + k < got; ++k) {
+              std::snprintf(line, sizeof(line), "%02X ", buf[i + k]);
+              dump += line;
+            }
+            dump += "\n";
+          }
+        } else {
+          dump += "  （该区域读不出来）\n";
+        }
+        dump += "\n";
+      }
+      std::string werr2;
+      wowmod::write_text_file(hp, dump, &werr2);
+      std::printf("  候选字节已导出: %s\n", hp.c_str());
+    }
+
+    // ---- 写入前一致性验证 ----
+    //
+    // 扫描是一次读取，安装是另一次写入，中间客户端的壳可能已经重新映射/解密过
+    // 这块内存。所以装之前必须重新读一遍，确认起始字节仍是目标函数的序言。
+    // 不一致 = 这块内存已经不是我们分析时的那份代码，绝不能写。
+    {
+      const std::vector<uint8_t> kPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57,
+                                              0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xF9};
+      uint8_t now[sizeof(kPrologue) ? 13 : 13];
+      SIZE_T got = 0;
+      const bool ok = ReadProcessMemory(pi.hProcess,
+                                        reinterpret_cast<const void*>(target), now,
+                                        sizeof(now), &got) && got == sizeof(now);
+      if (!ok) {
+        std::printf("  [拒绝] 安装前读取目标地址失败，不安装。\n");
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        return 4;
+      }
+      bool same = true;
+      for (size_t i = 0; i < sizeof(now); ++i) {
+        if (now[i] != kPrologue[i]) { same = false; break; }
+      }
+      if (!same) {
+        std::printf("  [拒绝] 目标地址的字节和我们扫描时不一致：\n");
+        std::printf("         期望 ");
+        for (uint8_t v : kPrologue) std::printf("%02X ", v);
+        std::printf("\n         实际 ");
+        for (size_t i = 0; i < sizeof(now); ++i) std::printf("%02X ", now[i]);
+        std::printf("\n         说明这块内存已被壳重新映射或解密过，不能写。\n");
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        return 4;
+      }
+      std::printf("  [校验] 目标序言与扫描时一致（13 字节），可以安全安装\n");
+    }
 
     // ---- 装探针 ----
     wowmod::win::FileIdHook hook;

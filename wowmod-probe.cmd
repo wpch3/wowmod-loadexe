@@ -67,7 +67,7 @@ echo   客户端: %WM_GAME%
 echo   目录  : %WM_GAMEDIR%
 echo.
 
-echo   [1/4] 检查程序版本 ...
+echo   [1/4] checking version ...
 for /f "delims=" %%V in ('"%WM_LOADER%" --version 2^>nul') do echo         %%V
 echo.
 
@@ -89,7 +89,7 @@ powershell.exe -NoLogo -NoProfile -Command ^
 pause
 
 rem ------------------------------------------------- 2. 跑
-echo   [2/4] 启动客户端，装探针，开始记录 ...
+echo   [2/4] launching client and installing probe ...
 echo.
 "%WM_LOADER%" --exe "%WM_GAME%" --mode probe --wait %WM_WAIT_MS%
 set "WM_RC=!errorlevel!"
@@ -102,7 +102,7 @@ if not exist "%WM_OUT%" (
   exit /b 1
 )
 
-echo   [3/4] 统计 ...
+echo   [3/4] summarizing ...
 echo.
 powershell.exe -NoLogo -NoProfile -Command ^
   "$p='%WM_OUT%';" ^
@@ -116,7 +116,7 @@ powershell.exe -NoLogo -NoProfile -Command ^
   "}"
 
 echo.
-echo   [4/4] 完成
+echo   [4/4] done
 echo.
 echo   记录文件: %WM_OUT%
 echo.

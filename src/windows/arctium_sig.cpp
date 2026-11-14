@@ -215,6 +215,15 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
         h.region_type = img.region_type;
         h.region_protect = img.region_protect;
         h.image_rva = h.match_va - img.base;
+        // 关键：一页内容"长得像目标函数" ≠ 这一页是"被执行的代码"。
+        // 实测两处命中里，PROTECT=0x04(PAGE_READWRITE) 的那页根本不可执行 ——
+        // 打上去客户端不会走那里，等于把跳转写进了一块数据页，
+        // 而那块数据页可能正是壳的映射视图/校验数据。
+        // 所以"可执行"是硬性条件，不是加分项。
+        h.executable = (img.region_protect & 0x10) || (img.region_protect & 0x20) ||
+                       (img.region_protect & 0x40) || (img.region_protect & 0x80);
+        h.has_rx = (img.region_protect & 0x20) || (img.region_protect & 0x40) ||
+                   (img.region_protect & 0x80);
         // 只对 CustomFileIdHook 做语义判别；其它特征码语义不同，不套用。
         if (std::string(c.sig->name) == "CustomFileIdHook") {
           const size_t probe = std::min<size_t>(0x120, img.bytes.size() - off);
@@ -252,6 +261,8 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
   // 唯一命中的排在前面
   std::stable_sort(out.hits.begin(), out.hits.end(), [](const SigHit& a, const SigHit& b) {
     if (a.semantic_score != b.semantic_score) return a.semantic_score > b.semantic_score;
+    // 可执行是硬条件：PROTECT 不含 PAGE_EXECUTE* 的页不是"会被执行的代码"
+    if (a.has_rx != b.has_rx) return a.has_rx;
     // 同等语义分时，优先选 MEM_IMAGE（模块本体）：它的页是只读的，
     // 写入必须走写时复制，改错了会当场失败；而 MEM_MAPPED 的视图可能是
     // 多进程共享的底层映射，往上写真能改坏别人看到的内容。
