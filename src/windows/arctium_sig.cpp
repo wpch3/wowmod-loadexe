@@ -84,8 +84,21 @@ Json SigScanResult::to_text_report() const {
       t += buf;
       std::snprintf(buf, sizeof(buf), "    全映像出现 %zu 次\n", h.match_count);
       t += buf;
-      if (h.match_count > 1)
-        t += "    ！出现多次 = 特征太弱，直接改写可能改到无关代码，需要人工确认。\n";
+      // 同一份代码可能被映射两次（MEM_IMAGE 一份 + 壳的文件映射视图一份），
+      // 它们的 RVA 完全相同。实测 12.0.7 的 2 处命中就是这么来的，不是"特征太弱"。
+      std::snprintf(buf, sizeof(buf), "    相对映像 RVA 0x%s\n",
+                    to_hex(h.match_va - h.image_base, 16).c_str());
+      t += buf;
+      if (h.semantic_score > 0) {
+        std::snprintf(buf, sizeof(buf),
+                      "    语义判别 %d/8   （键=edx 2 分 / murmur 哈希 3 分 / cmp[id] 3 分）\n",
+                      h.semantic_score);
+        t += buf;
+        if (h.semantic_score >= 8)
+          t += "    [目标] 这是 CAS.cpp 里 edx=FileDataID 的哈希查找函数，Arctium 就改这里。\n";
+      }
+      if (h.match_count > 1 && h.semantic_score < 8)
+        t += "    ！出现多次且语义不足 = 特征太弱，直接改写可能改到无关代码，需要人工确认。\n";
       std::string hex;
       for (size_t i = 0; i < h.head.size(); ++i) {
         std::snprintf(buf, sizeof(buf), "%02X ", h.head[i]);
@@ -117,6 +130,44 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
     size_t total = 0;
     std::vector<size_t> per_image;
   };
+  // ---- CustomFileIdHook 的语义判定 ----
+  //
+  // 光靠 43 字节特征码不够：实测 12.0.7 全进程有 6 处命中，其中多数是
+  // 同一个 MSVC 序言（48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ...）的巧合。
+  // 真正目标是 CAS.cpp 里那个「edx = FileDataID → murmur 哈希 → 按 id 查表」
+  // 的函数，它有唯一可识别的手指印：
+  //   1. movsxd rbx, edx            （edx 作为键）
+  //   2. 两个 murmur 魔数 0xff51afd7ed558ccd / 0xc4ceb9fe1a85ec53
+  //   3. cmp [reg+8], ebx           （链表节点按 32 位 id 比较）
+  //   4. 结尾 mov rax, rdi / ret    （返回查到的对象）
+  // 三项全中才算真目标，否则降级为 near-miss，绝不建议改写。
+  auto custom_fileid_score = [](const uint8_t* p, size_t n) -> int {
+    int score = 0;
+    bool has_movsxd = false, has_hash = false, has_cmp_ebx = false;
+    for (size_t i = 0; i + 3 <= n; ++i) {
+      if (p[i] == 0x48 && p[i + 1] == 0x63 && p[i + 2] == 0xDA) has_movsxd = true;
+    }
+    static const uint8_t kMagic1[8] = {0xcd, 0x8c, 0x55, 0xed, 0xd7, 0xaf, 0x51, 0xff};
+    static const uint8_t kMagic2[8] = {0x53, 0xec, 0x85, 0x1a, 0xfe, 0xb9, 0xce, 0xc4};
+    for (size_t i = 0; i + 8 <= n; ++i) {
+      bool m1 = true, m2 = true;
+      for (int k = 0; k < 8; ++k) {
+        if (p[i + k] != kMagic1[k]) m1 = false;
+        if (p[i + k] != kMagic2[k]) m2 = false;
+      }
+      if (m1) has_hash = true;
+      if (m2) has_hash = true;
+    }
+    for (size_t i = 0; i + 3 <= n; ++i) {
+      // 39 58 08 = cmp dword ptr [rax+8], ebx
+      if (p[i] == 0x39 && p[i + 1] == 0x58 && p[i + 2] == 0x08) has_cmp_ebx = true;
+    }
+    if (has_movsxd) score += 2;
+    if (has_hash) score += 3;
+    if (has_cmp_ebx) score += 3;
+    return score;   // 满分 8
+  };
+
   std::vector<Candidate> cands;
   for (const auto& s : arctium_signature_specs()) {
     Candidate c;
@@ -154,6 +205,11 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
         h.image_size = img.size;
         h.image_executable = img.executable;
         h.image_note = region_note(img);
+        // 只对 CustomFileIdHook 做语义判别；其它特征码语义不同，不套用。
+        if (std::string(c.sig->name) == "CustomFileIdHook") {
+          const size_t probe = std::min<size_t>(0x120, img.bytes.size() - off);
+          h.semantic_score = custom_fileid_score(img.bytes.data() + off, probe);
+        }
         h.match_count = 1;  // 稍后回填全局次数
         const size_t head_off = off > 32 ? off - 32 : off;
         const size_t head_len = std::min<size_t>(64, img.bytes.size() - head_off);
@@ -170,7 +226,13 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
       if (h.name == c.sig->name) { total = c.total; break; }
     }
     h.match_count = total;
-    h.verdict = total == 1 ? "unique（可考虑使用）" : "ambiguous（出现多次，需人工确认）";
+    if (h.name == "CustomFileIdHook" && h.semantic_score > 0) {
+      // 语义满分的候选即使在多处命中里也算可用目标 —— 这才是真函数。
+      h.verdict = h.semantic_score >= 8 ? "unique（语义确证，可用）"
+                                        : "ambiguous（语义不足，勿改）";
+    } else {
+      h.verdict = total == 1 ? "unique（可考虑使用）" : "ambiguous（出现多次，需人工确认）";
+    }
   }
 
   for (const auto& c : cands) {
@@ -179,6 +241,7 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
 
   // 唯一命中的排在前面
   std::stable_sort(out.hits.begin(), out.hits.end(), [](const SigHit& a, const SigHit& b) {
+    if (a.semantic_score != b.semantic_score) return a.semantic_score > b.semantic_score;
     if (a.match_count != b.match_count) return a.match_count < b.match_count;
     return a.image_size > b.image_size;
   });

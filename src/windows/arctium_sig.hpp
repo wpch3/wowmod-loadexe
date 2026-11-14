@@ -44,6 +44,7 @@ struct SigHit {
   bool image_executable = false;
   std::string image_note;     // 所属区域说明（模块名 或 匿名可执行区）
   std::vector<uint8_t> head;  // 匹配处前 64 字节，供人工核对
+  int semantic_score = 0;     // CustomFileIdHook 的语义判别分（0..8，8=确证）
   std::string verdict;        // 结论：unique / ambiguous / near-miss
 };
 

@@ -27,7 +27,7 @@
 // 构建标记：脚本自检会读这一行，确认 loader / ps1 是同一批产物。
 // 每次改模式列表或脚本菜单时一起改，两边比对不上就直接告诉用户。
 #ifndef WOWMOD_LOADER_BUILD_TAG
-#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v5"
+#define WOWMOD_LOADER_BUILD_TAG "sigscan-dump-v6"
 #endif
 #include <tlhelp32.h>
 

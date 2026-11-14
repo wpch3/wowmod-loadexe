@@ -272,7 +272,7 @@ CLI 在真实编译产物上的表现：
 应当输出：
 
 ```
-wowmod_loader build: sigscan-dump-v5
+wowmod_loader build: sigscan-dump-v6
 modes: observe auto hook analyze diagnose sigscan
 ```
 
@@ -485,3 +485,88 @@ wowmod_loader.exe --exe "WoW 12.0.7 - Firestorm.exe" --mode sigscan --dump-modul
 **但 0x33e06a0 是每次启动都变的（模块基址随机化）**，所以不能写死 ——
 `--mode hook` 必须先用特征码现找。这次 `sigscan` 之所以报 0 命中，
 原因已查明并修复：扫描在启动后 47 ms 就跑了，那时只有 11.9% 解密（见下节）。
+
+---
+
+## 复查：`sigscan` 独立确认了静态分析的结论（v5 实机）
+
+第二次 `sigscan` 的运行结果印证了上面的反汇编结论，且是**独立验证**：
+
+```
+[CustomFileIdHook]  匹配 0x00000001433e06a0   映像 0x00000001433da000
+[CustomFileIdHook]  匹配 0x0000000006f206a0   映像 0x0000000003b40000
+```
+
+两处的**相对映像 RVA 完全相同**：
+
+```
+0x1433e06a0 - 0x140000000 = 0x33e06a0
+0x06f206a0  - 0x03b40000  = 0x33e06a0
+```
+
+也就是说"命中 2 次"**不是特征太弱**，而是同一份代码被映射了两个视图
+（一个 `MEM_IMAGE` 模块映像 + 一个壳创建的文件映射视图）。所以 v6 起报告里
+会打印每处命中的「相对映像 RVA」，两处同 RVA 即可认定为同一目标。
+
+### 环境证据：这两个函数属于引擎的 CAS 模块
+
+`0x33d7bd1` 处的 `lea r8,[rip+0x1eb928]` 指向的字符串是：
+
+```
+d:\BuildServer2\Builder\checkouts\0\Engine\Source\CAS\CAS.cpp
+```
+
+这是客户端自己的源码路径，出现在 `LoadByFilePathAlternate` 命中点所在函数里；
+而我们定位的 `0x33e06a0` / `0x33e0760` 两个哈希查找函数就在它调用的目标位置。
+所以可以确定：**Arctium 改的就是引擎 CAS 模块的文件查找函数**，不是别的东西。
+
+### `LoadByFilePathAlternate` 揭示的"客户端自带的路径覆盖路径"
+
+这条特征码在本次扫描里 **unique 命中**（RVA `0x33d7b58`），反汇编如下（节选）：
+
+```asm
+1433d7b52: 4c 8b f8              mov   r15, rax
+1433d7b55: 40 f6 c6 01           test  sil, 1
+1433d7b59: 0f 84 c0 00 00 00     je    0x1433d7c1f      ; ← Arctium 改写的 4 字节
+1433d7b5f: 48 8b 0d 6a ff fc 00  mov   rcx, [rip+0xfcff6a]   ; ★ 全局指针
+1433d7b6e: 48 85 c9              test  rcx, rcx
+1433d7b71: 0f 84 a8 00 00 00     je    0x1433d7c1f      ; 全局为空 → 整段跳过
+1433d7b82: e8 d9 8b 00 00        call  0x1433e0760      ; ★ 第二个查表函数
+1433d7b87: 48 85 c0              test  rax, rax
+1433d7b8a: 0f 84 8f 00 00 00     je    0x1433d7c1f
+```
+
+那个全局指针地址是 `VA 0x1443a7ad0`（RVA `0x43a7ad0`，位于 `.data`），
+**在我们导出时的值是 `00 00 00 00 00 00 00 00`** —— 空。
+
+这条路径的含义是：客户端**确实自带一条按路径覆盖的加载分支**，但它被
+`test sil,1` 和「全局指针非空」两个条件守着；而那个全局在正常启动时是空的，
+所以永远走不到。Arctium 的做法是把 `je`（`0F 84`）改成无条件跳过检查
+（`NoJump = 00 00 00 00` 正好把 4 字节相对位移清零），强制走进这条分支。
+
+这解释了为什么"把文件丢进目录"从来不起作用：不是文件放错，是这条分支的
+入口条件从未成立。也再次说明 `overrideArchive` 那条路与此无关。
+
+### 两个查表函数的区别（v6 起自动判别）
+
+| 函数 | 键宽 | 比较指令 | 用途推断 |
+|---|---|---|---|
+| `0x33e06a0` | 32 位（`edx`） | `cmp dword [rax+8], ebx` | FileDataID → 资源项 |
+| `0x33e0760` | 64 位（`rdx`） | `cmp qword [rax+8], rbx` | 路径哈希 → 资源项 |
+
+两者都用同一套 murmur 混合常数 `0xff51afd7ed558ccd` / `0xc4ceb9fe1a85ec53`，
+且共用同一个桶掩码字段（`[this+0x108]` vs `[this+0x128]`）。
+路径那条会把 `[rax+0x114]` 这个 u32 写回出参 —— 很可能是 FileDataID 反查。
+
+### v6 新增：语义判别，不再靠人工看地址
+
+`sigscan` 现在对每个 `CustomFileIdHook` 候选做三项结构检查并打分（满分 8）：
+
+| 检查 | 分值 | 指令 |
+|---|---|---|
+| 键来自 `edx` | 2 | `48 63 DA` = `movsxd rbx, edx` |
+| murmur 魔数 | 3 | `ff51afd7ed558ccd` 或 `c4ceb9fe1a85ec53` |
+| 按 32 位 id 比较 | 3 | `39 58 08` = `cmp [rax+8], ebx` |
+
+用真实 dump（28.4% 明文）回放，**只有 `0x33e06a0` 拿到 8/8**，
+其余 5 处序言巧合全部落选。报告里会直接标 `[目标]`。
