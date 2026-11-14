@@ -1,0 +1,40 @@
+# 构建产物（dist/ 里是本地交叉编译产物，不入库）
+dist/
+
+# 例外：根目录的 wowmod.exe / wowmod_hook.dll / wowmod-12.0.7-game-dir.zip 是
+# 【有意入库】的 Windows x64 预编译包与游戏目录傻瓜包，
+# 让用户下载分支 ZIP 后可直接运行（GitHub release asset 上传在本环境受限）。
+# 重新生成: ./scripts/build-windows-release.sh && cp dist/windows-x64/{wowmod.exe,wowmod_hook.dll} .
+build/
+out/
+CMakeFiles/
+cmake_install.cmake
+CMakeCache.txt
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Web / 运行期生成物
+node_modules/
+*.log
+wowmod.log
+firestorm-runtime-dumps.zip
+firestorm-launch-output.txt
+*.preview.json
+examples/demo/.preview.json
+examples/demo/client/
+__pycache__/
+.DS_Store
+.idea/
+.vs/
+
+# 运行时内存转储（体积大、含客户端代码，绝不入库）
+runtime-dumps/
+*.img
+*.candidates.json

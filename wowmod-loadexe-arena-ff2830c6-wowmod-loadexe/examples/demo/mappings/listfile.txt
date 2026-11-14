@@ -1,0 +1,6 @@
+# wow-listfile 格式: fileId;filePath
+# 用你自己私服版本对应的 listfile 替换即可：https://github.com/wowdev/wow-listfile
+123456;World/Model/Example/Dragon.m2
+123457;World/Textures/Example/Skin.blp
+123458;Interface/AddOns/MyAddon/MyAddon.toc
+123459;Interface/AddOns/MyAddon/MyAddon.lua

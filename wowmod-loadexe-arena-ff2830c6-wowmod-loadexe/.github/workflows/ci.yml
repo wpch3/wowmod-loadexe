@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  portable:
+    name: Linux (core + CLI + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j2
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Demo (any version is supported)
+        run: |
+          python3 tools/make_fake_client.py --dir examples/demo/client --version 3.3.5.12340
+          ./build/wowmod validate --config examples/demo/wowmod.json
+          ./build/wowmod plan --config examples/demo/wowmod.json
+          ./build/wowmod scan --config examples/demo/wowmod.json
+          python3 tools/make_fake_client.py --dir examples/demo/client --version 12.0.7
+          ./build/wowmod detect --config examples/demo/wowmod.json --json | grep -q '"supported": true'
+      - name: 12.0.7 adapt 流程
+        run: |
+          mkdir -p /tmp/wmd1207_ci && cp -r examples/12.0.7/. /tmp/wmd1207_ci/
+          python3 tools/make_fake_client.py --dir /tmp/wmd1207_ci --version 12.0.7
+          ./build/wowmod validate --config /tmp/wmd1207_ci/wowmod.json
+          ./build/wowmod adapt --config /tmp/wmd1207_ci/wowmod.json --exe /tmp/wmd1207_ci/Wow.exe \
+            --pattern "48 89 5C 24 08 57 48 83 EC 28 48 8B ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 74 ??" \
+            --out /tmp/wmd1207_ci/hooks/patterns.adapted.json --name ci-12.0.7
+          ./build/wowmod plan --config /tmp/wmd1207_ci/wowmod.json | grep -q 'hook 模式: fileid'
+          ./build/wowmod discover --exe /tmp/wmd1207_ci/Wow.exe --json | grep -q '"candidates"'
+      - name: Cross-compile Windows sources with zig
+        run: |
+          python3 -m pip install --quiet ziglang
+          chmod +x scripts/verify-windows.sh
+          ./scripts/verify-windows.sh
+
+  windows:
+    name: Windows (MSVC binaries)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -A x64
+          cmake --build build --config Release
+      - name: Portable tests on Windows too
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: wowmod-windows-x64
+          path: |
+            build/Release/wowmod.exe
+            build/Release/wowmod_hook.dll

@@ -54,7 +54,12 @@
     // 挂起阶段注入失败时：先恢复主线程等 loader 初始化完，再重试一次
     "injectRetry": true,
     "injectRetryAttempts": 3,
-    "injectRetryDelayMs": 1000
+    "injectRetryDelayMs": 1000,
+
+    // 多种注入机制自动轮换（远程线程被客户端加载层拦截时尤其重要）
+    "injectMethods": ["loadlibrary", "ntcreatethreadex", "apc"],
+    "injectWindowsHook": true,
+    "keepClientOnInjectFailure": true
   },
   "log": { "file": "wowmod.log", "verbose": true }
 }

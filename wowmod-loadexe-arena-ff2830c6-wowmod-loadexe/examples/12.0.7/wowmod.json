@@ -1,0 +1,20 @@
+// 12.0.7 Firestorm loose-file mapping example.
+// `wowmod arctium-plan` uses `mappings` + `arctium.filesDir` only and does not modify the client.
+// Runtime Arctium hook and in-game replacement are not implemented/verified yet.
+{
+  "version": 1,
+  "client": {
+    "exe": "",
+    "gameDir": ".",
+    "version": "12.0.7.68974",
+    "build": 68974,
+    "portal": "",
+    "realmlist": "",
+    "args": [],
+    "clearCache": false
+  },
+  "mappings": ["mappings/listfile.txt"],
+  "arctium": {
+    "filesDir": "mods/models"
+  }
+}

@@ -1,0 +1,25 @@
+WoW 12.0.7 Firestorm — 一键运行时资料采集
+================================================
+
+无需安装 CMake、无需编译、无需在 PowerShell 粘贴命令。
+当前分支根目录包含已交叉编译的 Windows x64 `wowmod.exe` / `wowmod_hook.dll` 和自动采集脚本。
+
+1. 从当前分支下载/更新仓库文件，确保根目录存在：
+     wowmod.exe
+     wowmod_hook.dll
+     collect-firestorm-runtime.cmd
+2. 双击 `collect-firestorm-runtime.cmd`。
+3. 游戏窗口出来后保持运行至少 20 秒；如果启动器窗口一直等待，就 20 秒后关闭游戏。
+4. 等脚本自动生成根目录的 `firestorm-runtime-dumps.zip`，把它拖进当前 Arena 聊天附件。
+
+ZIP 会自动收集本次运行的新 runtime dump、candidates、runtime-report、`wowmod.log` 与启动输出。
+如果没有 dump，ZIP 仍会尽量包含日志。不要把 ZIP 提交到 Git，也不要上传整个游戏目录或 `Data` 文件夹。
+
+配置文件使用截图里的 Firestorm 路径：
+  examples\12.0.7\wowmod.firestorm.json
+如果实际客户端不在 `D:\Midnight Open Beta\_midnight_\`，只需修改配置里的 `client.exe` / `client.gameDir`。
+运行时设置保持 `runtimeScan: true`、`runtimeDelayMs: 15000`、`runtimeAutoInstall: false`，不要打开自动安装。
+
+重要限制：这次采集只用于定位运行时函数；启动或生成 dump 都不表示 Arctium hook 已成功、CASC 已被覆盖或纹理已在游戏中生效。注入失败也不足以证明客户端存在保护。当前 Firestorm 12.0.7 的 ABI 与游戏内替换仍待验证。
+
+如需自行改源码重编，才需要 CMake/Visual Studio C++ 工具；当前根目录二进制已经从本分支源码交叉编译并检查 PE 架构/导出符号，但没有在 Windows/Firestorm 实机上运行。

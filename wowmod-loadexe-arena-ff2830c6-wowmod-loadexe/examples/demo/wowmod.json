@@ -1,0 +1,47 @@
+// 演示配置：配合 tools/make_fake_client.py 生成的假客户端使用。
+// 换成你自己的私服客户端路径即可，无需改任何代码。
+{
+  "version": 1,
+  "client": {
+    "exe": "client/Wow.exe",
+    "gameDir": "client",
+    "portal": "my.private-server.cn",
+    "realmlist": "",
+    "args": ["-console"],
+    "clearCache": false
+  },
+  "mods": [
+    {
+      "name": "模型替换 · 龙",
+      "path": "mods/dragon",
+      "root": "",
+      "enabled": true,
+      "priority": 10,
+      "when": {}
+    },
+    {
+      "name": "界面插件包",
+      "path": "mods/ui",
+      "root": "",
+      "enabled": true,
+      "priority": 5,
+      "when": {}
+    },
+    {
+      "name": "高清材质 (按 FileDataID)",
+      "path": "mods/hd",
+      "root": "",
+      "enabled": true,
+      "priority": 30,
+      "when": {}
+    }
+  ],
+  "mappings": ["mappings/listfile.txt"],
+  "rules": [],
+  "hooks": {
+    "mode": "auto",
+    "patterns": "hooks/patterns.json",
+    "allowFallback": true
+  },
+  "log": { "file": "wowmod.log", "verbose": true }
+}

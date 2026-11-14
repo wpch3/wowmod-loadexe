@@ -183,54 +183,29 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 `--json` 输出与重定向到文件时**始终**保持 UTF-8（保证 JSON 可解析）。
 
-## `launch` 报 `LoadLibraryW 返回 NULL`
+## `launch` 注入失败、游戏窗口随即关闭
 
-前四条命令都正常、只有 `launch` 失败时，说明**客户端进程里加载
-`wowmod_hook.dll` 失败**（远程线程确实执行了，返回 0）。常见三类原因：
+旧版启动器在注入失败后会调用 `TerminateProcess`，因此会把语言选择器/游戏一起关掉。
+这是启动器行为，不是你选错语言；双击游戏 exe 能启动说明客户端本身能运行。
+新版默认在注入失败时恢复客户端继续启动，并清楚提示「模组覆盖未加载」。
 
-1. **挂起阶段 loader/UCRT 还没初始化完**（加壳客户端常见）；
-2. **Windows Defender / ASR 规则**拦截从 `Downloads` 目录向另一个进程注入未签名 DLL；
-3. DLL 位数不符 / 缺 VC++ 运行库 / 客户端有反注入保护。
+当前输出能确认 PE 映射检查与加载器进程内完整加载成功；但 `GetLastError=0`、
+远程线程退出码 0、`SetWindowsHookExW` 错误 87 **都不足以单独证明客户端反注入**。
+新版会在线程恢复后再尝试安装 Windows hook；DLL 初始化也已从 `DllMain` loader lock 移到 worker。若仍失败，发回新版失败段即可；
+你已提供的「双击能启动、任务管理器一个进程、无反作弊」不用重复。
 
-已加入的处理：**自动延迟重试 3 次** —— 挂起阶段失败时恢复主线程，
-依次等 1s / 2s / 3s 再注入（`hooks.injectRetry`、`injectRetryAttempts`、
-`injectRetryDelayMs`）。若成功，启动信息会写明"第 N 次重试成功"。
-
-新版注入器改为「带回写结果的远程调用」：直接拿到**目标进程里**的完整 64 位
-`HMODULE` 和 `GetLastError`，不再只看 32 位线程退出码（那会误判）；另外会
-枚举目标进程模块表二次确认，并做 3 次递增延迟重试（1s / 2s / 3s）。
-失败信息里会包含三行关键内容：
-
-```
-  目标进程 GetLastError=126 ERROR_MOD_NOT_FOUND(...)
-  本地 PE 映射预检通过（x64/格式正确）
-  本进程完整加载成功（DllMain + 依赖都正常）   ← 或「本进程完整加载也失败」
-```
-
-- 若「目标进程有错误码」而「本进程加载成功」→ 是跨进程注入被拦截/时机问题
-  （Defender/ASR、反注入、挂起阶段 loader 未就绪），与 DLL 本身无关。
-- 若两处都失败且错误码相同 → 按下面的错误码表处理。
-
-还失败就跑诊断脚本，它会给出本进程的 Win32 错误码作对照：
+诊断脚本路径：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
-# 游戏目录包里则是
+# 游戏目录包解压后，在包根目录：
+Test-Path .\diagnose-load.ps1
 powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
+# 源码仓库 ZIP 才在 scripts 子目录：
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-load.ps1
 ```
 
-错误码含义：
-
-| 码 | 含义 / 处理 |
-| --- | --- |
-| 126 `ERROR_MOD_NOT_FOUND` | 依赖缺失 → 装 [VC++ 2015–2022 x64 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) |
-| 193 / 216 | 位数不符 → 用 x64 的 `wowmod_hook.dll` |
-| 5 `ERROR_ACCESS_DENIED` | Defender/ASR 或权限 → 以管理员运行、移出 Downloads、加 Defender 排除项 |
-| 1114 `ERROR_DLL_INIT_FAILED` | `DllMain` 初始化失败 → 看 `wowmod.log` |
-| 0（脚本里能加载成功） | 说明 DLL 本身没问题，是注入时机/安全策略 → 用延迟重试与上面的 1/2 项 |
-
-实用建议：把 `wowmod.exe` + `wowmod_hook.dll` 放到简单路径（例如 `D:\wowmod\`），
-并把该目录加入 Windows Defender 排除项；比放在 `Downloads\Compressed\...` 稳。
+如果第一条 `Test-Path` 为 False，可跳过。你之前的错误只表示当前目录没有该脚本，
+而不是客户端或 DLL 的错误；launch 输出已经包含本进程加载检查。
 
 ## 排错表
 
@@ -244,7 +219,7 @@ powershell -ExecutionPolicy Bypass -File .\diagnose-load.ps1
 | 提示缺 `api-ms-win-crt-*.dll` | 装 [VC++ 2015–2022 x64 运行库](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)；Win10/11 一般自带 |
 | SmartScreen / Defender 拦截 | `Unblock-File .\wowmod.exe`、`Unblock-File .\wowmod_hook.dll`，或右键属性 → 解除锁定 |
 | 中文显示成 `閫氱敤鐗堟湰` | 见上面「中文输出乱码」；重新下载 exe 或 `chcp 65001` |
-| `LoadLibraryW 返回 NULL` | 见上面专节；跑 `diagnose-load.ps1` 拿错误码 |
+| 注入失败 / `GetLastError=0` | 见 [INJECTION.md](INJECTION.md)；错误码 0 不能单独证明反注入；新版会保留游戏进程 |
 | `plan` 显示 `hook 模式: vfs` | **正常**，加密壳客户端的安全回退；路径型覆盖照常生效 |
 | `runtime-dumps` 没生成 | 确认 `hooks.runtimeScan: true`；等 `runtimeDelayMs`（默认 4 秒）之后再看；目录相对配置文件所在目录 |
 

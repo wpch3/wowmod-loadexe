@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WoWMod Studio · 通用版本模组加载器</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">W</span>
+    <div><strong>WoWMod Studio</strong><span class="preview">PREVIEW</span></div>
+  </div>
+  <nav class="navpill" id="nav">
+    <button data-tab="overview" class="active">概览</button>
+    <button data-tab="mods">模组</button>
+    <button data-tab="adapt">映射与适配</button>
+    <button data-tab="launch">启动</button>
+  </nav>
+  <div class="topright"><span class="dot"></span><span id="topStatus">连接中…</span></div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="search"><span>⌕</span><input id="searchMods" placeholder="搜索模组 / 覆盖路径"></div>
+    <div class="side-label">游戏客户端</div>
+    <div class="client-mini" id="clientMini">
+      <div class="client-mini-title">探测中…</div>
+      <div class="client-mini-sub">从客户端文件实时读取</div>
+    </div>
+    <div class="version-box">
+      <label>模拟任意私服版本</label>
+      <div class="row"><input id="versionInput" value="12.0.7" spellcheck="false"><button id="versionBtn" class="btn small">探测</button></div>
+      <div class="row" style="margin-top:6px"><button class="btn small" id="preset1207">你的版本 12.0.7</button><button class="btn small" id="preset335">3.3.5.12340</button></div>
+      <div class="hint">改一个版本号，看加载器是否仍然「已支持」</div>
+    </div>
+
+    <div class="side-label spaced">WOWDMOD</div>
+    <div id="sidePacks" class="side-packs"></div>
+    <div class="side-footer">
+      <div><span class="dot green"></span> 无版本白名单</div>
+      <div id="cliState">CLI: --</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ================= 概览 ================= -->
+    <section class="panel active" id="panel-overview">
+      <div class="hero">
+        <div class="hero-icon">⚙</div>
+        <div class="hero-text">
+          <h1>WoWMod Loader <span class="ver">v1.0.0</span></h1>
+          <div class="byline">by wpch3 · 通用版本 WoW 模型替换 / 模组加载器</div>
+          <p>启动客户端时应用当前启用的模组配置，把模型、材质、插件与配置映射进游戏；不修改磁盘上的任何游戏文件。</p>
+          <p class="hero-em">与按版本写死偏移的加载器不同，这里没有任何内置版本号、偏移或特征表。</p>
+        </div>
+        <div class="hero-badge"><span class="pill ok">● 任意版本已支持</span><small id="heroBuild">build —</small></div>
+      </div>
+
+      <div class="why">
+        <div class="why-item"><b>01 · 无版本白名单</b><span>版本只从 <code>.build.info</code> / PE 版本资源读取，用于展示与筛选，从不用于拒绝启动。</span></div>
+        <div class="why-item"><b>02 · 稳定 API 覆盖</b><span>IAT 层拦截 <code>CreateFileW</code> / <code>NtCreateFile</code> 等 Win32 API，所有版本一致。</span></div>
+        <div class="why-item"><b>03 · 数据驱动适配</b><span>CASC 的 FileDataID 注入点来自外部 <code>patterns.json</code>，加一条数据即适配新 build。</span></div>
+      </div>
+
+      <h2>随你的游戏客户端启动</h2>
+      <div class="card client-card">
+        <div class="client-grid" id="clientGrid"></div>
+        <div class="client-note" id="clientNotes"></div>
+      </div>
+
+      <h2>支持的游戏客户端</h2>
+      <div class="card">
+        <div class="chips" id="versionChips"></div>
+        <div class="row gap">
+          <input id="addVersion" placeholder="输入你的私服 build，如 12.1.5.70783" spellcheck="false">
+          <button class="btn" id="addVersionBtn">+ 添加并模拟</button>
+        </div>
+        <div class="hint">这里不是白名单。列表只是你测试过的版本记录；加载器本身对任何 build 都返回「已支持」。</div>
+      </div>
+
+      <h2>默认选项 <small>除非游戏客户端有单独设置</small></h2>
+      <div class="card options">
+        <label class="opt"><span><b>内存覆盖 portal</b><small>私服地址写入 WTF/Config.wtf，不落盘</small></span><input type="checkbox" id="optPortalOn"><input class="inline" id="optPortal" placeholder="my.private-server.cn"></label>
+        <label class="opt"><span><b>找不到 hook 点时自动降级</b><small>仍以通用 VFS 覆盖启动，绝不阻止进游戏</small></span><input type="checkbox" id="optFallback"></label>
+        <label class="opt"><span><b>启动时清理 Cache</b><small>避免旧档案缓存影响模型替换</small></span><input type="checkbox" id="optCache"></label>
+        <label class="opt"><span><b>FileDataID 适配器</b><small>auto = 按实际 exe 能力探测；vfs = 只用通用层</small></span><select id="optHookMode"><option value="auto">auto</option><option value="vfs">vfs</option><option value="off">off</option></select></label>
+      </div>
+
+      <h2>启动计划 / 覆盖表 <small id="overlayCount"></small></h2>
+      <div class="card table-wrap">
+        <table class="tbl"><thead><tr><th>游戏内路径</th><th>FileDataID</th><th>来源</th><th>模组包</th><th>优先级</th></tr></thead><tbody id="overlayRows"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ================= 模组 ================= -->
+    <section class="panel" id="panel-mods">
+      <div class="section-head"><div><h1>模组包</h1><p>按列表顺序加载，优先级数字越大越优先。禁用或调整顺序后，右侧启动计划会实时重算。</p></div><span class="pill" id="modCount">—</span></div>
+      <div id="packList" class="pack-list"></div>
+      <div class="card add-pack">
+        <h3>添加模组包</h3>
+        <div class="row gap"><input id="newPackName" placeholder="名称，例如 高清角色模型"><input id="newPackPath" placeholder="目录，例如 mods/hd"><button class="btn" id="addPackBtn">+ 添加</button></div>
+        <div class="hint">目录内的文件按游戏内相对路径摆放，例如 <code>World/Model/Example/Dragon.m2</code>。</div>
+      </div>
+      <div class="card">
+        <h3>适用范围（可选）</h3>
+        <p class="hint">这些只是<strong>让用户限定模组生效范围</strong>的过滤器，不是加载器的版本白名单。留空 = 任何版本都生效。</p>
+        <div id="filterList" class="filter-list"></div>
+      </div>
+    </section>
+
+    <!-- ================= 映射与适配 ================= -->
+    <section class="panel" id="panel-adapt">
+      <div class="section-head"><div><h1>映射与版本适配</h1><p>路径 ↔ FileDataID 用 listfile 数据描述；CASC 的注入点用外部特征数据描述。两者都不需要改代码。</p></div></div>
+      <h2>路径映射文件</h2>
+      <div id="mappingList"></div>
+
+      <h2>Hook 特征 <small>只有在实际 exe 上唯一匹配的条目会被启用</small></h2>
+      <div class="card table-wrap">
+        <table class="tbl"><thead><tr><th>名称</th><th>特征</th><th>架构 / 寄存器</th><th>当前 exe 匹配</th><th></th></tr></thead><tbody id="patternRows"></tbody></table>
+      </div>
+      <div class="card add-pack">
+        <h3>为你的私服 build 添加一条特征</h3>
+        <div class="row gap"><input id="pName" placeholder="名称 my-server-3.3.5"><input id="pPattern" placeholder="48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ..."><input id="pArch" value="x64" style="max-width:90px"><input id="pReg" value="rdx" style="max-width:90px"></div>
+        <div class="row gap" style="margin-top:10px"><button class="btn" id="addPatternBtn">+ 添加并重新探测</button><span class="hint">用 <code>wowmod scan --exe Wow.exe --patterns hooks/patterns.json</code> 检查是否唯一匹配</span></div>
+      </div>
+      <div class="card">
+        <h3>本地自动发现（不需要上传任何东西）</h3>
+        <p>没有参考特征时，让加载器直接在自己的 exe 上找候选 hook 点：扫描指向 <code>DBFilesClient\</code> 等字符串的 RIP 相对 LEA，生成候选特征并标出是否唯一匹配。</p>
+        <div class="row gap"><button class="btn" id="discoverBtn">运行 wowmod discover</button><span class="hint">命令只在本地执行：<code>wowmod discover --exe Wow.exe --json</code></span></div>
+        <pre id="discoverOut" class="log">等待运行…</pre>
+        <div class="hint">⚠ 候选 ≠ 目标函数：唯一匹配只说明字节唯一，仍需用调试器核实返回值是路径指针。</div>
+      </div>
+      <div class="card flow">
+        <h3>WoW 12.0.7 专用流程</h3>
+        <p>仓库里的 <code>examples/12.0.7/</code> 是给 12.0.7 准备的起始包（配置、listfile 位置、多特征文件）。</p>
+        <ol><li><b>路径型覆盖立刻生效</b>：<code>detect</code> 显示「已支持」、<code>plan</code> 显示 VFS 覆盖表，无需任何特征。</li>
+        <li><b>让 CASC 按 ID 读取的模型也生效</b>：<code>wowmod adapt --exe Wow.exe --pattern "邻近 12.x 的特征" --out hooks/patterns.adapted.json</code>，工具会自动放宽成你这个 exe 上唯一匹配的特征。</li>
+        <li><b>验证</b>：<code>wowmod scan</code> 看唯一匹配，<code>wowmod plan</code> 的 hook 模式变成 <code>fileid</code>。</li></ol>
+        <p class="hint">跨大版本的起点特征需要放宽较多字节，工具会给出 ⚠ 提示；最可靠的起点是同家族（12.1.x）的特征。详见 docs/ADAPTING.md。</p>
+      </div>
+      <div class="card flow">
+        <h3>适配新版本的三步</h3>
+        <ol><li><b>放文件</b>：把模型/材质按游戏内路径放进模组目录（或写 <code>wowmod.manifest.json</code> 按 FileDataID 指定）。</li><li><b>给 listfile</b>：把该版本的 <code>fileId;filePath</code> 表放进 <code>mappings/</code>，路径覆盖会自动得到 ID。</li><li><b>可选加特征</b>：只有需要 CASC 的「按 ID 读文件」注入时，才为这个 exe 加一条特征；加完用 <code>wowmod scan</code> 验证唯一性。</li></ol>
+      </div>
+    </section>
+
+    <!-- ================= 启动 ================= -->
+    <section class="panel" id="panel-launch">
+      <div class="section-head"><div><h1>启动客户端</h1><p>Windows 上会挂起启动客户端 → 注入覆盖层 → 恢复主线程。其他平台可用这里的配置与计划。</p></div></div>
+      <div class="card launch-card">
+        <div class="launch-stat"><b id="launchOverlays">—</b><span>条覆盖</span></div>
+        <div class="launch-stat"><b id="launchHook">—</b><span>hook 模式</span></div>
+        <div class="launch-stat"><b id="launchBuild">—</b><span>客户端 build</span></div>
+      </div>
+      <div class="card">
+        <h3>命令</h3>
+        <div class="cmdline"><code id="cmdText">wowmod launch --config wowmod.json</code><button class="btn small" id="copyCmd">复制</button></div>
+        <div class="row gap" style="margin-top:14px">
+          <button class="btn primary" id="launchBtn">启动客户端</button>
+          <button class="btn" id="saveBtn">保存配置到工作区</button>
+          <button class="btn" id="exportBtn">导出 wowmod.json</button>
+          <button class="btn" id="refreshBtn">刷新计划</button>
+        </div>
+        <pre id="launchLog" class="log">等待操作…</pre>
+      </div>
+      <h2>诊断</h2>
+      <div class="card" id="diagnostics"></div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

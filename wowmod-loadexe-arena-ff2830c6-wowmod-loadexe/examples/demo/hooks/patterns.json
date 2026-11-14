@@ -1,0 +1,18 @@
+{
+  // 特征码 = 数据。支持新客户端只需增加一条，不需要重新编译加载器。
+  // 只有【在实际 exe 上唯一匹配】的特征才会被启用，其余自动跳过。
+  // 本例的特征匹配 tools/make_fake_client.py 生成的合成客户端 .text 段。
+  "patterns": [
+    {
+      "name": "demo-load-by-fileid",
+      "kind": "fileId",
+      "arch": "x64",
+      "pattern": "48 89 5C 24 08 57 48 83 EC 20 48 8B ?? ?? ?? ?? ?? E8 ?? ?? ?? ?? 74 ??",
+      "offset": 0,
+      "idRegister": "rdx",
+      "result": "rax=pathPtr",
+      "priority": 10,
+      "note": "演示用；真实客户端请用 wowmod scan 找到自己 build 的函数入口"
+    }
+  ]
+}
