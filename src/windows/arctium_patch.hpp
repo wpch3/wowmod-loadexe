@@ -60,7 +60,8 @@ struct BranchPatch {
   bool overridden = false;       // 是否由 --rva 点名
   bool matched_known_rva = false;  // 是否由离线确证的 RVA 命中
   int je_opcode_offset = 0;        // je 操作码相对匹配起点的偏移（实测 = 1）
-  bool executable_copy = false;    // 是否找到了可执行副本并按它改
+  bool executable_copy = false;    // 采用的那一处是否可执行
+  std::string window_bytes;        // 采用点前 8 字节原始内容（报告里给出，便于核对）
   uint8_t original[4] = {0, 0, 0, 0};  // 原始 rel32（卸载时写回）
   std::vector<PatchHitInfo> hits;      // 全部原始命中
   bool applied = false;

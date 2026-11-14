@@ -88,64 +88,90 @@ static void verify_and_fix_hits(HANDLE process, const std::vector<ScannedImage>&
                                 BranchPatch* p) {
   if (!p) return;
 
-  // ---- 1) 找可执行副本 ----
+  // ---- 1) 选出要改的那一处 ----
   //
-  // 同一 RVA 在「可执行区」里若有对应位置，就以那里为准。
-  // 这一步把「映像头部页/代码页被 VirtualQueryEx 拆开」的影响消掉。
+  // 只在【已经收集到的命中】里挑，绝不能拿 RVA 去别的映像里"推算"地址。
+  // v14 的 bug 就是这么来的：看到命中报「不可执行」，就遍历所有可执行映像、
+  // 把 RVA 直接加上去，于是算出 0x7FFCD0046976 这种毫不相干的地址，
+  // 在那里读到 86 DD 12 00，校验必然失败。
+  //
+  // 正确判据：同一 RVA 上若存在可执行的那一份，就用它；否则用原来的。
   uint64_t best_va = p->match_va;
   bool best_exec = false;
-  for (const auto& img : images) {
-    if (!img.executable || img.bytes.empty()) continue;
-    if (img.size <= p->rva_in_image) continue;
-    // 用可执行映像里同一 RVA 处重新验证签名
-    const size_t off = p->rva_in_image;
-    if (off + 8 > img.bytes.size()) continue;
-    // 这里只做「同 RVA 有可执行映射」的判断，签名一致性交给下面的操作码校验
-    best_va = img.base + off;
-    best_exec = true;
-    // 记录一下这个可执行副本所属模块，便于报告
-    for (auto& h : p->hits) {
-      if (h.rva_in_image == p->rva_in_image) {
-        h.executable_copy_va = best_va;
-        h.executable_copy_module = img.module_name;
+  {
+    bool found_exec = false;
+    for (const auto& h : p->hits) {
+      if (h.rva_in_image != p->rva_in_image) continue;
+      if (h.executable) {
+        best_va = h.va;
+        best_exec = true;
+        found_exec = true;
+        break;
       }
     }
-    break;
+    if (!found_exec) {
+      for (const auto& h : p->hits) {
+        if (h.va == p->match_va) { best_exec = h.executable; break; }
+      }
+    }
   }
 
-  // ---- 2) 在 [match, match+8) 里找真正的 je 操作码 ----
+  // ---- 2) 读窗口，按操作码定位 je ----
   //
-  // 期望形态：0F 84 <rel32>。找到后用【它】做 patch_va。
-  // 找不到就说明这里根本不是我们想的那条 je，直接拒绝。
-  const auto win = read_exact(process, best_va, 10);
+  // 期望形态：<前缀> 0F 84 <rel32>。12.0.7 的实测形态是
+  //   01 0F 84 9C 00 00 00
+  //   ^^ ^^^^^^^^^^^^^^^^ 上一条 test bpl,1 的立即数尾巴 + je rel32
+  // 所以 je 操作码在匹配起点 +1，rel32 在 +3（= patch_offset）。
+  //
+  // 优先采用「与签名导出时一致的偏移」；不一致才退化为就近搜索，
+  // 但会把实际用到的偏移写进报告，绝不让报告和自己矛盾。
+  const auto win = read_exact(process, best_va, 16);
+  char win_hex[64];
+  std::snprintf(win_hex, sizeof(win_hex), "%02X %02X %02X %02X %02X %02X %02X %02X",
+                win[0], win[1], win[2], win[3], win[4], win[5], win[6], win[7]);
+  p->window_bytes = win_hex;
+
+  const int expected_je_at = p->patch_offset - 2;  // 3 - 2 = 1
   int je_at = -1;
-  for (int i = 0; i + 5 < static_cast<int>(win.size()) && i <= 4; ++i) {
-    if (win[i] == 0x0F && win[i + 1] == 0x84) { je_at = i; break; }
+  if (expected_je_at >= 0 && expected_je_at + 6 <= static_cast<int>(win.size()) &&
+      win[expected_je_at] == 0x0F && win[expected_je_at + 1] == 0x84) {
+    je_at = expected_je_at;
+  } else {
+    // 签名偏移对不上：就近搜一次，但只在前 6 字节里找，避免抓到下一条指令
+    for (int i = 0; i + 6 <= static_cast<int>(win.size()) && i <= 5; ++i) {
+      if (win[i] == 0x0F && win[i + 1] == 0x84) { je_at = i; break; }
+    }
   }
   if (je_at < 0) {
-    char t[96];
-    std::snprintf(t, sizeof(t), "%02X %02X %02X %02X %02X %02X",
-                  win[0], win[1], win[2], win[3], win[4], win[5]);
-    p->error = std::string("在匹配点后 4 字节内找不到 0F 84（je rel32），实际 ") + t;
+    p->error = std::string("在 0x") + to_hex(best_va, 0) +
+               " 处读到的字节是 " + win_hex + "，前 6 字节里没有 0F 84（je rel32）";
     return;
   }
 
   p->je_opcode_offset = je_at;
   p->match_va = best_va;
-  p->executable_copy = best_exec && je_at >= 0;
-  p->patch_va = p->match_va + static_cast<uint64_t>(je_at);
+  p->executable_copy = best_exec;
+  p->patch_va = p->match_va + static_cast<uint64_t>(je_at) + 2;  // rel32 起点
 
   // ---- 3) 拆出补丁点 4 字节 = je 的 rel32 ----
   uint8_t rel32[4];
   std::memcpy(rel32, win.data() + je_at + 2, 4);
   std::memcpy(p->original, rel32, 4);
 
-  // je 目标 = 下一条指令地址 + rel32
+  // je 目标 = 下一条指令地址（patch_va + 4）+ rel32
   const int32_t rel = static_cast<int32_t>(static_cast<uint32_t>(rel32[0]) |
                                            (static_cast<uint32_t>(rel32[1]) << 8) |
                                            (static_cast<uint32_t>(rel32[2]) << 16) |
                                            (static_cast<uint32_t>(rel32[3]) << 24));
-  p->jump_target = p->patch_va + 6 + static_cast<int64_t>(rel);
+  p->jump_target = p->patch_va + 4 + static_cast<int64_t>(rel);
+
+  // ---- 4) 合理性校验：rel32 必须指向同一映像内、且方向朝后（前向跳转） ----
+  const bool forward = rel > 0;
+  if (!forward || rel > 0x100000) {
+    p->error = "je 的 rel32 不合理（rel=" + std::to_string(rel) +
+               "），这不是我们想要的那条前向条件跳转";
+    return;
+  }
 
   p->error.clear();
 }
@@ -520,9 +546,15 @@ std::string format_branch_patch_report(const BranchPatchReport& rep) {
                                  : (p.matched_known_rva ? "  [命中确证 RVA]" : ""));
       t += line;
       std::snprintf(line, sizeof(line),
-                    "  补丁点 0x%llX  (匹配+%d = je 操作码后再 +2，指向 rel32)\n",
+                    "  窗口 %s\n", p.window_bytes.c_str());
+      t += line;
+      std::snprintf(line, sizeof(line),
+                    "  采用点 %s\n", p.executable_copy ? "可执行" : "不可执行");
+      t += line;
+      std::snprintf(line, sizeof(line),
+                    "  补丁点 0x%llX  (匹配+%d，即 je 操作码 +2 指向 rel32)\n",
                     static_cast<unsigned long long>(p.patch_va),
-                    p.patch_offset + p.je_opcode_offset + 2);
+                    p.je_opcode_offset + 2);
       t += line;
       std::snprintf(line, sizeof(line), "  原字节 %s (je rel32)\n", hex4(p.original).c_str());
       t += line;
