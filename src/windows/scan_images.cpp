@@ -51,7 +51,7 @@ struct Region {
   uint64_t base;
   size_t size;
   DWORD protect;
-  bool image;
+  bool image;    // mbi.Type == MEM_IMAGE：由映像映射而来
   std::string module;
 };
 
@@ -269,24 +269,52 @@ ModuleDump dump_module_full(HANDLE process, const std::string& module_name,
   ModuleDump out;
   out.path = out_path;
 
-  // 1) 找到模块基址：优先按模块表匹配（空 = 主模块）。
+  // 1) 定位模块基址。
+  //
+  // 教训：上一版用「第一个 MZ」找主模块，结果导出了 .rsrc 资源段里的一个
+  // 16 KB DLL（节表只有 .rdata 0xE0 / .rsrc 0x1894），完全不是主模块。
+  // 而且 module_map 靠 CreateToolhelp32Snapshot，在 32 位宿主上枚举 64 位
+  // 进程会返回空 —— 这条路本身不可靠。
+  //
+  // 正确做法：用 VirtualQueryEx 的 mbi.Type == MEM_IMAGE 找「按映像映射」
+  // 的区域，再校验 PE 头 + SizeOfImage（主模块一定是最大的那个）。
   uint64_t base = 0;
   const auto mods = module_map(GetProcessId(process));
-  if (module_name.empty()) {
-    // 主模块：模块表里没有主 exe 时就取第一个 PE 映像区域。
-    for (const auto& r : enumerate_regions(process)) {
-      std::vector<uint8_t> hdr(0x1000);
-      if (read_into(process, r.base, &hdr, 0, 0x1000) < 0x1000) continue;
-      if (hdr[0] == 'M' && hdr[1] == 'Z') { base = r.base; break; }
-    }
-  } else {
+  // 注意：加壳客户端的「主模块」在诊断报告里是 Type=0x40000(MEM_MAPPED)，
+  // 不是 MEM_IMAGE —— 壳把真实的 PE 映射成了文件映射。所以两种都要收，
+  // 再靠 PE 头 + SizeOfImage 竞争，而不是靠 Type 判断。
+  std::vector<Region> images;
+  for (const auto& r : enumerate_regions(process)) {
+    if (r.image || r.size >= (16u << 20)) images.push_back(r);
+  }
+
+  if (!module_name.empty()) {
     for (const auto& kv : mods) {
       if (kv.second == module_name) { base = kv.first; break; }
     }
-  }
-  if (!base) {
-    out.error = "找不到模块: " + (module_name.empty() ? std::string("主模块") : module_name);
-    return out;
+    if (!base) {
+      out.error = "模块表里找不到: " + module_name +
+                  "（模块表可能因跨位数枚举而不可用）";
+      return out;
+    }
+  } else {
+    // 主模块 = SizeOfImage 最大的那个 MEM_IMAGE 区域。
+    uint32_t best = 0;
+    for (const auto& r : images) {
+      std::vector<uint8_t> hdr(0x1000);
+      if (read_into(process, r.base, &hdr, 0, 0x1000) < 0x400) continue;
+      if (hdr[0] != 'M' || hdr[1] != 'Z') continue;
+      const uint32_t pe_off = rd32(hdr.data() + 0x3C);
+      if (pe_off > 0x1000 || rd32(hdr.data() + pe_off) != 0x00004550u) continue;
+      const uint16_t mg = rd16(hdr.data() + pe_off + 24);
+      const uint32_t soi = rd32(hdr.data() + pe_off + 24 + 56);
+      if (mg != 0x20B && mg != 0x10B) continue;
+      if (soi > best) { best = soi; base = r.base; }
+    }
+    if (!base) {
+      out.error = "没有找到任何 MEM_IMAGE 区域（客户端可能尚未解密完成）";
+      return out;
+    }
   }
   out.base = base;
 

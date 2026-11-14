@@ -53,6 +53,7 @@
 #include "windows/detour.hpp"
 #include "windows/remote_load.hpp"
 #include "windows/arctium_sig.hpp"
+#include "windows/fs_scan.hpp"
 #include "wowmod/json.hpp"
 
 
@@ -672,6 +673,19 @@ int main(int argc, char** argv) {
     wowmod::write_text_file(jso, rep.at("json").dump(2), &werr);
     std::printf("\n%s\n", rep.at("text").as_string().c_str());
     std::printf("报告: %s\n", txt.c_str());
+
+    // 在【解密后的内存】里定位文件打开函数。
+    // 磁盘 exe 的 .text 是密文，这一步只能在运行期做；结果只有几行，
+    // 不需要用户回传 100MB 的映像。
+    say("在已解密的内存里定位文件打开函数（只读）");
+    {
+      const auto fs = wowmod::win::find_file_open_functions(pi.hProcess, 10);
+      const std::string fsrep = wowmod::join_path(wowmod_dir, "wowmod-fsscan.txt");
+      std::string ferr;
+      wowmod::write_text_file(fsrep, fs.to_text_report().at("text").as_string(), &ferr);
+      std::printf("\n%s\n", fs.to_text_report().at("text").as_string().c_str());
+      std::printf("报告: %s\n", fsrep.c_str());
+    }
 
     // 可选：把可执行映像落盘，供离线 IDA/x64dbg 分析。
     // 即使特征码全落空，这一次也能拿到后续分析需要的素材，不必反复重跑。
