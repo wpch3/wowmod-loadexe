@@ -56,6 +56,29 @@ struct RawHit {
 };
 
 
+// 命中点是否真的可执行 —— 现场问内核。
+//
+// 不能直接用 ScannedImage::executable：PEB 整块读出来的那张映像在
+// ScannedImage 里没有单一保护属性（region_protect = 0），而
+// scan_images 为了解决"服务端映像不可执行"的历史问题把整块标成
+// executable = true。拿它当判据等于放弃校验。
+// 这里对每一处命中做一次 VirtualQueryEx，几处命中而已，代价可以忽略。
+bool va_is_executable(HANDLE process, uint64_t va) {
+  MEMORY_BASIC_INFORMATION mbi;
+  std::memset(&mbi, 0, sizeof(mbi));
+  if (!VirtualQueryEx(process, reinterpret_cast<LPCVOID>(va), &mbi, sizeof(mbi))) return false;
+  if (mbi.State != MEM_COMMIT) return false;
+  switch (mbi.Protect & 0xFF) {
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // 读取目标进程内存；整段失败就逐页读，缺页填 0（与 scan_images 同一策略）。
 std::vector<uint8_t> read_exact(HANDLE process, uint64_t addr, size_t n) {
   std::vector<uint8_t> buf(n, 0);
@@ -227,7 +250,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
             h.image_size = img.size;
             h.offset_in_image = o;
             h.image_backed = img.region_type == MEM_IMAGE;
-            h.executable = img.executable;
+            h.executable = va_is_executable(process, h.va);
             h.module = img.module_name;
             if (o >= 16)
               h.context = hexn(img.bytes.data() + o - 16, 16);
@@ -259,7 +282,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
           h.image_size = img.size;
           h.offset_in_image = o;
           h.image_backed = img.region_type == MEM_IMAGE;
-          h.executable = img.executable;
+          h.executable = va_is_executable(process, h.va);
           h.module = img.module_name;
           if (o >= 16) h.context = hexn(img.bytes.data() + o - 16, 16);
           hits.push_back(h);

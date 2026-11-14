@@ -252,10 +252,13 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
       best_low = probe.text_low_entropy;
       last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
     }
-    std::printf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | Init %s | "
-                "明文页 %zu/%zu (不可读 %zu, 空白 %zu) | CustomFileIdHook %zu 处, 最佳 %d/8\n",
+    std::printf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
+                "Init %s | 明文页 %zu/%zu (不可读 %zu, 空白 %zu) | "
+                "CustomFileIdHook %zu 处, 最佳 %d/8\n",
                 init_round + 1, sig.images_scanned,
                 static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
+                static_cast<double>(sig.main_image_size) / (1024.0 * 1024.0),
+                static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
                 init_found ? "有" : "无", best_low, last_checked,
                 probe.text_pages_unreadable, probe.text_pages_blank, hits_n, round_best);
     std::fflush(stdout);
@@ -356,8 +359,9 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   if (!target || !best_rx) {
     r.error = "CustomFileIdHook 在等待期内始终没有可执行命中（最佳语义分 " +
               std::to_string(best) + "/8, 需要 >= " + std::to_string(kNeedScore) +
-              "/8）。说明客户端还没执行到文件加载那段代码 —— "
-              "请先让游戏进到登录界面/角色选择界面，再重跑。";
+              "/8）。含义：本轮扫过的字节里不含这段代码 —— 要么扫描范围没覆盖到"
+              "代码段（看上面每轮的 MB 数），要么目标函数所在页还没被解密。"
+              "这不是需要你操作的事，是加载器自己的覆盖/时序问题。";
     return r;
   }
   if (best < kNeedScore) {
@@ -415,8 +419,12 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   // 所以顺序改成：先把 NoJump 的规划做完（纯读），确认能打，再动第二半。
   std::map<std::string, uint32_t> by_rva;
   for (const auto& s2 : arctium_signature_specs()) {
-    if (s2.name != "LoadByFileIdAlternate" && s2.name != "LoadByFilePathAlternate") continue;
-    if (s2.known_rva && s2.known_build == 68974) by_rva[s2.name] = s2.known_rva;
+    // 注意："s2.name != \"...\"" 是指针比较，两个字符串字面量在不同编译单元里
+    // 是不同对象，所以永远不相等 —— 这段"按确证 RVA 点名"曾经【一次都没执行过】。
+    // 必须用 std::string 比较。（编译器 -Wstring-compare 早就警告了。）
+    const std::string sname = s2.name ? s2.name : "";
+    if (sname != "LoadByFileIdAlternate" && sname != "LoadByFilePathAlternate") continue;
+    if (s2.known_rva && s2.known_build == 68974) by_rva[sname] = s2.known_rva;
   }
   if (!by_rva.empty()) {
     std::string names;

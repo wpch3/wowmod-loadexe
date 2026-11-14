@@ -59,6 +59,13 @@ struct SigScanResult {
   uint32_t pid = 0;
   size_t images_scanned = 0;
   size_t bytes_scanned = 0;
+  // 主映像（PEB 基址那块）的声明大小与实际读到的字节数。
+  // 这两个数字是判断「扫描范围够不够」的唯一可靠依据：
+  //   目标函数在 RVA 0x33E06A0（≈54 MB），如果实际只读到 20 MB，
+  //   那 0 命中就是范围问题，跟解密、跟特征码都无关。
+  uint64_t main_image_base = 0;
+  size_t main_image_size = 0;      // SizeOfImage
+  size_t main_image_read = 0;      // 实际读进 bytes 的字节数
   std::vector<SigHit> hits;
   std::vector<std::string> notes;   // 每个特征码未命中的原因
   // 扫描时读进来的映像（含字节）。留给 --dump 直接写盘，避免二次读 100MB+。

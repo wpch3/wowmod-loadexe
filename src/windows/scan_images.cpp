@@ -216,18 +216,67 @@ std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) 
             img.region_type = MEM_MAPPED;
             const size_t to_read = std::min<size_t>(soi, max_bytes);
             img.bytes.assign(to_read, 0);
-            // 逐页读：映像里可能有整页未提交，一次性读会整体失败
-            size_t done = 0;
-            for (size_t off = 0; off < to_read; off += 0x1000) {
-              SIZE_T g = 0;
-              const size_t n = std::min<size_t>(0x1000, to_read - off);
-              if (ReadProcessMemory(process,
-                                    reinterpret_cast<const void*>(peb_base + off),
-                                    img.bytes.data() + off, n, &g))
-                done += g;
+            // 按提交情况分块读，而不是逐页读。
+            //
+            // 这个映像有 113 MB ≈ 2.8 万页，逐页 ReadProcessMemory 每轮要
+            // 2.8 万次系统调用；而等待循环每 2 秒就扫一轮，光读就把客户端拖慢。
+            // 正确做法：VirtualQueryEx 走一遍，把【连续且已提交且可读】的段
+            // 整块读掉，只有段内出现读失败才退化成逐页。
+            //
+            // 裁剪必须按【读到的最高偏移】reach，不能用读到的字节总数 done：
+            // 曾经写成 bytes.resize(done)，只要前面有一页未提交，
+            // 后面所有已读到的页都会被一刀切掉 —— 尾部整片代码凭空消失。
+            size_t done = 0;       // 成功读到的字节数（用于判断这块值不值得收）
+            size_t reach = 0;      // 已成功读到的最高偏移
+            size_t at = 0;
+            while (at < to_read) {
+              MEMORY_BASIC_INFORMATION mbi;
+              std::memset(&mbi, 0, sizeof(mbi));
+              if (!VirtualQueryEx(process, reinterpret_cast<LPCVOID>(peb_base + at), &mbi,
+                                  sizeof(mbi)) ||
+                  mbi.RegionSize == 0) {
+                at += 0x1000;
+                continue;
+              }
+              const uint64_t rb = reinterpret_cast<uint64_t>(mbi.BaseAddress);
+              const size_t rsz = mbi.RegionSize;
+              if (rb + rsz <= peb_base + at) { at += 0x1000; continue; }
+              // 区域可能从映像基址【之前】开始（映像不是分配起点），
+              // 这里一律夹到 [at, to_read) 里，避免 size_t 下溢。
+              const uint64_t seg_lo64 = std::max<uint64_t>(rb, peb_base + at);
+              const uint64_t seg_hi64 = std::min<uint64_t>(rb + rsz, peb_base + to_read);
+              if (seg_hi64 <= seg_lo64) { at += 0x1000; continue; }
+              const size_t seg_off = static_cast<size_t>(seg_lo64 - peb_base);
+              const size_t seg_end = static_cast<size_t>(seg_hi64 - peb_base);
+              const bool usable =
+                  mbi.State == MEM_COMMIT && readable(mbi.Protect) && !(mbi.Protect & PAGE_GUARD);
+              if (usable) {
+                const size_t n = seg_end - seg_off;
+                SIZE_T g = 0;
+                if (ReadProcessMemory(process, reinterpret_cast<const void*>(peb_base + seg_off),
+                                      img.bytes.data() + seg_off, n, &g) &&
+                    g == n) {
+                  done += g;
+                  if (seg_end > reach) reach = seg_end;
+                } else {
+                  // 段内读失败（可能中途有页被保护/换出）：逐页补
+                  for (size_t o = seg_off; o < seg_end; o += 0x1000) {
+                    SIZE_T pg = 0;
+                    const size_t m2 = std::min<size_t>(0x1000, seg_end - o);
+                    if (ReadProcessMemory(process,
+                                          reinterpret_cast<const void*>(peb_base + o),
+                                          img.bytes.data() + o, m2, &pg) &&
+                        pg == m2) {
+                      done += pg;
+                      if (o + m2 > reach) reach = o + m2;
+                    }
+                  }
+                }
+              }
+              at = seg_end;
             }
-            if (done >= 0x10000) {
-              img.bytes.resize(done);
+            if (done >= 0x10000 && reach > 0) {
+              img.bytes.resize(reach);
               img.committed_bytes = done;
               out.push_back(std::move(img));
             }
@@ -243,7 +292,10 @@ std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) 
   for (const auto& r : regions) {
     // 只关注「像代码/数据」的区域：可执行，或属于映像，或足够大
     // 已经由 PEB 收录过的主模块不再重复收
-    if (!out.empty() && r.base >= out[0].base && r.base < out[0].base + out[0].size) continue;
+    // 与 PEB 整块映像完全重叠的区域跳过（已经收过了）；部分重叠的仍然收，
+    // 因为 PEB 那块可能有未提交页，区域视图能补齐。
+    if (!out.empty() && r.base >= out[0].base && r.base + r.size <= out[0].base + out[0].size)
+      continue;
     // 放宽：MEM_MAPPED 且大小 >= 256KB 也算候选（原来要 1MB，
     // 这个客户端的模块被切成小段时会被整体漏掉）
     const bool looks_like_image =

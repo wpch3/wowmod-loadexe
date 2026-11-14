@@ -4,6 +4,7 @@
 #include "windows/arctium_sig.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <cstdio>
 
 #include "windows/scan_images.hpp"
@@ -174,6 +175,28 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
     return score;   // 满分 8
   };
 
+  // ---- 命中点的【真实】保护属性 ----
+  //
+  // scan_process_images() 的第 0 步把 PEB 基址上的整个映像连续读成一块，
+  // 那块在 ScannedImage 里的 region_protect 是 0（整块映像本身没有单一保护属性）。
+  // 但 has_rx 完全由 region_protect 推出来：
+  //     h.has_rx = (protect & 0x20) || (protect & 0x40) || (protect & 0x80);
+  // 于是映像内的【每一个】命中都被判成"不可执行" —— 包括 Init。
+  // 表现就是用户日志 #4：Init 5 轮全"未出现"、CustomFileIdHook 全 0/8，
+  // 明明上一版还能拿到 8/8。这不是特征码或解密的问题，是我自己把判据清零了。
+  //
+  // 修法：命中点很少（每轮几十个），逐个 VirtualQueryEx 拿内核给的真相。
+  auto live_protect = [](HANDLE proc, uint64_t va, DWORD* type_out) -> DWORD {
+    MEMORY_BASIC_INFORMATION mbi;
+    std::memset(&mbi, 0, sizeof(mbi));
+    if (VirtualQueryEx(proc, reinterpret_cast<LPCVOID>(va), &mbi, sizeof(mbi)) &&
+        mbi.State == MEM_COMMIT) {
+      if (type_out) *type_out = static_cast<DWORD>(mbi.Type);
+      return mbi.Protect;
+    }
+    return 0;
+  };
+
   std::vector<Candidate> cands;
   for (const auto& s : arctium_signature_specs()) {
     Candidate c;
@@ -190,6 +213,14 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
   out.images = scan_process_images(process);
   const auto& images = out.images;
   out.images_scanned = images.size();
+  // 主映像 = 最大那一块（PEB 整块读出来的那个一定最大）
+  for (const auto& img : images) {
+    if (img.size > out.main_image_size) {
+      out.main_image_size = img.size;
+      out.main_image_base = img.base;
+      out.main_image_read = img.bytes.size();
+    }
+  }
 
   // 每个特征码挑「命中次数最少」的那个映像作为可用目标；次数相同取最大映像。
   for (const auto& img : images) {
@@ -214,16 +245,30 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
         h.image_backed = img.is_image_backed;
         h.region_type = img.region_type;
         h.region_protect = img.region_protect;
+        // region_protect == 0 是「未知」的哨兵值（PEB 整块读出来的映像），
+        // 这里用内核的真实答案覆盖它，否则 has_rx 恒为 false。
+        if (h.region_protect == 0) {
+          DWORD t = 0;
+          const DWORD live = live_protect(process, h.match_va, &t);
+          if (live) {
+            h.region_protect = live;
+            h.region_type = t;
+            h.image_backed = (t == MEM_IMAGE);
+          }
+        }
         h.image_rva = h.match_va - img.base;
         // 关键：一页内容"长得像目标函数" ≠ 这一页是"被执行的代码"。
         // 实测两处命中里，PROTECT=0x04(PAGE_READWRITE) 的那页根本不可执行 ——
         // 打上去客户端不会走那里，等于把跳转写进了一块数据页，
         // 而那块数据页可能正是壳的映射视图/校验数据。
         // 所以"可执行"是硬性条件，不是加分项。
-        h.executable = (img.region_protect & 0x10) || (img.region_protect & 0x20) ||
-                       (img.region_protect & 0x40) || (img.region_protect & 0x80);
-        h.has_rx = (img.region_protect & 0x20) || (img.region_protect & 0x40) ||
-                   (img.region_protect & 0x80);
+        // 注意：这里必须用【刚刚修正过的 h.region_protect】，
+        // 不能再用 img.region_protect —— 后者在 PEB 整块映像上是 0，
+        // 会导致映像内所有命中一律被标成"不可执行"。
+        h.executable = (h.region_protect & 0x10) || (h.region_protect & 0x20) ||
+                       (h.region_protect & 0x40) || (h.region_protect & 0x80);
+        h.has_rx = (h.region_protect & 0x20) || (h.region_protect & 0x40) ||
+                   (h.region_protect & 0x80);
         // 只对 CustomFileIdHook 做语义判别；其它特征码语义不同，不套用。
         if (std::string(c.sig->name) == "CustomFileIdHook") {
           const size_t probe = std::min<size_t>(0x120, img.bytes.size() - off);

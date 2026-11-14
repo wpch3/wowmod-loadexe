@@ -1281,6 +1281,69 @@ static void test_plain_page_accounting() {
   }
 }
 
+// 两个曾在同一轮里互相掩盖的 bug：
+//   a) PEB 整块映像的 region_protect = 0，于是 has_rx 恒为 false，
+//      映像内所有命中（包括 Init）都被判成"不可执行"；
+//   b) 逐页读 PEB 映像时用"读到的字节总数"裁剪，前面有未提交页就会把
+//      后面读到的整片代码切掉。
+static void test_peb_image_protect_and_reach() {
+  group("peb_image_protect_and_reach");
+  auto slurp = [](const char* p) {
+    std::string s;
+    std::ifstream in(p, std::ios::binary);
+    if (in) s.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return s;
+  };
+  const std::string sig = slurp("src/windows/arctium_sig.cpp");
+  const std::string scan = slurp("src/windows/scan_images.cpp");
+  CHECK(!sig.empty(), "应能读到 arctium_sig.cpp");
+  CHECK(!scan.empty(), "应能读到 scan_images.cpp");
+  if (sig.empty() || scan.empty()) return;
+
+  // a) 必须有「用内核真实保护属性覆盖哨兵值」的逻辑
+  CHECK(sig.find("live_protect") != std::string::npos,
+        "命中点的保护属性必须用 VirtualQueryEx 现场查询，不能只信映像级的字段");
+  CHECK(sig.find("h.region_protect == 0") != std::string::npos,
+        "region_protect == 0 是 PEB 整块映像的哨兵值，必须被真实值替换");
+  // 顺序：先覆盖 protect，再推导 has_rx
+  const size_t p_fix = sig.find("h.region_protect == 0");
+  const size_t p_rx = sig.find("h.has_rx = (h.region_protect", p_fix);
+  CHECK(p_fix != std::string::npos && p_rx != std::string::npos && p_fix < p_rx,
+        "必须先修正 protect 再推导 has_rx，且 has_rx 必须读修正后的值");
+  CHECK(sig.find("h.has_rx = (img.region_protect") == std::string::npos,
+        "has_rx 不能读映像级 protect —— PEB 整块映像那里是 0");
+
+  // 诊断必须报「主映像多大 / 实际读到多少」—— 这是判断扫描范围的唯一依据
+  std::string sig_h;
+  {
+    std::ifstream in("src/windows/arctium_sig.hpp", std::ios::binary);
+    if (in) sig_h.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }
+  CHECK(sig_h.find("main_image_size") != std::string::npos &&
+            sig_h.find("main_image_read") != std::string::npos,
+        "扫描结果必须记录主映像声明大小与实际读到的字节数");
+  CHECK(sig.find("out.main_image_read = img.bytes.size()") != std::string::npos,
+        "必须回填 main_image_read，否则没法判断是范围问题还是解密问题");
+
+  // b) 裁剪必须按「读到的最高偏移」，不是「读到的字节总数」
+  CHECK(scan.find("size_t reach") != std::string::npos,
+        "逐页读必须记录已读到的最高偏移");
+  CHECK(scan.find("img.bytes.resize(reach)") != std::string::npos,
+        "裁剪必须用 reach；用 done（字节总数）会把尾部已读到的代码整片丢掉");
+  CHECK(scan.find("img.bytes.resize(done)") == std::string::npos,
+        "不能用字节总数裁剪 —— 前面一页读不到就会截断整幅映像");
+  // 只有完整读到的页才算进 reach
+  CHECK(scan.find("g == n") != std::string::npos,
+        "半页读取不能算作已覆盖，否则裁剪出来的内容里混着空洞");
+  // 分块读：不能再退回逐页 2.8 万次系统调用
+  CHECK(scan.find("VirtualQueryEx(process, reinterpret_cast<LPCVOID>(peb_base + at)") !=
+            std::string::npos,
+        "PEB 映像必须按已提交段分块读，逐页读会把客户端拖慢一个量级");
+  // 段起点可能早于映像基址，必须夹住，否则 size_t 下溢 -> 越界
+  CHECK(scan.find("seg_lo64") != std::string::npos,
+        "区域起点早于映像基址时必须夹到 [at, to_read)，否则下溢");
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -2066,6 +2129,7 @@ int main() {
   test_discover();
   test_x64_decode();
   test_plain_page_accounting();
+  test_peb_image_protect_and_reach();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();
