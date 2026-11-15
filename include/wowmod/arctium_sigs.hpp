@@ -68,8 +68,20 @@ struct HitCandidate {
   bool executable = false;
 };
 
-// 从候选里选 hook 目标：分数最高者胜，同分取先到者。
-// 注意：executable 不参与筛选（只用于日志措辞）。
+// 从候选里选 hook 目标。
+//
+// 【可执行性是第一优先级，不是"日志措辞"】
+//
+// 这是七轮失败的根因。壳把 .text 解密出来的代码放在【两个视图】上：
+//   * 一个 PAGE_READWRITE 的数据视图（我们能读能写）
+//   * 一个 PAGE_EXECUTE_READ 的执行视图（客户端真正执行的）
+// 两者地址不同。我之前按语义分选目标，选中的是数据视图那份 ——
+// 改它等于改一份"死"的副本，客户端永远走不到我们的 hook
+// （实测 stub 调用 0 次），而那一页又因为被写成不可执行而触发
+// ACCESS_VIOLATION（0x6f30000 读失败）。
+//
+// 所以：有可执行命中就【只在可执行命中里】选分数最高的；
+// 一个可执行命中都没有时，才退回到全部候选（并如实报告）。
 uint64_t pick_hook_target(const std::vector<HitCandidate>& cands, int* score_out);
 
 // ---- WaitForUnpack 的第二步（纯函数，便于单测）----

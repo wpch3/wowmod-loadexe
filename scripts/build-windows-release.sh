@@ -9,7 +9,15 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 if command -v zig >/dev/null 2>&1; then ZIG=zig
-else ZIG="$(python3 -c 'import ziglang,os;print(os.path.join(os.path.dirname(ziglang.__file__),"zig"))')"; fi
+else
+  # ziglang 包在这个环境里会随快照丢失，缺了就自动装一次。
+  # 之前每轮都要手动 pip install，忘了就会 BUILD=1 但报错很隐蔽。
+  if ! python3 -c 'import ziglang' >/dev/null 2>&1; then
+    echo "== 安装 ziglang（工具链缺失）==" >&2
+    pip install -q --break-system-packages ziglang >&2 || { echo "ziglang 安装失败" >&2; exit 1; }
+  fi
+  ZIG="$(python3 -c 'import ziglang,os;print(os.path.join(os.path.dirname(ziglang.__file__),"zig"))')"
+fi
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 DIST="$ROOT/dist/windows-x64"; mkdir -p "$DIST"
 FLAGS=(-target x86_64-windows-gnu -std=c++17 -O2 -DNDEBUG -D_WIN32 -DUNICODE -D_UNICODE

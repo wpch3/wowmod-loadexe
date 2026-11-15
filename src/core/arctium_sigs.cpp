@@ -109,11 +109,31 @@ bool window_has_je(const std::vector<uint8_t>& b) {
 }  // namespace
 
 uint64_t pick_hook_target(const std::vector<HitCandidate>& cands, int* score_out) {
+  // 第一轮：只在可执行命中里选（客户端真正执行的那份副本）
   uint64_t best_va = 0;
   int best_score = 0;
+  bool any_exec = false;
   for (const auto& c : cands) {
-    // executable 不参与筛选 —— 这是 Arctium 的行为，也是修掉
-    // "CustomFileIdHook 1 处 (可执行 否)" 导致跳板没装的关键。
+    if (!c.executable) continue;
+    any_exec = true;
+    if (best_va == 0 || c.semantic_score > best_score) {
+      best_va = c.va;
+      best_score = c.semantic_score;
+    }
+  }
+  if (any_exec) {
+    if (score_out) *score_out = best_score;
+    return best_va;
+  }
+
+  // 一个可执行命中都没有：退回全部候选。
+  //
+  // 实测 12.0.7：全进程只有 1 处 CustomFileIdHook 命中，位于 .text 的
+  // 0x33E06A0，但该页被壳映射成 PAGE_READWRITE（不含 EXECUTE）。
+  // 也就是说壳的映像整体是"可写数据视图"，执行权限由壳在执行前处理。
+  // 这种情况下那唯一一处就是唯一可改的地方 —— 用分数选它，
+  // 由调用方以"不改保护"的方式直接写入。
+  for (const auto& c : cands) {
     if (best_va == 0 || c.semantic_score > best_score) {
       best_va = c.va;
       best_score = c.semantic_score;

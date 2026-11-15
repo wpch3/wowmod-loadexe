@@ -263,9 +263,19 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
         h.image_backed = img.is_image_backed;
         h.region_type = img.region_type;
         h.region_protect = img.region_protect;
-        // region_protect == 0 是「未知」的哨兵值（PEB 整块读出来的映像），
-        // 这里用内核的真实答案覆盖它，否则 has_rx 恒为 false。
-        if (h.region_protect == 0) {
+        // 【必须无条件向内核查这一页的真实保护】
+        //
+        // 上一版只在 region_protect == 0 时才查。但 region_protect 来自
+        // "映像所在区域"的属性，非零却可能不是【目标页】的属性：
+        // 映像区域常常被拆成多段（.text RX / .data RW / ...），
+        // 用区域首部的属性去判断目标页，就会把 .text 里的函数判成不可执行。
+        //
+        // 实测后果：0x33E06A0 明明在 .text 里，却被报成「可执行 否」，
+        // 于是我拒绝写入；而更早的版本强行写入，把页保护改坏 ->
+        // ACCESS_VIOLATION（读 0x6f30000 失败）。
+        //
+        // 页保护只有内核知道，问它。
+        {
           DWORD t = 0;
           const DWORD live = live_protect(process, h.match_va, &t);
           if (live) {

@@ -497,6 +497,7 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     int round_best = 0;
     uint64_t round_target = 0;
     bool round_rx = false;
+    size_t rx_hits = 0;
     bool round_any = false;
     uint64_t round_any_va = 0;
     size_t hits_n = 0;
@@ -507,7 +508,7 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       if (h.name != "CustomFileIdHook") continue;
       ++hits_n;
       cands.push_back(wowmod::HitCandidate{h.match_va, h.semantic_score, h.has_rx});
-      if (h.has_rx) any_rx = true;
+      if (h.has_rx) ++rx_hits;
     }
     {
       int sc = 0;
@@ -515,16 +516,28 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       if (picked) {
         round_target = picked;
         round_best = sc;
-        round_rx = any_rx;
+        // 【round_rx 必须是"被选中的那一处"是否可执行】
+        //
+        // 上一版写的是 any_rx —— 只要任何一处可执行就报"可执行 是"，
+        // 而选中的可能是另一处不可执行的。于是日志写"命中页可执行"，
+        // 实际却把 hook 打在 RW 页上：客户端执行不到我们的 stub
+        // （stub 调用 0 次），那一页还被写成不可执行 -> ACCESS_VIOLATION。
+        for (const auto& c : cands) {
+          if (c.va == picked) {
+            round_rx = c.executable;
+            break;
+          }
+        }
       }
     }
     wowmod::logf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
-                 "Init %s | CustomFileIdHook %zu 处 (可执行 %s, 语义分 %d/8)\n",
+                 "Init %s | CustomFileIdHook %zu 处 (其中可执行 %zu, 选中%s, 语义分 %d/8)\n",
                  scan_round + 1, sig.images_scanned,
                  static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
                  static_cast<double>(sig.main_image_size) / (1024.0 * 1024.0),
                  static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
-                 init_seen ? "有" : "无", hits_n, round_rx ? "是" : "否", round_best);
+                 init_seen ? "有" : "无", hits_n, rx_hits, round_rx ? "的是可执行副本" : "的是不可执行副本",
+                 round_best);
 
     // 记录下来（不论可执行与否），供 Init 提前结束时兜底
     if (round_target) {
@@ -567,7 +580,24 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   }
   step("hook 目标 0x" + to_hex(target, 16) + "（第 " + std::to_string(scan_round + 1) +
        " 轮命中；语义分 " + std::to_string(best) + "/8，" +
-       (best_rx ? "命中页可执行" : "命中页原本不可执行，写入时会改成可写可执行") + "）");
+       (best_rx ? "可执行副本 —— 客户端执行的就是这份" : "【不可执行副本】") + "）");
+
+  // 【关键：是否可执行决定"怎么写"，而不是"写不写"】
+  //
+  // 实测（七轮日志）：
+  //   CustomFileIdHook 全进程只有 1 处命中，位于 0x33E06A0，
+  //   该页 Protect=0x04（PAGE_READWRITE，不含 EXECUTE）。
+  // 上一版为写入而把它改成 RWX、写完再"恢复"成 0x04 —— 结果是
+  // 客户端访问该页时 ACCESS_VIOLATION（读 0x6f30000 失败）。
+  //
+  // 但如果这页本来就是 RW，那它【本来就可写】，根本不需要改保护：
+  // 直接 WriteProcessMemory 即可，页保护保持原样。
+  // 壳在执行前会自己把代码页设成可执行（或它有独立执行视图），
+  // 我们不该动它的保护属性。
+  if (!best_rx) {
+    step("hook 命中页是 RW（不含 EXECUTE）—— 该页本来就可写，直接写入且【不改保护】。"
+         "客户端执行时由壳自己处理执行权限。");
+  }
 
   // ---- 3a. 【全进程挂起】----
   //
@@ -1218,19 +1248,45 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
           r.error = "写 hook 前发现那 13 字节已变（壳重映射？）—— 为安全起见中止";
           return r;
         }
-        // 改保护 -> 写 -> 恢复
-        DWORD oldh = 0;
+        // 【页本就可写时绝不动保护】
+        //
+        // 上一版无条件 VirtualProtectEx(RWX) 再恢复成 oldh。
+        // 两个问题：
+        //   1) write_remote 内部也会改/恢复保护，与我这次的改动互相踩踏，
+        //      最终那一页可能停留在意外状态；
+        //   2) 恢复成 oldh(=0x04) 之后该页不可执行，客户端访问即
+        //      ACCESS_VIOLATION（实测 读 0x6f30000 失败）。
+        // 正确做法：先问内核这一页现在是不是已经可写，可写就直接写、不改。
         const uint64_t hp_page = hp & ~static_cast<uint64_t>(0xFFF);
-        const size_t hlen = (kArctiumHookLen + (hp - hp_page) + 0xFFF) & ~static_cast<size_t>(0xFFF);
-        VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen,
-                         PAGE_EXECUTE_READWRITE, &oldh);
-        if (!write_remote(process, hp, hook_bytes_for_remap.data(), hook_bytes_for_remap.size(),
-                          &herr)) {
+        const size_t hlen =
+            (kArctiumHookLen + (hp - hp_page) + 0xFFF) & ~static_cast<size_t>(0xFFF);
+        MEMORY_BASIC_INFORMATION hmbi{};
+        bool writable_now = false;
+        if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(hp), &hmbi, sizeof(hmbi))) {
+          writable_now = (hmbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                                          PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+        }
+        DWORD oldh = 0;
+        bool touched = false;
+        if (!writable_now) {
+          if (!VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen,
+                                PAGE_EXECUTE_READWRITE, &oldh)) {
+            r.error = "hook 页不可写且改保护失败 (err=" + std::to_string(GetLastError()) +
+                      ") @0x" + to_hex(hp_page, 16);
+            return r;
+          }
+          touched = true;
+        }
+        const bool hook_ok = write_remote(process, hp, hook_bytes_for_remap.data(),
+                                          hook_bytes_for_remap.size(), &herr);
+        if (touched) {
+          DWORD tmp = 0;
+          VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen, oldh, &tmp);
+        }
+        if (!hook_ok) {
           r.error = "写入 hook 跳转失败: " + herr;
           return r;
         }
-        DWORD tmp = 0;
-        VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen, oldh, &tmp);
         FlushInstructionCache(process, reinterpret_cast<void*>(hp), hook_bytes_for_remap.size());
         step("hook 已写入（逐条）: 0x" + to_hex(hp, 16) + " -> 0x" + to_hex(tramp_va_saved, 16));
       }

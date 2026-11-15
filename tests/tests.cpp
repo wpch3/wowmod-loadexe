@@ -1326,10 +1326,16 @@ static void test_peb_image_protect_and_reach() {
   // a) 必须有「用内核真实保护属性覆盖哨兵值」的逻辑
   CHECK(sig.find("live_protect") != std::string::npos,
         "命中点的保护属性必须用 VirtualQueryEx 现场查询，不能只信映像级的字段");
-  CHECK(sig.find("h.region_protect == 0") != std::string::npos,
-        "region_protect == 0 是 PEB 整块映像的哨兵值，必须被真实值替换");
+  // 【这条断言曾经把 bug 焊死】它要求"仅当 region_protect == 0 时才查内核"。
+  // 但映像区域常被拆成多段（.text RX / .data RW），用区域首部属性判断
+  // 目标页，会把 .text 里的函数误判成不可执行（实测 0x33E06A0 被报"可执行 否"）。
+  // 现在必须【无条件】用内核答案覆盖。
+  CHECK(sig.find("页保护只有内核知道，问它") != std::string::npos,
+        "必须无条件用 VirtualQueryEx 查目标页真实保护，不能只在哨兵值时查");
+  CHECK(sig.find("if (h.region_protect == 0)") == std::string::npos,
+        "不得再有 region_protect == 0 的条件分支（会把 .text 误判为不可执行）");
   // 顺序：先覆盖 protect，再推导 has_rx
-  const size_t p_fix = sig.find("h.region_protect == 0");
+  const size_t p_fix = sig.find("页保护只有内核知道，问它");
   const size_t p_rx = sig.find("h.has_rx = (h.region_protect", p_fix);
   CHECK(p_fix != std::string::npos && p_rx != std::string::npos && p_fix < p_rx,
         "必须先修正 protect 再推导 has_rx，且 has_rx 必须读修正后的值");
@@ -2904,6 +2910,37 @@ static void test_remap_range_pure() {
 // 上一版在 resume 后等 8 秒读计数器，打印"调用 0 次 -> hook 没被走到"。
 // 但客户端进角色选择要几十秒，8 秒内那个函数根本还没被调用 ——
 // 结论从一开始就是错的，把排查方向完全带偏。
+// 【回归】页本就可写时不得改保护。
+//
+// 上一版无条件 VirtualProtectEx(RWX) 再恢复成 oldh。对实测的
+// Protect=0x04 页面，恢复后该页不可执行，客户端访问即
+// ACCESS_VIOLATION（截图：读 0x6f30000 失败，而 hook 在 0x6f306a0）。
+static void test_no_protect_change_when_writable() {
+  group("hook-write-protect");
+  std::string ml;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    ml.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  CHECK(!ml.empty(), "应能读到 mod_loader.cpp");
+
+  // 必须先问"这页现在可写吗"
+  CHECK(ml.find("writable_now") != std::string::npos,
+        "写 hook 前必须查询该页当前是否已可写");
+  // 可写时跳过 VirtualProtectEx（touched 标志）
+  CHECK(ml.find("if (!writable_now)") != std::string::npos,
+        "只在不可写时才改保护 —— 否则会破坏壳的页属性");
+  CHECK(ml.find("if (touched)") != std::string::npos,
+        "只有真的改过保护才恢复，不能无条件恢复");
+  // 不得再出现"无条件改 RWX"
+  const size_t hp = ml.find("const bool hook_ok = write_remote");
+  CHECK(hp != std::string::npos, "必须有写 hook 的调用");
+  const size_t before = ml.rfind("VirtualProtectEx", hp);
+  const size_t guard = ml.rfind("if (!writable_now)", hp);
+  CHECK(guard != std::string::npos && (before == std::string::npos || guard < before),
+        "VirtualProtectEx 必须被 writable_now 判断包住，不能无条件调用");
+}
+
 static void test_stub_observation_timing() {
   group("stub-observation");
   std::string ml;
@@ -3189,9 +3226,11 @@ static void test_hit_selection_and_unpack() {
   // 2) 取分数最高者
   std::vector<wowmod::HitCandidate> multi = {
       {0x1000, 2, true}, {0x2000, 7, false}, {0x3000, 5, true}};
-  CHECK(wowmod::pick_hook_target(multi, &sc) == 0x2000,
-        "应选语义分最高的命中，即便它所在页不可执行");
-  CHECK(sc == 7, "分数应为最高者");
+  // 有可执行命中时，只在可执行命中里选 —— 客户端执行的是那一份。
+  // 实测 12.0.7 只有 1 处且不可执行，那种情况才退回全部候选。
+  CHECK(wowmod::pick_hook_target(multi, &sc) == 0x3000,
+        "有可执行命中时必须优先选可执行副本（客户端执行的是那一份）");
+  CHECK(sc == 5, "分数应是被选中那处的分数");
 
   // 3) 空候选 -> 0（调用方据此判断"没找到"）
   CHECK(wowmod::pick_hook_target({}, &sc) == 0, "空候选必须返回 0");
@@ -3415,6 +3454,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_no_protect_change_when_writable();
   test_stub_observation_timing();
   test_hook_written_on_fallback();
   test_instrumented_stub();
