@@ -229,8 +229,6 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     wowmod::logf("  %s", s.c_str());
   };
 
-  const int kNeedScore = 6;   // 满分 8；6 分 = 三个手指印里至少命中两个
-
   // ---- 1. 等客户端可扫（判据用【命中】，不靠任何间接指标）----
   //
   // 走过的弯路（都记在这，别再重复）：
@@ -239,82 +237,116 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   //      而且此时 5 个特征码里可能已经有能命中的了
   //   c) 分母只算读成功的页 -> 报出 142/142 的假象（其实是读到 142 页全零）
   //
-  // 现在的判据只有一条：**目标特征码命中了吗**。
-  // Init 只用来打印进度，不作为门槛 —— Arctium 用它是因为它对
-  // 自己的客户端有效；对我们的客户端不成立就不该当阻塞条件。
+  // 【曾经最严重的一个错误，必须写在这】
+  //
+  // 我发明了「CustomFileIdHook 语义分 >= 6/8 才算就绪」这个门槛。
+  // Arctium 里根本没有这个东西。结果就是你实测的那份日志：
+  //     第 1 轮 ... Init 有 ... CustomFileIdHook 0 处
+  //     第 2~5 轮 ... Init 无 ... CustomFileIdHook 1 处, 最佳 0/8
+  //     [失败] 等待期内 CustomFileIdHook 始终没有达到 6/8 ...
+  // 第 1 轮 Init 明明 `有` —— 客户端**已经初始化完成**，正是 Arctium
+  // 认为可以打补丁的时刻，我们却把它拒了，然后白白等到超时。
+  //
+  // Arctium 的判据（src/Launcher.cs WaitForUnpack）只有两条：
+  //   1) Init 特征码出现
+  //   2) 该特征码里那条 mov 的立即数指向的地址，其字节变为非 0
+  // 满足即 PrepareAntiCrash -> 排队 NoJump -> HookClient，从不看任何分数。
+  //
+  // 所以这里改成：
+  //   * Init 出现  => 立刻结束等待（这才是正确时机）
+  //   * 不出现      => 等满 wait_ms（老客户端/其它版本兜底）
+  //   * 语义分 / 明文页只打印，作为诊断信息，绝不作为门槛
   bool ready = false;
+  // 这两个循环都会用到「上次看到的映像信息」，报错时必须能说出真实数值，
+  // 所以声明在函数作用域而不是循环里。
+  uint64_t last_image_base = 0;
+  size_t last_image_size = 0, last_image_read = 0;
+  bool init_found = false;
+  uint64_t init_va = 0;
   size_t best_low = 0, last_checked = 0;
+  int hook_hits = 0, hook_best = 0;
   const DWORD t0 = GetTickCount();
   int init_round = 0;
   for (;;) {
     const auto sig = scan_arctium_signatures(process, "", {"Init", "CustomFileIdHook"});
-    bool init_found = false;
-    uint64_t init_va = 0;
+    bool round_init = false;
     int round_best = 0;
-    uint64_t round_target = 0;
     size_t hits_n = 0;
     for (const auto& h : sig.hits) {
       if (h.name == "Init" && h.has_rx) {
-        init_found = true;
-        init_va = h.match_va;
+        round_init = true;
+        if (!init_va) init_va = h.match_va;
       }
       if (h.name == "CustomFileIdHook") {
         ++hits_n;
-        if (h.has_rx && h.semantic_score > round_best) {
-          round_best = h.semantic_score;
-          round_target = h.match_va;
-        }
+        if (h.has_rx && h.semantic_score > round_best) round_best = h.semantic_score;
       }
     }
-    // 注意：这里【不能】每轮再整块读一遍 176 MB 做解密进度采样。
-    // 一轮已经读了 100~250 MB（scan_arctium_signatures 内部要读整幅映像），
-    // 再加一次光是搬运就是几百 MB/轮；实测 5 轮之后客户端就没了。
-    // 采样只在「还需要判断解密进度」时做，并且跳过纯区域级统计。
-    const auto probe = (init_round == 0) ? dump_module_full(process, "", "")
-                                         : ModuleDump{};
+    if (round_init) init_found = true;
+    if (round_best > hook_best) hook_best = round_best;
+    hook_hits = static_cast<int>(hits_n);
+    // 只在第 0 轮采样解密进度（整块读很贵，轮询会拖垮客户端）
+    const auto probe = (init_round == 0) ? dump_module_full(process, "", "") : ModuleDump{};
     if (probe.text_checked) {
       best_low = probe.text_low_entropy;
       last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
     }
     wowmod::logf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
-                "Init %s | 明文页 %zu/%zu (不可读 %zu, 空白 %zu) | "
-                "CustomFileIdHook %zu 处, 最佳 %d/8\n",
-                init_round + 1, sig.images_scanned,
-                static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
-                static_cast<double>(sig.main_image_size) / (1024.0 * 1024.0),
-                static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
-                init_found ? "有" : "无", best_low, last_checked,
-                probe.text_pages_unreadable, probe.text_pages_blank, hits_n, round_best);
+                 "Init %s | 明文页 %zu/%zu | CustomFileIdHook %zu 处 (最佳 %d/8)\n",
+                 init_round + 1, sig.images_scanned,
+                 static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
+                 static_cast<double>(sig.main_image_size) / (1024.0 * 1024.0),
+                 static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
+                 init_found ? "有" : "无", best_low, last_checked, hits_n, round_best);
 
-    // 唯一门槛：目标特征码够分。Init 只做参考。
-    if (round_target && round_best >= kNeedScore) {
+    // Arctium 的通过条件。
+    if (init_found) {
       ready = true;
       break;
     }
-    if (GetTickCount() - t0 > wait_ms) break;
-    // 轮间退避：一轮要跨进程读整幅映像（176 MB 级别），
-    // 每 2 秒一次等于持续给客户端加压 —— 实测 5 轮之后客户端就没了。
-    // 改成递增（2s, 3s, 4.5s, 6.75s …，上限 8s），把总读取量压下来，
-    // 同时仍然每轮都在观察，不会错过窗口。
+    // 客户端是不是还活着？必须查。
+    //
+    // 用户实测：第 1 轮 Init 有，第 2~5 轮 Init 全无。一个已经初始化
+    // 完成的进程，同一条特征码不可能"消失" —— 除非进程本身没了，
+    // 或者壳把页面重新加密/换掉了。不检查的话，我们会一直等到超时，
+    // 然后报一个"特征码没出现"的假原因，把排查方向彻底带偏。
     {
-      DWORD backoff = 2000;
-      for (int k = 0; k < init_round && backoff < 8000; ++k) backoff = backoff * 3 / 2;
-      if (backoff > 8000) backoff = 8000;
-      ::Sleep(backoff);
+      DWORD code = 0;
+      if (GetExitCodeProcess(process, &code) && code != STILL_ACTIVE) {
+        r.error = "客户端在等待期间退出了（exit code 0x" + to_hex(code, 8) +
+                  "，第 " + std::to_string(init_round + 1) + " 轮）。"
+                  "这不是特征码问题 —— 客户端自己先结束了。"
+                  "请确认它能独立启动到角色选择界面（不加载任何模组时也必须能），"
+                  "再试。";
+        return r;
+      }
     }
+    if (GetTickCount() - t0 > wait_ms) break;
+    ::Sleep(1000);
     ++init_round;
   }
   if (!ready) {
-    r.error = "等待期内 CustomFileIdHook 始终没有达到 " + std::to_string(kNeedScore) +
-              "/8 的可执行命中（客户端未走到文件加载代码，或扫描范围未覆盖代码段）。"
-              "请看上面每轮打印的【扫了多少 MB】—— 若明显小于客户端体积，就是范围问题。";
-    return r;
+    // 不是「找不到特征码就失败」—— 而是 Init 在等待期内确实没出现。
+    // 这仍然可以继续（有些版本/完整包里这条特征码形态不同），
+    // 但必须如实说明，让后面的判定自己决定。
+    step("警告: 等待期内 Init 特征码未出现（" + std::to_string(init_round + 1) +
+         " 轮，明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
+         " 页）。继续尝试定位，不中止。");
+  } else {
+    step("客户端已初始化（Init 出现，第 " + std::to_string(init_round + 1) +
+         " 轮；CustomFileIdHook 命中 " + std::to_string(hook_hits) + " 处，最佳语义分 " +
+         std::to_string(hook_best) + "/8）");
   }
-  step("客户端可扫（第 " + std::to_string(init_round + 1) + " 轮开始，明文 " +
-       std::to_string(best_low) + "/" + std::to_string(last_checked) + " 页）");
 
   // ---- 2. 数据侧（已由调用方准备好）----
+  //
+  // 【必须在任何提前返回之前记下条目数】
+  //
+  // 以前这里在函数末尾才赋值，而第 3 节的等待循环可能先失败返回，
+  // 于是报告里打出「[数据] 可用 0 项」—— 用户明明扫到了 796 项，
+  // 却看到 0，会以为数据丢了、白扫了一遍。这是纯粹的误导。
   if (ds.entries.empty()) {
+    r.entries_loaded = 0;
     r.error = "没有可用的映射条目";
     return r;
   }
@@ -324,88 +356,113 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
 
   // ---- 3. 找 hook 点 ----
   //
-  // 关键教训：这里【只扫一次】是错的。
-  // 用户实测两次都停在「CustomFileIdHook 没找到可执行目标（语义分 0/8）」，
-  // 而同一台机器稍早些时候能拿到 8/8 —— 中间只差"多等了一会儿"。
-  // 原因是惰性解密：目标函数所在页只有在客户端真正执行到它之后才是明文，
-  // 而客户端启动后要过一阵才走到 CAS 加载路径。
+  // 【这一节以前是错的，错得很彻底，记录在此避免再犯】
   //
-  // 所以改成：边等边扫，最多等 wait_ms。一旦拿到可执行且语义分达标的
-  // 命中就立刻停。这比"等够了再扫一次"可靠得多 —— 我们不知道确切时刻。
+  // 我发明了一个「语义分 >= 6/8 才算找到」的门槛，并且把「扫到了
+  // CustomFileIdHook 但分数不够」当成失败。结果就是你看到的那份日志：
+  //     第 2~5 轮: CustomFileIdHook 1 处, 最佳 0/8     -> 判定失败
+  // 而**第 1 轮明明写着 `Init 有`** —— 也就是客户端已经初始化完成，
+  // 正是 Arctium 认为「可以开始打补丁了」的时刻。我们却因为这个
+  // 自己发明的分数把它拒了。
+  //
+  // Arctium 的判据（src/Launcher.cs WaitForUnpack）只有两条：
+  //   1) Init 特征码出现
+  //   2) initOffset += *(int*)(match+2) + 10;  该处字节变非 0
+  // 满足就 PrepareAntiCrash()，然后直接 QueuePatch 打 LoadByFileId /
+  // LoadByFilePath，再 HookClient 找 CustomFileIdHook。
+  // 它**从不检查**任何「语义分」，也不等什么「解密进度」。
+  //
+  // 至于「模组什么时候加载」——客户端一进角色选择界面就已经在按
+  // FileDataID 取资源了，所以补丁必须在那之前就位。等得越久越糟。
+  //
+  // 现在的策略：
+  //   * 每轮扫 Init + CustomFileIdHook
+  //   * Init 出现 => 立即停止等待（等同 Arctium）
+  //   * 同时记录 CustomFileIdHook 的命中：有**可执行**命中就直接用；
+  //     只有不可执行的命中，也先用它（写入时会让目标页可写可执行），
+  //     并在报告里如实写明「该页原本不可执行」
+  //   * 语义分只作为诊断打印，**不再是门槛**
   uint64_t target = 0;
   int best = 0;
   bool best_rx = false;
+  bool init_seen = false;
+  std::string pick_note;
 
   const DWORD scan_t0 = GetTickCount();
   int scan_round = 0;
-  uint64_t last_image_base = 0;
-  size_t last_image_size = 0, last_image_read = 0;
   for (;;) {
     const auto sig = scan_arctium_signatures(process, "", {"Init", "CustomFileIdHook"});
     last_image_base = sig.main_image_base;
     last_image_size = sig.main_image_size;
     last_image_read = sig.main_image_read;
     int round_best = 0;
-    bool round_rx = false;
     uint64_t round_target = 0;
-    size_t cands = 0, hits_n = 0;
+    bool round_rx = false;
+    bool round_any = false;
+    uint64_t round_any_va = 0;
+    size_t hits_n = 0;
     for (const auto& h : sig.hits) {
+      if (h.name == "Init" && h.has_rx) init_seen = true;
       if (h.name != "CustomFileIdHook") continue;
       ++hits_n;
-      ++cands;
-      if (h.has_rx) {
-        const bool better = (h.semantic_score > round_best);
-        if (better) {
-          round_best = h.semantic_score;
-          round_rx = true;
-          round_target = h.match_va;
-        }
+      round_any = true;
+      if (!round_any_va) round_any_va = h.match_va;
+      if (h.has_rx && (!round_rx || h.semantic_score > round_best)) {
+        round_best = h.semantic_score;
+        round_rx = true;
+        round_target = h.match_va;
       }
     }
-    wowmod::logf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB, CustomFileIdHook %zu 处命中, 最佳可执行 %d/8\n",
-                scan_round + 1, sig.images_scanned,
-                static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0), hits_n, round_best);
-    if (cands == 0) {
-      wowmod::logf("          （0 命中 ≠ 没解密 —— 而是这些区域里没有目标函数。"
-                   "若下面 MB 数明显小于客户端体积，说明扫描范围没覆盖到代码段）");
+    wowmod::logf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
+                 "Init %s | CustomFileIdHook %zu 处 (可执行 %s, 语义分 %d/8)\n",
+                 scan_round + 1, sig.images_scanned,
+                 static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0),
+                 static_cast<double>(sig.main_image_size) / (1024.0 * 1024.0),
+                 static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
+                 init_seen ? "有" : "无", hits_n, round_rx ? "是" : "否", round_best);
+
+    // 记录下来（不论可执行与否），供 Init 提前结束时兜底
+    if (round_target) {
+      if (!best_rx || round_best > best) { best = round_best; target = round_target; best_rx = true; }
+    } else if (round_any && !target) {
+      // 只有不可执行命中：先记下，等 Init 出现时就用它
+      best = round_best;
+      target = round_any_va;
     }
 
-    if (round_target && round_best >= kNeedScore) {
-      target = round_target;
-      best = round_best;
-      best_rx = true;
-      break;
-    }
-    // 记住目前最好的（即使分不够），最后报错时能说清楚差多少
-    if (round_target && round_best > best) {
-      best = round_best;
-      target = round_target;
-      best_rx = true;
-    }
+    // 注意：走到这里时第一个循环【已经】确认过 Init（否则我们不会在
+    // 这里）。所以这里【不能】再拿 Init 当退出条件 —— 那会让这个循环
+    // 在第一次迭代就 break，等于"只扫一次"。
+    // 这个循环要等的是：目标特征码出现（任何一处命中）。
+    if (target) break;
     if (GetTickCount() - scan_t0 > wait_ms) break;
-    ::Sleep(2000);
+    ::Sleep(1000);
     ++scan_round;
   }
-  if (!target || !best_rx) {
-    // 这句提示必须"能据此判断下一步"，而不是让人反复重跑。
-    // 关键信息：扫的是哪一块、声明多大、实际读到多少、命中几处。
-    r.error = "等待期内没能定位 CustomFileIdHook 的可执行命中（最佳语义分 " +
-              std::to_string(best) + "/8，需要 >= " + std::to_string(kNeedScore) +
-              "/8）。映像 0x" + to_hex(last_image_base, 16) + "，SizeOfImage " +
-              std::to_string(last_image_size / 1048576) + " MB，实际读到 " +
-              std::to_string(last_image_read / 1048576) + " MB。"
-              "如果「实际读到」明显小于「SizeOfImage」，是读取覆盖问题；"
-              "如果两者接近但 0 命中，说明这段代码不在这份映像里（客户端把它放在别处）"
-              "或所在页还没被解密。";
+
+  // 到这里唯一还需要的条件：**真的找到了一处命中**。
+  //
+  // 不再要求语义分、也不再要求那页「原本可执行」：
+  //   * 语义分是我自己发明的门槛，Arctium 从不看它
+  //   * 命中页原本是否可执行，取决于当时是否已解密/是否被壳映射成
+  //     PAGE_READWRITE —— 壳在初始化阶段确实会这样映射。
+  //     写入时我们本来就会用 VirtualProtectEx 把那页改成可写可执行，
+  //     所以「原本不可执行」不该导致放弃。
+  //
+  // 真正需要拒绝的情况只有一种：**一处都找不到**（或者找到的位置
+  // 明显不对，比如落在 PE 头里）。那种情况下拒绝是对的。
+  if (!target) {
+    r.error = "等待期内一处 CustomFileIdHook 都没找到。映像 0x" + to_hex(last_image_base, 16) +
+              "，SizeOfImage " + std::to_string(last_image_size / 1048576) +
+              " MB，实际读到 " + std::to_string(last_image_read / 1048576) + " MB。"
+              "若「实际读到」明显小于 SizeOfImage，是读取覆盖问题；"
+              "若两者接近仍 0 命中，说明这个客户端的文件加载函数和 Arctium 的特征码"
+              "不一致（版本差异），需要换特征码，而不是重试。";
     return r;
   }
-  if (best < kNeedScore) {
-    r.error = "CustomFileIdHook 最佳只有 " + std::to_string(best) + "/8，低于所需 " +
-              std::to_string(kNeedScore) + "/8。为避免 hook 错函数，已拒绝。";
-    return r;
-  }
-  step("hook 目标 0x" + to_hex(target, 16) + "（语义分 " + std::to_string(best) + "/8, 第 " +
-       std::to_string(scan_round + 1) + " 轮命中）");
+  step("hook 目标 0x" + to_hex(target, 16) + "（第 " + std::to_string(scan_round + 1) +
+       " 轮命中；语义分 " + std::to_string(best) + "/8，" +
+       (best_rx ? "命中页可执行" : "命中页原本不可执行，写入时会改成可写可执行") + "）");
 
   // ---- 3a. 【全进程挂起】----
   //

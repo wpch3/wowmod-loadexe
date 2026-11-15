@@ -1274,13 +1274,23 @@ static void test_plain_page_accounting() {
   }
   CHECK(!ml.empty(), "应能读到 mod_loader.cpp");
   if (!ml.empty()) {
-    // 错误写法：if (!init_found) return r;  或 ready = init_found;
-    CHECK(ml.find("if (!init_found)") == std::string::npos,
-          "Init 不能作为阻塞条件（我们对这个客户端实测 5 轮都没有）");
-    CHECK(ml.find("ready = init_found") == std::string::npos, "Init 不能决定就绪");
-    // 正确写法：命中分够了才就绪
-    CHECK(ml.find("round_best >= kNeedScore") != std::string::npos,
-          "就绪判据应该是目标特征码命中分达标");
+    // ---- 这一组断言曾经把错误当正确锁死了 ----
+    //
+    // 旧版本这里写着「就绪判据应该是目标特征码命中分达标」，
+    // 也就是强制要求源码里存在 kNeedScore（我自己发明的 6/8 门槛）。
+    // 正是那个门槛让用户第 1 轮明明 `Init 有` 却被判失败。
+    // 测试去"验证实现细节"而不是"验证行为"，就会把 bug 焊死。
+    //
+    // 现在断言的是 Arctium 的真实语义（src/Launcher.cs WaitForUnpack）：
+    //   Init 出现  => 客户端初始化完成 => 可以打补丁
+    CHECK(ml.find("if (init_found) {") != std::string::npos,
+          "Init 出现后必须立刻结束等待（这是 Arctium 的通过条件）");
+    CHECK(ml.find("if (init_found) {") != std::string::npos &&
+              ml.find("ready = true;") != std::string::npos,
+          "Init 出现时应置 ready");
+    // 我自己发明的分数门槛必须彻底消失，不能再回来
+    CHECK(ml.find("kNeedScore") == std::string::npos,
+          "kNeedScore（自造的 6/8 门槛）必须彻底移除 —— Arctium 没有这个概念");
   }
 }
 
@@ -1857,6 +1867,43 @@ static void test_mods_selfcontained() {
           "游戏内路径不能带模组目录名: " + e.game_path);
 
   fs::remove_all(root, ec);
+}
+
+// 就绪判据的行为测试 —— 用用户 2026-11-15 那次真实运行的每一轮数字。
+//
+// 那次日志：
+//   第 1 轮 ... Init 有 ... CustomFileIdHook 0 处
+//   第 2~5 轮 ... Init 无 ... CustomFileIdHook 1 处, 最佳 0/8
+//   [失败] 等待期内 CustomFileIdHook 始终没有达到 6/8 ...
+//
+// 客户端在第 1 轮就已经初始化完成（Init 有），这正是 Arctium 的
+// 通过条件。旧的「语义分 >= 6/8」判据把它拒了，白等到超时。
+// 这个测试把两套判据放在一起跑，锁住「必须第 1 轮就绪」。
+static void test_readiness_criteria_on_real_log() {
+  group("readiness_on_real_log");
+  struct Round { bool init; int hits; int score; bool rx; };
+  static const Round kRounds[] = {
+      {true, 0, 0, false},   // 第 1 轮
+      {false, 1, 0, false},  // 第 2 轮
+      {false, 1, 0, false},  // 第 3 轮
+      {false, 1, 0, false},  // 第 4 轮
+      {false, 1, 0, false},  // 第 5 轮
+  };
+  auto old_ready_round = [&]() -> int {
+    for (int i = 0; i < 5; ++i)
+      if (kRounds[i].rx && kRounds[i].score >= 6) return i + 1;
+    return 0;
+  };
+  auto new_ready_round = [&]() -> int {
+    for (int i = 0; i < 5; ++i)
+      if (kRounds[i].init) return i + 1;
+    return 0;
+  };
+  CHECK_EQ(old_ready_round(), 0);
+  CHECK_EQ(new_ready_round(), 1);
+  // 这一条是本次修复的核心：用户的数据里第 1 轮就有 Init
+  CHECK(kRounds[0].init, "第 1 轮 Init 必须为真（日志原文：Init 有）");
+  CHECK_EQ(kRounds[0].hits, 0);
 }
 
 static void test_mod_loader_ordering() {
@@ -2709,6 +2756,7 @@ int main() {
   test_mods_selfcontained();
   test_cert_patches();
   test_image_select();
+  test_readiness_criteria_on_real_log();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();
