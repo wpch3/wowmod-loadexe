@@ -225,6 +225,8 @@ BranchPatchReport plan_branch_patches(HANDLE process,
   // Arctium 全程只操作 memory.Data —— 就是主模块那一份。
   // 我们照做：只搜 images[0]，与 hook/anti-crash 用同一个坐标原点。
   const std::vector<ScannedImage> images = {all_images[0]};
+  // known_rva 直接定位时要用到原始字节
+  const std::vector<uint8_t>& all_bytes = all_images[0].bytes;
 
   // 主模块基址：报告里给出，方便把 RVA 换算成绝对地址核对。
   {
@@ -251,7 +253,56 @@ BranchPatchReport plan_branch_patches(HANDLE process,
     std::string used_pattern;
     bool used_strong = false;
 
-    if (s.strong_pattern && s.strong_pattern[0] != '\0') {
+    // 【强签名 0 命中的真相，记在这里】
+    //
+    // 线上诊断已经把答案打出来了：
+    //   RVA 0x33D7976 处 16 字节 = 01 0F 84 9C 00 00 00 48 8B 0D 4C 01 FD 00 8B D6
+    //   -> 与强签名前 16 字节【完全一致】
+    // 可是 53 字节强签名仍然 0 命中。
+    //
+    // 也就是说：0x33D7976 + 16 之后的那 37 个字节，和强签名不一致。
+    // 强签名是从某份 dump 的【同一函数但更远处】抄来的连续性假设，
+    // 只要壳在那段里重定位/改写过一处，整条 53 字节就永远匹配不上。
+    //
+    // 结论：强签名不能当作"唯一真相"。改成【分层降级】：
+    //   1) 先用强签名（能中最好，唯一性最强）
+    //   2) 中不了就用 Arctium 原始弱签名（这是它线上真正用的东西）
+    //   3) 弱签名也不中，就用 known_rva 直接定位（离线双重确证过）
+    // 三条都给同一个 patch_offset，最终打得是同一条 je。
+    // 【最高优先级：离线确证的 RVA】
+    //
+    // 线上诊断已经证明：RVA 0x33D7976 处的字节约等于强签名前 16 字节，
+    // 但 53 字节强签名依然 0 命中 —— 说明后面那 37 字节和 dump 不一致
+    // （壳改写过 / dump 来自不同段落）。强签名不是唯一真相。
+    //
+    // 反过来，known_rva 是【经过双重确证、并且能现场验证】的：
+    //   1) 在 build 68974 的两份独立 dump 上验证过
+    //   2) 现场先读这个 RVA 处的字节，确认真的是 01 0F 84 (je rel32)
+    //   3) 写入前还会再读一遍，确认那 4 字节仍是原值
+    // 所以它比"在某份 dump 里连续 53 字节"更硬。
+    //
+    // 必须放在强签名/弱签名之前：否则弱签名那 12 字节约束会在
+    // 整个映像里命中十几处，hits 非空，永远走不到这条路。
+    if (s.known_rva != 0 && s.known_build == 68974 && s.known_rva + 8 <= all_bytes.size()) {
+      const uint8_t* q = all_bytes.data() + s.known_rva;
+      const bool looks_like_je =
+          (q[0] == 0x0F && q[1] == 0x84) || (q[0] == 0x01 && q[1] == 0x0F && q[2] == 0x84);
+      if (looks_like_je) {
+        RawHit h;
+        h.va = all_images[0].base + s.known_rva;
+        h.image_base = all_images[0].base;
+        h.image_size = all_images[0].size;
+        h.offset_in_image = s.known_rva;
+        h.image_backed = all_images[0].region_type == MEM_IMAGE;
+        h.executable = va_is_executable(process, h.va);
+        h.module = all_images[0].module_name;
+        h.context = hexn(q, 16);
+        hits.push_back(h);
+        used_pattern = std::string("known_rva:0x") + to_hex(s.known_rva, 0);
+      }
+    }
+
+    if (hits.empty() && s.strong_pattern && s.strong_pattern[0] != '\0') {
       std::string perr;
       const Pattern strong = Pattern::parse(s.strong_pattern, &perr);
       if (strong.valid()) {

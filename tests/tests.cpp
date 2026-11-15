@@ -2053,6 +2053,24 @@ static void test_write_protection_policy() {
           "EXECUTE_READWRITE 被拒时必须降级到 PAGE_READWRITE");
   }
 
+  // known_rva 直通必须【最优先】。
+  //
+  // 线上实测的死循环：弱签名只有 12 个字节约束（25 字节里 12 个通配），
+  // 在 108 MB 映像里必然命中十几处 -> hits 非空 -> known_rva 直通
+  // 那段代码永远执行不到 -> 又回到「多处命中、上下文不一致、拒绝」。
+  {
+    const std::string ap2 = slurp("src/windows/arctium_patch.cpp");
+    const size_t prv = ap2.find("最高优先级：离线确证的 RVA");
+    const size_t strong = ap2.find("if (hits.empty() && s.strong_pattern");
+    CHECK(prv != std::string::npos, "必须有 known_rva 最优先定位的注释块");
+    CHECK(strong != std::string::npos, "强签名分支应保留为 fallback");
+    if (prv != std::string::npos && strong != std::string::npos)
+      CHECK(prv < strong, "known_rva 判定必须在强签名/弱签名之前");
+    // 诊断能力：失败必须能打出 known_rva 处真实字节
+    CHECK(ap2.find("诊断 ") != std::string::npos,
+          "失败时必须输出 known_rva 处真实字节（这一轮正是靠它定位的）");
+  }
+
   // NoJump 侧也必须有改保护逻辑（以前完全没有）
   const std::string ap = slurp("src/windows/arctium_patch.cpp");
   CHECK(!ap.empty(), "应能读到 arctium_patch.cpp");
