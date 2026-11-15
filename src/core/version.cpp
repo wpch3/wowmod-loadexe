@@ -230,6 +230,10 @@ bool PeImage::load(const std::vector<uint8_t>& data, std::string* err, bool mapp
     s.raw_ptr = rd32(bytes, sec_off + 20, &okr);
     uint32_t chars = rd32(bytes, sec_off + 36, &okr);
     s.executable = (chars & 0x20000000u) != 0;  // IMAGE_SCN_MEM_EXECUTE
+    s.readable = (chars & 0x40000000u) != 0;    // IMAGE_SCN_MEM_READ
+    s.writable = (chars & 0x80000000u) != 0;    // IMAGE_SCN_MEM_WRITE
+    s.code = (chars & 0x00000020u) != 0;        // IMAGE_SCN_CNT_CODE
+    s.initialized_data = (chars & 0x00000040u) != 0;  // IMAGE_SCN_CNT_INITIALIZED_DATA
     if (!okr) break;
     if (mapped) {
       // 内存映像里节区就在它的 RVA 上，文件偏移 == RVA。

@@ -2884,6 +2884,67 @@ static void test_remap_range_pure() {
   CHECK(in_range(0x10FFC, 4, 0x10000, 0x1000), "恰好到上界应通过");
 }
 
+// 重映射后按节设置保护 —— 这是"游戏能不能启动"的分水岭。
+//
+// 上一版整块设成 PAGE_EXECUTE_READ，.data 变只读，客户端写全局变量
+// 立刻访问违例，连窗口都不出。这条测试钉住 .data 必须可写。
+static void test_section_protection() {
+  group("section-protection");
+
+  // 1) .text：可执行、只读 -> ER
+  CHECK(wowmod::section_protection(true, false, true) == wowmod::kProtExecuteRead,
+        ".text（可执行不可写）必须是 PAGE_EXECUTE_READ");
+  // 2) .data：不可执行、可写 -> RW  ← 上一版就是这里错的
+  CHECK(wowmod::section_protection(false, true, true) == wowmod::kProtReadWrite,
+        ".data（可写不可执行）必须是 PAGE_READWRITE —— 否则客户端写全局变量就崩");
+  // 3) .rdata：只读 -> R
+  CHECK(wowmod::section_protection(false, false, true) == wowmod::kProtReadOnly,
+        ".rdata 必须是 PAGE_READONLY");
+  // 4) 可执行且可写 -> ERW
+  CHECK(wowmod::section_protection(true, true, true) == wowmod::kProtExecuteReadWrite,
+        "可执行且可写必须是 PAGE_EXECUTE_READWRITE");
+  // 5) 全否 -> NOACCESS
+  CHECK(wowmod::section_protection(false, false, false) == wowmod::kProtNoAccess,
+        "三个标志都为假时是 PAGE_NOACCESS");
+  // 6) 可执行但不可读（少见）仍应给 ER：Windows 上执行隐含可读
+  CHECK(wowmod::section_protection(true, false, false) == wowmod::kProtExecuteRead,
+        "可执行但未标可读时仍给 ER（执行隐含可读）");
+
+  // ---- 页对齐展开 ----
+  std::vector<wowmod::SectionProtSpec> secs;
+  secs.push_back({0x1000, 0x2000, true, false, true});    // .text
+  secs.push_back({0x3000, 0x1000, false, true, true});    // .data
+  const auto pages = wowmod::build_page_protections(secs, 0x10000);
+  CHECK(pages.size() == 2, "两个节应展开成两段");
+  CHECK(pages[0].offset == 0x1000 && pages[0].size == 0x2000,
+        ".text 应从 0x1000 起、长 0x2000");
+  CHECK(pages[0].protect == wowmod::kProtExecuteRead, ".text 段保护应为 ER");
+  CHECK(pages[1].offset == 0x3000 && pages[1].protect == wowmod::kProtReadWrite,
+        ".data 段必须是 RW");
+
+  // 未对齐的节边界必须按页外扩 —— 否则节尾那几个字节保护错误
+  std::vector<wowmod::SectionProtSpec> odd;
+  odd.push_back({0x1234, 0x10, false, true, true});
+  const auto op = wowmod::build_page_protections(odd, 0x10000);
+  // 0x1234 + 0x10 = 0x1244，仍落在页 0x1000-0x1FFF 内 -> 只需一段一页
+  CHECK(op.size() == 1 && op[0].offset == 0x1000 && op[0].size == 0x1000,
+        "未对齐节必须外扩到所在页（0x1234+0x10 只占一页）");
+
+  // 真正跨页的情形：0x1FF0 + 0x20 = 0x2010，必须扩成两页
+  std::vector<wowmod::SectionProtSpec> cross;
+  cross.push_back({0x1FF0, 0x20, false, true, true});
+  const auto cp = wowmod::build_page_protections(cross, 0x10000);
+  CHECK(cp.size() == 1 && cp[0].offset == 0x1000 && cp[0].size == 0x2000,
+        "跨页的节必须外扩覆盖两页（0x1FF0+0x20 跨 0x1FFF 边界）");
+
+  // 超出映像末尾必须截断，不能设到不属于我们的地址
+  std::vector<wowmod::SectionProtSpec> over;
+  over.push_back({0xF000, 0x5000, false, true, true});
+  const auto ov = wowmod::build_page_protections(over, 0x10000);
+  CHECK(ov.size() == 1 && ov[0].size == 0x1000,
+        "越过映像末尾的节必须截断到映像范围内");
+}
+
 static void test_patch_snapshot() {
   group("remap-snapshot");
   const uint64_t base = 0x10000;
@@ -3201,6 +3262,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_section_protection();
   test_patch_snapshot();
   test_hit_selection_and_unpack();
   test_site_window_fallback();

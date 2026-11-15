@@ -69,6 +69,16 @@ bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan);
 // 返回 false 时进程一定已被恢复（不会留下挂起）。
 bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
                      const std::vector<AntiCrashPatch>& patches, std::string* err = nullptr,
+                     bool caller_already_suspended = false) = delete;
+
+// 带节属性的版本。
+//
+// sections 描述客户端映像里每个节的真实属性。重映射后必须按它们逐段
+// 设置保护 —— 整块 PAGE_EXECUTE_READ 会让 .data 变只读，
+// 客户端一写全局变量就访问违例，连窗口都不出（上一版就是这么死的）。
+bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
+                     const std::vector<AntiCrashPatch>& patches,
+                     const std::vector<SectionProtSpec>& sections, std::string* err = nullptr,
                      bool caller_already_suspended = false);
 
 }  // namespace win

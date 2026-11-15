@@ -67,7 +67,20 @@ struct PeImage {
   uint16_t machine = 0;
   uint64_t image_base = 0;
   uint32_t resource_rva_ = 0;  // 资源目录 RVA（0 表示没有）
-  struct Section { std::string name; uint32_t rva = 0, vsize = 0, raw_size = 0, raw_ptr = 0; bool executable = false; };
+  struct Section {
+    std::string name;
+    uint32_t rva = 0, vsize = 0, raw_size = 0, raw_ptr = 0;
+    bool executable = false;
+    // 【必须记录可写性】
+    //
+    // 重映射时我把整个映像一次性设成 PAGE_EXECUTE_READ，结果 .data 段
+    // 变成只读 —— 游戏一写全局变量就访问违例，客户端连窗口都不出。
+    // 原来的映像由系统加载器【按节】设保护，我们必须照抄同样的映射。
+    bool writable = false;   // IMAGE_SCN_MEM_WRITE
+    bool readable = false;   // IMAGE_SCN_MEM_READ
+    bool code = false;       // IMAGE_SCN_CNT_CODE
+    bool initialized_data = false;  // IMAGE_SCN_CNT_INITIALIZED_DATA
+  };
   std::vector<Section> sections;
   bool ok = false;
 

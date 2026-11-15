@@ -216,7 +216,8 @@ NtProcs load_nt() {
 }  // namespace
 
 bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
-                     const std::vector<AntiCrashPatch>& patches, std::string* err,
+                     const std::vector<AntiCrashPatch>& patches,
+                     const std::vector<SectionProtSpec>& sections, std::string* err,
                      bool caller_already_suspended) {
   auto fail = [&](const std::string& m) {
     if (err) *err = m;
@@ -379,8 +380,13 @@ bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
   LARGE_INTEGER off0{};
   SIZE_T view_size = 0;
   // ViewShare = 2（映射到相同地址需要 ImageMap 语义）
+  // 【映射成 RW，之后再按节收紧】
+  //
+  // 上游映射成 PAGE_EXECUTE_READ。但那对 PE 映像是错的：.data/.bss 必须
+  // 可写，否则客户端写任何全局变量都会访问违例 —— 实测连游戏窗口都不出。
+  // 先映射成可写，写完再逐节设置正确保护。
   st = nt.map(sect, process, reinterpret_cast<PVOID*>(&view_base), 0, static_cast<SIZE_T>(size),
-              &off0, &view_size, 2, 0, PAGE_EXECUTE_READ);
+              &off0, &view_size, 2, 0, PAGE_READWRITE);
   if (st != kStatusSuccess) {
     // 【这是不可恢复的状态】
     //
@@ -394,7 +400,7 @@ bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
     LARGE_INTEGER off_r{};
     SIZE_T size_r = 0;
     st = nt.map(sect, process, reinterpret_cast<PVOID*>(&retry_base), 0,
-                static_cast<SIZE_T>(size), &off_r, &size_r, 2, 0, PAGE_EXECUTE_READ);
+                static_cast<SIZE_T>(size), &off_r, &size_r, 2, 0, PAGE_READWRITE);
     if (st != kStatusSuccess) {
       return fail("NtMapViewOfSection(RX) 失败且重试也失败, NTSTATUS=0x" +
                   to_hex(static_cast<uint32_t>(st), 8) +
@@ -426,21 +432,50 @@ bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
                 std::to_string(data.size()));
   }
 
-  // ---- 7. 收尾：确认最终视图是 RX（上游同样检查 AllocationProtect）----
-  MEMORY_BASIC_INFORMATION mbi{};
-  if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(base), &mbi, sizeof(mbi)) != 0) {
-    if (mbi.AllocationProtect != PAGE_EXECUTE_READ) {
+  // ---- 7. 收尾：按 PE 节属性逐段设保护 ----
+  //
+  // 这一步是"游戏能不能启动"的分水岭。整块设成 RX = .data 只读 =
+  // 客户端写全局变量时访问违例 = 窗口都不出。
+  size_t prot_segments = 0;
+  std::string prot_desc;
+  if (!sections.empty()) {
+    const auto pages = build_page_protections(sections, size);
+    for (const auto& pg : pages) {
+      DWORD old = 0;
+      if (VirtualProtectEx(process, reinterpret_cast<LPVOID>(base + pg.offset),
+                           static_cast<SIZE_T>(pg.size), pg.protect, &old)) {
+        ++prot_segments;
+        if (prot_desc.size() < 400) {
+          char b[96];
+          std::snprintf(b, sizeof(b), "%s0x%llx:0x%x", prot_desc.empty() ? "" : ", ",
+                        static_cast<unsigned long long>(pg.offset), pg.protect);
+          prot_desc += b;
+        }
+      }
+    }
+    if (prot_segments == 0) {
+      // 一段都没设成，说明节表不可用 —— 退化成整块可读写执行，
+      // 至少不会因为只读 .data 而立刻崩。
       DWORD old = 0;
       VirtualProtectEx(process, reinterpret_cast<LPVOID>(base), static_cast<SIZE_T>(size),
-                       PAGE_EXECUTE_READ, &old);
+                       PAGE_EXECUTE_READWRITE, &old);
+      prot_desc = "节表设置全部失败，退化为整块 ERW";
     }
+  } else {
+    // 没有节信息时不能整块只读 —— 那是上一版的致命错误。
+    // 可读写执行是唯一"不会立刻崩"的安全选择。
+    DWORD old = 0;
+    VirtualProtectEx(process, reinterpret_cast<LPVOID>(base), static_cast<SIZE_T>(size),
+                     PAGE_EXECUTE_READWRITE, &old);
+    prot_desc = "无节信息，整块 ERW（不会只读，否则 .data 崩）";
   }
   FlushInstructionCache(process, reinterpret_cast<LPCVOID>(base), static_cast<SIZE_T>(size));
 
   if (err) {
     *err = "已重映射并在快照上应用 " + std::to_string(applied) + "/" +
            std::to_string(patches.size()) + " 条补丁，视图 0x" + to_hex(base, 16) + " size 0x" +
-           to_hex(view_size, 16);
+           to_hex(view_size, 16) + "，按节设置保护 " + std::to_string(prot_segments) + " 段 [" +
+           prot_desc + "]";
   }
   // resume_guard 析构时恢复进程
   return true;

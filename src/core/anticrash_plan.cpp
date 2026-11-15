@@ -291,4 +291,43 @@ size_t apply_patches_to_snapshot(std::vector<uint8_t>* snapshot, uint64_t image_
   return applied;
 }
 
+uint32_t section_protection(bool executable, bool writable, bool readable) {
+  // 与系统加载器一致的推导顺序：
+  //   可执行+可写 -> ERW      可执行 -> ER      可写 -> RW      其他 -> R
+  // "可读"在 Windows 上几乎总是隐含的，只有显式 NOACCESS 才不给读。
+  // 这里保留 readable 参数是为了在完全不可读时返回 NOACCESS。
+  if (!readable && !executable && !writable) return kProtNoAccess;
+  if (executable && writable) return kProtExecuteReadWrite;
+  if (executable) return kProtExecuteRead;
+  if (writable) return kProtReadWrite;
+  return kProtReadOnly;
+}
+
+std::vector<PageProt> build_page_protections(const std::vector<SectionProtSpec>& sections,
+                                             uint64_t image_size) {
+  std::vector<PageProt> out;
+  for (const auto& s : sections) {
+    if (s.size == 0) continue;
+    const uint64_t begin = s.rva & ~static_cast<uint64_t>(0xFFF);
+    const uint64_t end = (s.rva + s.size + 0xFFF) & ~static_cast<uint64_t>(0xFFF);
+    if (end <= begin) continue;
+    PageProt p;
+    p.offset = begin;
+    p.size = end - begin;
+    p.protect = section_protection(s.executable, s.writable, s.readable);
+    out.push_back(p);
+  }
+  // 越过映像末尾的截断（NtMapViewOfSection 的 size 定死了范围）
+  for (auto& p : out) {
+    if (p.offset >= image_size) {
+      p.size = 0;
+      continue;
+    }
+    if (p.offset + p.size > image_size) p.size = image_size - p.offset;
+  }
+  out.erase(std::remove_if(out.begin(), out.end(), [](const PageProt& p) { return p.size == 0; }),
+            out.end());
+  return out;
+}
+
 }  // namespace wowmod

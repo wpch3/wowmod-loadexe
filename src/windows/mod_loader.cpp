@@ -17,6 +17,7 @@
 #include <sstream>
 
 #include "windows/anticrash.hpp"
+#include "wowmod/version.hpp"
 #include "windows/arctium_clone.hpp"
 #include "windows/arctium_patch.hpp"
 #include "windows/arctium_sig.hpp"
@@ -263,6 +264,7 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   size_t last_image_size = 0, last_image_read = 0;
   bool init_found = false;
   bool init_flag_seen = false;
+  int settle = 0;
   uint64_t init_va = 0;
   uint64_t init_target_va = 0;
   size_t best_low = 0, last_checked = 0;
@@ -287,8 +289,9 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     if (round_init) init_found = true;
     if (round_best > hook_best) hook_best = round_best;
     hook_hits = static_cast<int>(hits_n);
-    // 只在第 0 轮采样解密进度（整块读很贵，轮询会拖垮客户端）
-    const auto probe = (init_round == 0) ? dump_module_full(process, "", "") : ModuleDump{};
+    // 采样解密进度。整块读很贵，所以每 3 轮一次（不是每轮）。
+    // 之前只在第 0 轮采一次，导致后面判断"明文页是否增长"时用的是陈旧值。
+    const auto probe = (init_round % 3 == 0) ? dump_module_full(process, "", "") : ModuleDump{};
     if (probe.text_checked) {
       best_low = probe.text_low_entropy;
       last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
@@ -334,10 +337,31 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
                                            &flag, 1, &fgot) && fgot == 1;
         const bool flagged = wowmod::unpack_is_done(round_init, fok, flag);
         if (round_init && flagged) {
-          step("解包完成（Init 立即数指向的标记 0x" + to_hex(init_target_va, 16) +
-               " 已变为 " + std::to_string(static_cast<int>(flag)) + "）");
-          ready = true;
-          break;
+          // 【标记置位 ≠ 映像已全部解密】
+          //
+          // 实测：标记 0x7e66c40 在第一轮就已是 2，但同一轮日志写着
+          //     明文页 22/260
+          // 也就是 .text 只有 22 页是明文，其余仍是密文。此时扫 Integrity
+          // 必然 0 命中 —— 因为那几个函数还没被壳解密。
+          //
+          // 上游没有这个问题：它的 antiCrash 只在 legacyCertMode / dev mode
+          // 下才启用，而它跑的是 9.x/10.x，那些版本会在启动时整块解密。
+          //
+          // 所以在"标记已置位但明文页很少"时，再多给几轮时间让壳继续解密，
+          // 并把每轮明文页数打出来（这正是判断"该不该继续等"的唯一依据）。
+          const int settle_rounds = 12;
+          if (settle++ == 0) {
+            step("解包标记已置位（0x" + to_hex(init_target_va, 16) + " = " +
+                 std::to_string(static_cast<int>(flag)) + "），但明文页 " +
+                 std::to_string(best_low) + "/" + std::to_string(last_checked) +
+                 " —— 继续观察解密进度最多 " + std::to_string(settle_rounds) + " 轮");
+          }
+          if (settle >= settle_rounds || best_low * 2 >= last_checked) {
+            step("解包完成（标记已置位，明文页 " + std::to_string(best_low) + "/" +
+                 std::to_string(last_checked) + "）");
+            ready = true;
+            break;
+          }
         }
         if (round_init && !init_flag_seen) {
           init_flag_seen = true;
@@ -910,20 +934,32 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   //   3) NtCreateSection + NtUnmapViewOfSection + NtMapViewOfSection(RX)
   //   4) 再映射一个 RW 视图，整块写穿透，然后卸掉 RW 视图
   // 客户端之后读到的就是我们这个 section 的内容，校验自然通过。
+  size_t nj_collected = 0;
   {
     // 5a. 收集 anti-crash
     if (ac_planned) {
       for (const auto& p : ac_plan.patches) module_patches.push_back(p);
     }
     // 5b. 收集 NoJump（4 字节 0，Arctium Patches.Windows.NoJump）
+    size_t nj_skipped = 0;
     for (const auto& p : branch_plan.patches) {
-      if (p.match_va == 0 || !p.error.empty() || p.patch_va == 0) continue;
+      if (p.match_va == 0 || !p.error.empty() || p.patch_va == 0) {
+        ++nj_skipped;
+        if (!p.error.empty())
+          step("  NoJump 跳过 " + p.name + ": " + p.error);
+        else
+          step("  NoJump 跳过 " + p.name + ": 无匹配/无补丁地址 (match=0x" +
+               to_hex(p.match_va, 16) + ", patch=0x" + to_hex(p.patch_va, 16) + ")");
+        continue;
+      }
       AntiCrashPatch np;
       np.va = p.patch_va;
       np.bytes = {0x00, 0x00, 0x00, 0x00};
       np.name = "NoJump:" + p.name;
       module_patches.push_back(std::move(np));
+      ++nj_collected;
     }
+    if (nj_skipped) step("NoJump 共跳过 " + std::to_string(nj_skipped) + " 条（原因见上）");
     // 5c. 收集 hook 跳转（13 字节）
     if (r.hook_installed && hook_bytes_for_remap.size() == kArctiumHookLen) {
       AntiCrashPatch hp;
@@ -978,16 +1014,69 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       }
     }
 
+    // 从已映射的映像里解析 PE 节表 —— 重映射后要按节还原保护。
+    std::vector<SectionProtSpec> sec_specs;
+    {
+      std::vector<uint8_t> hdr(0x1000, 0);
+      SIZE_T hgot = 0;
+      if (ReadProcessMemory(process, reinterpret_cast<LPCVOID>(remap_base), hdr.data(),
+                            hdr.size(), &hgot) &&
+          hgot >= 0x200) {
+        PeImage pe;
+        std::string perr;
+        if (pe.load(hdr, &perr, /*mapped=*/true) && pe.ok) {
+          for (const auto& sec : pe.sections) {
+            SectionProtSpec sp;
+            sp.rva = sec.rva;
+            sp.size = sec.vsize ? sec.vsize : sec.raw_size;
+            sp.executable = sec.executable;
+            sp.writable = sec.writable;
+            sp.readable = sec.readable;
+            sec_specs.push_back(sp);
+          }
+          step("PE 节表: " + std::to_string(sec_specs.size()) + " 个节");
+        } else {
+          step("警告: PE 节表解析失败（" + perr + "），重映射将整块设 ERW");
+        }
+      }
+    }
+
+    // 【重映射必须以前提条件为界：完整性校验已被关掉】
+    //
+    // 这是上一版"游戏起不来"的直接原因。实测日志：
+    //     anti-crash 规划: 完整性校验 0 处, remap 校验 1 处, 跳转补丁 1 条
+    // 也就是说 Integrity/Integrity2 那两条特征码在 12.0.7 上一处都没命中
+    // （上游只支持到 10.x，minGameBuild 37862），完整性校验函数【没被关掉】。
+    //
+    // 在这种情况下卸掉原视图、换成一个"内容被改过"的 section，
+    // 等于把我们改的字节摊开给校验函数看 —— 客户端立刻判定篡改。
+    // 上一版的 4 条补丁（含 hook）就是这样把客户端弄死的。
+    //
+    // 所以：没关掉完整性校验时，不重映射。改为逐条写 —— 那至少不改视图
+    // 结构，客户端有可能继续跑；而且失败点会落在"校验抓到"而不是"视图没了"。
+    const bool integrity_off = ac_planned && ac_plan.integrity_hits > 0;
+    if (!integrity_off) {
+      step("警告: 完整性校验未命中任何一处（12.0.7 上 Integrity 特征码可能已变）"
+           " —— 不启用重映射，改用逐条写入，客户端仍可能被校验结束");
+    }
+
     std::string rerr;
-    const bool remapped = !module_patches.empty() && remap_size > 0 &&
+    const bool remapped = integrity_off && !module_patches.empty() && remap_size > 0 &&
                           remap_and_patch(process, remap_base, remap_size,
-                                          module_patches, &rerr, suspended);
+                                          module_patches, sec_specs, &rerr, suspended);
+    if (!integrity_off) rerr = "完整性校验未被关闭（Integrity 命中 0 处），跳过重映射";
     if (remapped) {
       step("重映射写入完成: " + rerr);
       r.anticrash_patches = ac_planned ? ac_plan.patches.size() : 0;
       r.branch_patched = true;
-      r.branch_count = branch_plan.applied_count;
-      step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条");
+      // 【计数必须用真正并入 module_patches 的条数】
+      //
+      // branch_plan.applied_count 只在 apply_branch_patches（逐条回退路径）
+      // 里赋值。主路径走 remap_and_patch 时它一直是 0 ——
+      // 于是日志打印 "NoJump 已打 0 条"，而实际 4 条补丁里就含 2 条 NoJump。
+      // 报告和事实矛盾，是最误导人的那种 bug。
+      r.branch_count = nj_collected;
+      step("NoJump 已打 " + std::to_string(nj_collected) + " 条（随重映射写入）");
     } else {
       // 回退：逐条写（行为与上一版一致）。必须如实说明为什么没用重映射。
       step("重映射写入不可用: " + rerr);
@@ -1027,6 +1116,39 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       r.error = "补丁已写入，但恢复进程失败: " + rerr + "（请手动结束客户端后重试）";
       return r;
     }
+  }
+
+  // ---- 7. 存活验证：resume 之后立刻看客户端还在不在 ----
+  //
+  // 【为什么必须做】
+  //
+  // 上一版 remap 把整个 108 MB 设成 PAGE_EXECUTE_READ，.data 变成只读。
+  // 客户端一写全局变量就访问违例，窗口都不出 —— 而我们的日志照样
+  // 打印 "已恢复进程，客户端可以继续运行" + "安装成功"，完全没发现
+  // 进程已经死了。用户看到的是"点了没反应"，日志却是绿色的。
+  //
+  // 这里在 resume 后短暂等待并检查退出码。崩了就如实报出退出码，
+  // 并且明确指出是补丁链的哪一环导致的。
+  {
+    bool alive = true;
+    DWORD code = 0;
+    for (int i = 0; i < 12; ++i) {          // 最多等约 3 秒
+      ::Sleep(250);
+      if (!GetExitCodeProcess(process, &code)) break;
+      if (code != STILL_ACTIVE) {
+        alive = false;
+        break;
+      }
+    }
+    if (!alive) {
+      r.error = "客户端在补丁写入后立即退出了（exit code 0x" + to_hex(code, 8) + "）。"
+                "这不是特征码问题 —— 是补丁链本身让客户端无法继续运行。"
+                "请把上面的 '重映射写入完成' 与 '按节设置保护' 两行发出来，"
+                "它们决定了是哪一环。";
+      step("[失败] 客户端已退出，退出码 0x" + to_hex(code, 8));
+      return r;
+    }
+    step("存活验证通过：客户端在补丁写入后 3 秒内未退出");
   }
 
   r.ok = true;
