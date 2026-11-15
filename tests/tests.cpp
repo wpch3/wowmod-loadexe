@@ -16,6 +16,7 @@
 #include "wowmod/fileid_stub.hpp"
 #include "wowmod/x64sim.hpp"
 #include "wowmod/anticrash_plan.hpp"
+#include "wowmod/image_select.hpp"
 #include "wowmod/mods_selfcontained.hpp"
 #include "windows/arctium_clone.hpp"
 #include "wowmod/launcher_stub.hpp"
@@ -1324,12 +1325,19 @@ static void test_peb_image_protect_and_reach() {
   CHECK(sig_h.find("main_image_size") != std::string::npos &&
             sig_h.find("main_image_read") != std::string::npos,
         "扫描结果必须记录主映像声明大小与实际读到的字节数");
-  CHECK(sig.find("out.main_image_read = img.bytes.size()") != std::string::npos,
+  // 现在取的是 scan_process_images 选定的第 0 项（不再"取最大那块"，
+  // 那个做法会把 RegionSize 当成 SizeOfImage）。语义要求不变：
+  // 必须回填「实际读到的字节数」，否则没法区分范围问题与解密问题。
+  CHECK(sig.find("out.main_image_read =") != std::string::npos,
         "必须回填 main_image_read，否则没法判断是范围问题还是解密问题");
+  CHECK(sig.find("out.main_image_size = images[0].size") != std::string::npos,
+        "main_image_size 必须取自选定映像（SizeOfImage），不能取最大区域");
 
   // b) 裁剪必须按「读到的最高偏移」，不是「读到的字节总数」
-  CHECK(scan.find("size_t reach") != std::string::npos,
-        "逐页读必须记录已读到的最高偏移");
+  // 声明形式现在是 "size_t done = 0, reach = 0, at = 0;"（同一个 while 里三个变量）
+  CHECK(scan.find("size_t done = 0, reach = 0") != std::string::npos ||
+            scan.find("size_t reach") != std::string::npos,
+        "分块读必须记录已读到的最高偏移 reach");
   CHECK(scan.find("img.bytes.resize(reach)") != std::string::npos,
         "裁剪必须用 reach；用 done（字节总数）会把尾部已读到的代码整片丢掉");
   CHECK(scan.find("img.bytes.resize(done)") == std::string::npos,
@@ -1338,9 +1346,19 @@ static void test_peb_image_protect_and_reach() {
   CHECK(scan.find("g == n") != std::string::npos,
         "半页读取不能算作已覆盖，否则裁剪出来的内容里混着空洞");
   // 分块读：不能再退回逐页 2.8 万次系统调用
-  CHECK(scan.find("VirtualQueryEx(process, reinterpret_cast<LPCVOID>(peb_base + at)") !=
-            std::string::npos,
-        "PEB 映像必须按已提交段分块读，逐页读会把客户端拖慢一个量级");
+  // 现在选定映像的基址来自 select_client_image（见 image_select 组），
+  // 常量名也从 peb_base 改成了 img_base —— 语义要求不变：
+  // 必须按已提交段分块读，不能退回逐页 2.8 万次系统调用。
+  CHECK(scan.find("VirtualQueryEx(process, reinterpret_cast<LPCVOID>(img_base + at)") !=
+                std::string::npos ||
+            scan.find("VirtualQueryEx(process, reinterpret_cast<LPCVOID>(peb_base + at)") !=
+                std::string::npos,
+        "主映像必须按已提交段分块读，逐页读会把客户端拖慢一个量级");
+  // 而且映像大小必须来自 PE 头，不能来自区域大小
+  CHECK(scan.find("select_client_image") != std::string::npos,
+        "必须用 select_client_image 决定哪一份是客户端映像（不能拿最大区域凑）");
+  CHECK(scan.find("img.size = soi") != std::string::npos,
+        "img.size 必须是 SizeOfImage（PE 头里的值），不是 RegionSize");
   // 段起点可能早于映像基址，必须夹住，否则 size_t 下溢 -> 越界
   CHECK(scan.find("seg_lo64") != std::string::npos,
         "区域起点早于映像基址时必须夹到 [at, to_read)，否则下溢");
@@ -1464,6 +1482,127 @@ static void test_anticrash_plan() {
 // 这四条只有连私有服务器才需要，但既然要实现就必须和 Arctium 逐字节一致：
 // 偏移写错一个字节 = 改写指令中间 = 客户端起不来。
 // 这里用合成映像验证「命中点 + offset -> 写入位置」这条唯一的算术。
+// 客户端映像选择。这一段直接对着用户真机日志里的数字写。
+//
+// 真机日志（2026-11-15）：
+//   第 1 轮: 主映像 108.3 MB
+//   第 2 轮: 主映像 176.0 MB
+//   第 3 轮: 主映像 256.0 MB 读到 192.0 MB
+//   第 4/5 轮: 同上
+//   5 轮 CustomFileIdHook 全部 0/8，最后闪退。
+//
+// 176.0 MB 那个才是 SizeOfImage（PE 头里的定值，不可能随轮次变化）。
+// 108.3 / 256.0 只可能来自 RegionSize —— 说明我们扫的是旁边一块无关分配。
+static void test_image_select() {
+  group("image_select");
+  using namespace wowmod;
+
+  auto make_pe = [](uint32_t size_of_image, uint16_t magic = 0x20B, uint16_t nsec = 8) {
+    std::vector<uint8_t> h(0x1000, 0);
+    h[0] = 'M'; h[1] = 'Z';
+    const uint32_t pe = 0x80;
+    std::memcpy(&h[0x3C], &pe, 4);
+    const uint32_t sig = 0x00004550u;
+    std::memcpy(&h[pe], &sig, 4);
+    std::memcpy(&h[pe + 6], &nsec, 2);
+    std::memcpy(&h[pe + 24], &magic, 2);
+    std::memcpy(&h[pe + 24 + 56], &size_of_image, 4);
+    return h;
+  };
+
+  // --- PE 头解析 ---
+  {
+    auto h = make_pe(0xB000000);           // 176 MB
+    const auto pe = parse_pe_header(h.data(), h.size());
+    CHECK(pe.ok, "应能解析合法 PE 头");
+    CHECK_EQ(pe.size_of_image, 0xB000000u);
+    CHECK(pe.is_64bit, "PE32+ 应识别为 64 位");
+    CHECK_EQ(pe.n_sections, 8);
+  }
+  {
+    std::vector<uint8_t> junk(0x1000, 0xCC);
+    CHECK(!parse_pe_header(junk.data(), junk.size()).ok, "非 MZ 必须拒绝");
+    auto h = make_pe(0x1000);              // 太小
+    CHECK(!parse_pe_header(h.data(), h.size()).ok, "SizeOfImage 太小必须拒绝");
+    auto h2 = make_pe(0x80000000u);        // 2 GB
+    CHECK(!parse_pe_header(h2.data(), h2.size()).ok, "SizeOfImage 过大必须拒绝");
+  }
+
+  // --- PEB 给出答案时，必须以 PEB 为准 ---
+  {
+    // 区域表里放一块「更大但 PE 头是别人」的分配，模拟 256 MB 那个假映像
+    std::vector<MemRegion> regions = {
+        {0x140000000ull, 0x10000000ull, 0x04, 0x20000, ""},   // 256 MB MEM_PRIVATE
+        {0x7ff600000000ull, 0xB000000ull, 0x02, 0x40000, "Wow.exe"},
+    };
+    auto read = [&](uint64_t at, std::vector<uint8_t>* buf) -> bool {
+      if (at == 0x7ff600000000ull) { *buf = make_pe(0xB000000); return true; }
+      if (at == 0x140000000ull) { *buf = make_pe(0x10000000u); return true; }
+      return false;
+    };
+    const auto sel =
+        select_client_image(regions, 0x7ff600000000ull, read);
+    CHECK(sel.ok, "PEB 基址可用时必须成功");
+    CHECK(sel.image.base == 0x7ff600000000ull, "必须选中 PEB 给出的基址");
+    CHECK_EQ(sel.image.size_of_image, 0xB000000u);
+    CHECK(sel.image.from_peb, "必须标记为来自 PEB");
+  }
+
+  // --- PEB 不可用时，不能拿「最大区域」当映像 ---
+  //
+  // 这正是线上那次失败：256 MB 那块 MEM_PRIVATE 的 PE 头声明
+  // SizeOfImage 比区域本身还大 -> 自洽性不成立 -> 必须丢弃，
+  // 而不是因为「它最大」就选它。
+  {
+    std::vector<MemRegion> regions = {
+        {0x140000000ull, 0x10000000ull, 0x04, 0x20000, ""},   // 256 MB，声明 512 MB
+        {0x7ff600000000ull, 0xB000000ull, 0x02, 0x40000, "Wow.exe"},
+    };
+    auto read = [&](uint64_t at, std::vector<uint8_t>* buf) -> bool {
+      if (at == 0x140000000ull) { *buf = make_pe(0x20000000u); return true; }
+      if (at == 0x7ff600000000ull) { *buf = make_pe(0xB000000); return true; }
+      return false;
+    };
+    const auto sel = select_client_image(regions, 0, read);
+    CHECK(sel.ok, "应能选中自洽的那个");
+    CHECK(sel.image.base == 0x7ff600000000ull,
+          "必须丢掉自洽性不成立的大区域，选真正自洽的映像");
+    CHECK(!sel.image.from_peb, "这条路径不是来自 PEB");
+    CHECK_EQ(sel.image.size_of_image, 0xB000000u);
+  }
+
+  // --- 一个都不自洽：必须明确失败，而不是硬塞一个 ---
+  {
+    std::vector<MemRegion> regions = {
+        {0x10000000ull, 0x1000ull, 0x04, 0x20000, ""},        // 太小
+        {0x20000000ull, 0x1000000ull, 0x04, 0x20000, ""},     // 声明 64 MB，区域 16 MB
+    };
+    auto read = [&](uint64_t at, std::vector<uint8_t>* buf) -> bool {
+      if (at == 0x20000000ull) { *buf = make_pe(0x4000000u); return true; }
+      return false;
+    };
+    const auto sel = select_client_image(regions, 0, read);
+    CHECK(!sel.ok, "没有自洽映像时必须报失败");
+    CHECK(!sel.error.empty(), "失败要给出原因");
+    CHECK(sel.image.base == 0, "失败时不能返回一个『凑合』的基址");
+  }
+
+  // --- PEB 基址无效时回退，而不是直接放弃 ---
+  {
+    std::vector<MemRegion> regions = {
+        {0x7ff600000000ull, 0xB000000ull, 0x02, 0x100000, "Wow.exe"},
+    };
+    auto read = [&](uint64_t at, std::vector<uint8_t>* buf) -> bool {
+      if (at == 0x7ff600000000ull) { *buf = make_pe(0xB000000); return true; }
+      return false;
+    };
+    const auto sel = select_client_image(regions, 0x123456789abcull, read);   // PEB 乱指
+    CHECK(sel.ok, "PEB 指向无效地址时应回退到区域表");
+    CHECK(sel.image.base == 0x7ff600000000ull, "必须回退到区域表里的那个映像");
+    CHECK(sel.image.image_backed, "MEM_IMAGE 的区域必须标记为 image_backed");
+  }
+}
+
 static void test_cert_patches() {
   group("cert_patches");
   using namespace wowmod;
@@ -1637,6 +1776,80 @@ static void test_mods_selfcontained() {
     }
     CHECK(found_belt && found_sword, "item 包的两条必须都解析出来");
   }
+  // ---- 模组目录本身就是游戏前缀目录（线上真实失败场景）----
+  //
+  // 用户实测：他选的是 `...\_midnight_\Character`，里面的文件叫
+  //   BloodElf/Female/bloodelffemale_hd_skin_color_3500114.blp
+  // 而 listfile 里是 character/bloodelf/female/...
+  // 相对他选的目录，"character/" 这一段根本不在路径里，
+  // 于是精确匹配 0 命中（日志：精确 0 / 文件名 797），
+  // 全靠"文件名模糊匹配"在兜 —— 一旦重名就会整包失效。
+  {
+    std::error_code ec2;
+    const fs::path root2 = fs::temp_directory_path(ec2) / "wowmod-prefix-test";
+    fs::remove_all(root2, ec2);
+    const fs::path moddir = root2 / "Character";     // 模组目录 = Character 本身
+    fs::create_directories(moddir / "BloodElf" / "Female", ec2);
+    std::ofstream(moddir / "BloodElf" / "Female" / "bloodelffemale_hd_skin_color_3500114.blp")
+        << "x";
+    std::ofstream(moddir / "BloodElf" / "Female" / "bloodelffemale_hd_skin_color_3500115.blp")
+        << "y";
+    {
+      std::ofstream o(root2 / "lf2.csv");
+      o << "111;character/bloodelf/female/bloodelffemale_hd_skin_color_3500114.blp\n"
+        << "222;character/bloodelf/female/bloodelffemale_hd_skin_color_3500115.blp\n";
+    }
+    const auto r2 = build_selfcontained_mods(moddir.u8string(), {(root2 / "lf2.csv").u8string()});
+    CHECK(r2.ok, "模组目录=前缀目录时必须能解析");
+    CHECK_EQ(r2.matched, 2u);
+    CHECK_EQ(r2.by_exact, 2u);        // 必须靠精确匹配，而不是文件名模糊
+    CHECK_EQ(r2.by_prefix, 2u);       // 具体是靠"补上 character/"命中的
+    CHECK_EQ(r2.by_name, 0u);
+    for (const auto& e : r2.entries)
+      CHECK(e.game_path.rfind("character/", 0) == 0,
+            "游戏内路径必须补全为 character/...，实际: " + e.game_path);
+    fs::remove_all(root2, ec2);
+  }
+
+  // ---- 用【真实 listfile 分片】跑一遍用户的实际目录 ----
+  //
+  // tests/data/parts_sample.csv 直接取自 wowdev/wow-listfile 的
+  // parts/placeholder.csv + misc.csv（未改一字），里面有
+  //   116921;Character/BloodElf/Female/BloodElfFemale.m2
+  //   116922;Character/BloodElf/Female/BLOODELFFEMALEFACELOWER00_00.BLP
+  // 正是用户那个模组目录的内容形态。
+  {
+    std::error_code ec3;
+    const fs::path root3 = fs::temp_directory_path(ec3) / "wowmod-real-listfile-test";
+    fs::remove_all(root3, ec3);
+    const fs::path moddir = root3 / "Character";
+    fs::create_directories(moddir / "BloodElf" / "Female", ec3);
+    std::ofstream(moddir / "BloodElf" / "Female" / "BloodElfFemale.m2") << "m2";
+    std::ofstream(moddir / "BloodElf" / "Female" / "BLOODELFFEMALEFACELOWER00_00.BLP") << "blp";
+    // 一个 listfile 里不存在的文件：必须如实报告"没解析出 id"，不能瞎配
+    std::ofstream(moddir / "BloodElf" / "Female" / "mymod_not_in_listfile.blp") << "x";
+
+    const auto r3 = build_selfcontained_mods(moddir.u8string(), {"tests/data/parts_sample.csv"});
+    CHECK(r3.ok, "真实分片必须能解析: " + r3.error);
+    CHECK_EQ(r3.matched, 2u);
+    CHECK_EQ(r3.by_exact, 2u);     // 大小写不同也要命中（listfile 是 Character/，磁盘是 Character/）
+    CHECK_EQ(r3.by_prefix, 2u);    // 靠"补上 character/"命中：模组目录本身就是 Character
+    CHECK_EQ(r3.by_name, 0u);      // 一次文件名猜测都不该发生
+    CHECK_EQ(r3.missing, 1u);      // 那个自造文件必须算 missing
+    bool saw_m2 = false, saw_blp = false;
+    for (const auto& e : r3.entries) {
+      if (e.file_data_id == 116921) { saw_m2 = true; CHECK_EQ(e.game_path, std::string("character/bloodelf/female/bloodelffemale.m2")); }
+      if (e.file_data_id == 116922) {
+        saw_blp = true;
+        CHECK_EQ(e.game_path, std::string("character/bloodelf/female/bloodelffemalefacelower00_00.blp"));
+        CHECK_EQ(e.file_exists, true);
+      }
+    }
+    CHECK(saw_m2, "BloodElfFemale.m2 必须解析到 116921");
+    CHECK(saw_blp, "BLOODELFFEMALEFACELOWER00_00.BLP 必须解析到 116922");
+    fs::remove_all(root3, ec3);
+  }
+
   // game_path 必须永远是【游戏内】路径，不能把模组目录名带进去
   for (const auto& e : rep.entries)
     CHECK(e.game_path.rfind("t21warrior", 0) != 0 && e.game_path.rfind("titaa", 0) != 0 &&
@@ -2495,6 +2708,7 @@ int main() {
   test_anticrash_plan();
   test_mods_selfcontained();
   test_cert_patches();
+  test_image_select();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

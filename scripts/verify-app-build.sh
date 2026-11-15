@@ -19,7 +19,14 @@ g++ -std=c++17 -O1 -Iinclude -Isrc \
   -o "$TMP/tests.bin" 2>&1 | head -20
 "$TMP/tests.bin" > "$TMP/tests.log" 2>&1 || true
 tail -2 "$TMP/tests.log"
-grep -q "0 项失败" "$TMP/tests.log" || { grep FAIL "$TMP/tests.log" | head -10; fail "单元测试有失败"; }
+# 【别写成 grep -q "0 项失败" 就完事】
+# 测试程序会先打印各子套件的汇总行，例如
+#     [intercept_stub] 16 项检查, 0 项失败
+# 那一行本身也含 "0 项失败"，整体 6 项失败时它照样能匹配上，
+# 于是这道门形同虚设（本轮用变异测试抓到了这个洞）。
+# 必须锚定"行首的总体汇总"，并且另外确认没有任何 FAIL 行。
+grep -qE "^[0-9]+ 项检查, 0 项失败" "$TMP/tests.log" \
+  || { grep -E "FAIL|项失败" "$TMP/tests.log" | head -10; fail "单元测试有失败"; }
 
 echo "==> A2. 端到端：真实 listfile 片段 -> Arctium 表 -> 字符串块 -> 磁盘可打开"
 LF="$ROOT/tests/fixtures/spells-sample.csv"
@@ -99,6 +106,20 @@ g++ -std=c++17 -O1 -Iinclude -Isrc "$TMP/e2e.cpp" \
   src/core/arctium_clone.cpp -o "$TMP/e2e.bin" 2>&1 | head -10
 "$TMP/e2e.bin" "$E2E" || fail "端到端链路失败"
 
+echo "==> A3. 用户真实目录形态：模组目录 = Character（真实 listfile 分片）"
+# 线上真实失败场景：用户选的是 ...\_midnight_\Character，listfile 里是
+# Character/BloodElf/...，相对路径里没有 character 这一段。
+# 这一关确认「补前缀」逻辑还在，且不允许退化成文件名猜测。
+REAL="$ROOT/tests/data/parts_sample.csv"
+[ -f "$REAL" ] || fail "缺少 tests/data/parts_sample.csv"
+grep -q "116921;Character/BloodElf/Female/BloodElfFemale.m2" "$REAL" \
+  || fail "parts_sample.csv 缺少 116921 那条（样本被改过？）"
+# 补前缀逻辑必须还在源码里（否则上面那份真实样本在真机上一条都命中不了）
+grep -q "candidate_keys" "$ROOT/src/core/mods_selfcontained.cpp" \
+  || fail "mods_selfcontained.cpp 里的 candidate_keys 不见了（补前缀逻辑被删）"
+grep -q "e.game_path = official.empty()" "$ROOT/src/core/mods_selfcontained.cpp" \
+  || fail "game_path 必须取自 listfile 的官方写法，否则两条路径对不上"
+
 echo "==> B. 产物检查"
 [ -f "$DIST/wowmod.exe" ] || fail "缺少 $DIST/wowmod.exe"
 python3 - "$DIST/wowmod.exe" "$DIST/wowmod_loader.exe" <<'PY' || exit 1
@@ -153,6 +174,28 @@ assert b"modes: observe auto hook" in loader, "wowmod_loader.exe 不是本轮产
 assert b"anti-crash" in loader, "wowmod_loader.exe 缺 anti-crash"
 print("   wowmod_loader.exe: 同一套引擎")
 PY
+
+echo "==> B2. listfile 备用通路（release 403 时必须能靠 API 直链分片）"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$DIST/wowmod.exe" <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read()
+# 注意：Windows 可执行文件里的字符串字面量是 UTF-16LE，
+# 用 ASCII 直接搜一定搜不到 —— 这里按 UTF-16LE 编码再找。
+def u16(t):
+    return t.encode('utf-16-le')
+checks = [
+    (u16('/repos/wowdev/wow-listfile/contents/parts'), 'API 直链分片的路径'),
+    (u16('releases/latest'), 'release 通路'),
+    (b'parts/*.csv', '备用通路说明文本'),
+]
+bad = [n for k, n in checks if k not in d]
+if bad:
+    print("    缺少: " + ", ".join(bad)); sys.exit(1)
+print("    下载器两条通路都在")
+PY
+  [ $? -eq 0 ] || fail "下载器备用通路缺失"
+fi
 
 echo "==> C. 一致性"
 grep -aq "字符串块自检" "$DIST/wowmod_loader.exe" || fail "loader 缺绝对路径自检"

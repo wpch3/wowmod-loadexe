@@ -13,6 +13,7 @@
 #include <map>
 
 #include "wowmod/analyze.hpp"
+#include "wowmod/image_select.hpp"
 #include "wowmod/util.hpp"
 
 namespace wowmod {
@@ -179,109 +180,114 @@ bool process_has_client_markers(HANDLE process, std::string* first_marker) {
 std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) {
   std::vector<ScannedImage> out;
 
-  // ---- 0. 首选：Arctium 的做法 —— 从 PEB 基址连续读整个映像 ----
+  // 【第一件事：确认哪一个才是客户端映像】
   //
-  // 用户实测：Init 特征码能找到（说明基址对、映像可读），
-  // 但 CustomFileIdHook 0 命中，且 dump_module_full 报 147/147 页全明文。
-  // 也就是说【我们只覆盖到映像的一小部分】。
+  // 之前直接从「PEB 基址连续读一整块」，但踩到两个问题：
+  //   a) 读到一半失败时，img.size 是 SizeOfImage，而 img.bytes 只有读到的那部分；
+  //   b) 如果 PEB 那条路不通，我们退回去收「最大的可读区域」，
+  //      于是报出来的「主映像」尺寸随轮次从 108 MB 跳到 256 MB ——
+  //      那不是 SizeOfImage（PE 头里的定值），是 RegionSize。
+  //      这种时候其实我们压根没在客户端映像上扫，特征码当然 0 命中。
   //
-  // 根因在下面的区域筛选：
-  //     looks_like_image = r.image || (r.module.empty() && r.size >= 1MB)
-  // 这个客户端的主模块是 MEM_MAPPED（壳把真实 PE 映射成文件映射），
-  // 而且可能被切成多个小于 1 MB 的段 —— 于是绝大多数段被跳过。
-  //
-  // Arctium 完全不这样筛：它从 PEB 拿到基址，直接
-  //     Data = Read(BaseAddress, (int)binaryLength)
-  // 连续读一整块。这里照做，并把这一块作为【第一个】扫描映像，
-  // 后面的区域筛选只作为补充。
+  // 现在先把区域表 + PEB 一起交给纯逻辑选映像，选不出就【什么都不做】，
+  // 让调用方明确报「找不到映像」，而不是拿一块无关内存扫五轮。
+  std::vector<MemRegion> region_view;
   {
-    const uint64_t peb_base = read_peb_image_base(process);
-    if (peb_base) {
-      std::vector<uint8_t> hdr(0x1000);
-      SIZE_T got = 0;
-      if (ReadProcessMemory(process, reinterpret_cast<const void*>(peb_base), hdr.data(),
-                            hdr.size(), &got) && got >= 0x400 && hdr[0] == 'M' &&
-          hdr[1] == 'Z') {
-        const uint32_t pe_off = *reinterpret_cast<const uint32_t*>(hdr.data() + 0x3C);
-        if (pe_off <= 0x1000 && *reinterpret_cast<const uint32_t*>(hdr.data() + pe_off) ==
-                                  0x00004550u) {
-          const uint32_t soi =
-              *reinterpret_cast<const uint32_t*>(hdr.data() + pe_off + 24 + 56);
-          if (soi >= 0x10000) {
-            ScannedImage img;
-            img.base = peb_base;
-            img.size = soi;
-            img.executable = true;          // 主模块整体按可执行对待
-            img.is_image_backed = true;     // 逻辑上是映像本体
-            img.region_type = MEM_MAPPED;
-            const size_t to_read = std::min<size_t>(soi, max_bytes);
-            img.bytes.assign(to_read, 0);
-            // 按提交情况分块读，而不是逐页读。
-            //
-            // 这个映像有 113 MB ≈ 2.8 万页，逐页 ReadProcessMemory 每轮要
-            // 2.8 万次系统调用；而等待循环每 2 秒就扫一轮，光读就把客户端拖慢。
-            // 正确做法：VirtualQueryEx 走一遍，把【连续且已提交且可读】的段
-            // 整块读掉，只有段内出现读失败才退化成逐页。
-            //
-            // 裁剪必须按【读到的最高偏移】reach，不能用读到的字节总数 done：
-            // 曾经写成 bytes.resize(done)，只要前面有一页未提交，
-            // 后面所有已读到的页都会被一刀切掉 —— 尾部整片代码凭空消失。
-            size_t done = 0;       // 成功读到的字节数（用于判断这块值不值得收）
-            size_t reach = 0;      // 已成功读到的最高偏移
-            size_t at = 0;
-            while (at < to_read) {
-              MEMORY_BASIC_INFORMATION mbi;
-              std::memset(&mbi, 0, sizeof(mbi));
-              if (!VirtualQueryEx(process, reinterpret_cast<LPCVOID>(peb_base + at), &mbi,
-                                  sizeof(mbi)) ||
-                  mbi.RegionSize == 0) {
-                at += 0x1000;
-                continue;
+    const auto regions0 = enumerate_regions(process);
+    region_view.reserve(regions0.size());
+    for (const auto& r : regions0) {
+      MemRegion m;
+      m.base = r.base;
+      m.size = r.size;
+      m.protect = r.protect;
+      m.type = r.type;
+      m.module = r.module;
+      region_view.push_back(std::move(m));
+    }
+  }
+  auto read_hdr = [&](uint64_t at, std::vector<uint8_t>* buf) -> bool {
+    buf->assign(0x1000, 0);
+    SIZE_T g = 0;
+    if (!ReadProcessMemory(process, reinterpret_cast<const void*>(at), buf->data(), buf->size(),
+                           &g) || g < 0x200)
+      return false;
+    buf->resize(g);
+    return true;
+  };
+  const ImageSelection chosen =
+      select_client_image(region_view, read_peb_image_base(process), read_hdr);
+  if (!chosen.ok) {
+    // 明确失败：不留任何候选，调用方会打印 chosen.error 的同类说明。
+    return out;
+  }
+
+  // ---- 0. 读取选定的那份映像 ----
+  //
+  // 只有一个来源：select_client_image 选出来的 (base, SizeOfImage)。
+  // 不再"先试 PEB、不行再挑最大区域"—— 那条路会在选错时让我们
+  // 对一块无关内存扫五轮，还报出 256 MB 这种不可能的数字。
+  {
+    const uint64_t img_base = chosen.image.base;
+    const size_t soi = chosen.image.size_of_image;
+    if (img_base && soi >= 0x10000) {
+      ScannedImage img;
+      img.base = img_base;
+      img.size = soi;                       // 就是 PE 头里的 SizeOfImage
+      img.executable = true;
+      img.is_image_backed = chosen.image.image_backed;
+      img.region_type = chosen.image.region_type;
+      const size_t to_read = std::min<size_t>(soi, max_bytes);
+      img.bytes.assign(to_read, 0);
+      // 按提交情况分块读，而不是逐页读（2.8 万页逐页读会把客户端拖慢）。
+      // 裁剪按【读到的最高偏移】reach，不能用读到的字节总数 done ——
+      // 否则中间一页未提交，后面的页会被整体丢掉。
+      size_t done = 0, reach = 0, at = 0;
+      while (at < to_read) {
+        MEMORY_BASIC_INFORMATION mbi;
+        std::memset(&mbi, 0, sizeof(mbi));
+        if (!VirtualQueryEx(process, reinterpret_cast<LPCVOID>(img_base + at), &mbi,
+                            sizeof(mbi)) ||
+            mbi.RegionSize == 0) {
+          at += 0x1000;
+          continue;
+        }
+        const uint64_t rb = reinterpret_cast<uint64_t>(mbi.BaseAddress);
+        const size_t rsz = mbi.RegionSize;
+        if (rb + rsz <= img_base + at) { at += 0x1000; continue; }
+        const uint64_t seg_lo64 = std::max<uint64_t>(rb, img_base + at);
+        const uint64_t seg_hi64 = std::min<uint64_t>(rb + rsz, img_base + to_read);
+        if (seg_hi64 <= seg_lo64) { at += 0x1000; continue; }
+        const size_t seg_off = static_cast<size_t>(seg_lo64 - img_base);
+        const size_t seg_end = static_cast<size_t>(seg_hi64 - img_base);
+        const bool usable =
+            mbi.State == MEM_COMMIT && readable(mbi.Protect) && !(mbi.Protect & PAGE_GUARD);
+        if (usable) {
+          const size_t n = seg_end - seg_off;
+          SIZE_T g = 0;
+          if (ReadProcessMemory(process, reinterpret_cast<const void*>(img_base + seg_off),
+                                img.bytes.data() + seg_off, n, &g) &&
+              g == n) {
+            done += g;
+            if (seg_end > reach) reach = seg_end;
+          } else {
+            for (size_t o = seg_off; o < seg_end; o += 0x1000) {
+              SIZE_T pg = 0;
+              const size_t m2 = std::min<size_t>(0x1000, seg_end - o);
+              if (ReadProcessMemory(process, reinterpret_cast<const void*>(img_base + o),
+                                    img.bytes.data() + o, m2, &pg) &&
+                  pg == m2) {
+                done += pg;
+                if (o + m2 > reach) reach = o + m2;
               }
-              const uint64_t rb = reinterpret_cast<uint64_t>(mbi.BaseAddress);
-              const size_t rsz = mbi.RegionSize;
-              if (rb + rsz <= peb_base + at) { at += 0x1000; continue; }
-              // 区域可能从映像基址【之前】开始（映像不是分配起点），
-              // 这里一律夹到 [at, to_read) 里，避免 size_t 下溢。
-              const uint64_t seg_lo64 = std::max<uint64_t>(rb, peb_base + at);
-              const uint64_t seg_hi64 = std::min<uint64_t>(rb + rsz, peb_base + to_read);
-              if (seg_hi64 <= seg_lo64) { at += 0x1000; continue; }
-              const size_t seg_off = static_cast<size_t>(seg_lo64 - peb_base);
-              const size_t seg_end = static_cast<size_t>(seg_hi64 - peb_base);
-              const bool usable =
-                  mbi.State == MEM_COMMIT && readable(mbi.Protect) && !(mbi.Protect & PAGE_GUARD);
-              if (usable) {
-                const size_t n = seg_end - seg_off;
-                SIZE_T g = 0;
-                if (ReadProcessMemory(process, reinterpret_cast<const void*>(peb_base + seg_off),
-                                      img.bytes.data() + seg_off, n, &g) &&
-                    g == n) {
-                  done += g;
-                  if (seg_end > reach) reach = seg_end;
-                } else {
-                  // 段内读失败（可能中途有页被保护/换出）：逐页补
-                  for (size_t o = seg_off; o < seg_end; o += 0x1000) {
-                    SIZE_T pg = 0;
-                    const size_t m2 = std::min<size_t>(0x1000, seg_end - o);
-                    if (ReadProcessMemory(process,
-                                          reinterpret_cast<const void*>(peb_base + o),
-                                          img.bytes.data() + o, m2, &pg) &&
-                        pg == m2) {
-                      done += pg;
-                      if (o + m2 > reach) reach = o + m2;
-                    }
-                  }
-                }
-              }
-              at = seg_end;
-            }
-            if (done >= 0x10000 && reach > 0) {
-              img.bytes.resize(reach);
-              img.committed_bytes = done;
-              out.push_back(std::move(img));
             }
           }
         }
+        at = seg_end;
+      }
+      if (done >= 0x10000 && reach > 0) {
+        img.bytes.resize(reach);
+        img.committed_bytes = done;
+        out.push_back(std::move(img));
       }
     }
   }
@@ -296,6 +302,8 @@ std::vector<ScannedImage> scan_process_images(HANDLE process, size_t max_bytes) 
     // 因为 PEB 那块可能有未提交页，区域视图能补齐。
     if (!out.empty() && r.base >= out[0].base && r.base + r.size <= out[0].base + out[0].size)
       continue;
+    // 与选定映像同基址的区域一律不再重复收集（它们就是同一份东西的切片）
+    if (!out.empty() && r.base == out[0].base) continue;
     // 放宽：MEM_MAPPED 且大小 >= 256KB 也算候选（原来要 1MB，
     // 这个客户端的模块被切成小段时会被整体漏掉）
     const bool looks_like_image =

@@ -38,7 +38,8 @@ struct SelfContainedReport {
   size_t missing = 0;            // 解析不出来的
   size_t ambiguous = 0;          // 重名、无法确定（拒绝）
   size_t duplicates = 0;         // 同一 id 多个本地文件，已各留一条
-  size_t by_exact = 0;
+  size_t by_exact = 0;      // 精确（含补上游戏前缀）
+  size_t by_prefix = 0;     // 其中有多少条是靠「补上 character/ 这类前缀」命中的
   size_t by_hd = 0;
   size_t by_name = 0;
   std::vector<ModEntry> entries;

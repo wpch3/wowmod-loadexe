@@ -445,7 +445,7 @@ void do_scan() {
 void do_download() {
   const std::string out = wowmod::join_path(g_state_dir, "wow-listfile.csv");
   start_job([out]() {
-    wowmod::logf("=== 开始下载 listfile（约 72 MB，只需一次）===");
+    wowmod::logf("=== 开始下载 listfile（约 150 MB，只需一次）===");
     set_status("正在下载 listfile ...");
     auto res = wowmod::win::fetch_listfile(out, [](const wowmod::win::FetchProgress& p) {
       if (p.total && g_progress) {
@@ -690,8 +690,14 @@ void do_launch() {
       wowmod::logf("[失败] %s", r.error.c_str());
       wowmod::logf("本次没有在客户端留下可用的模组加载器。");
       set_status("安装失败：" + r.error);
-      // 失败时不要留一个"看起来在跑但没装好"的客户端在那儿
-      TerminateProcess(pi.hProcess, 0);
+      // 【绝不能 TerminateProcess】
+      //
+      // 之前这里杀进程，用户看到的现象就是「游戏刚起来就闪退」——
+      // 他会以为加载器把客户端弄崩了，而实际上是我们自己把它杀掉的。
+      // 而且失败的安装本来就没写入任何东西，客户端是干净的，
+      // 让它继续跑，用户可以直接在游戏里试、也可以关掉重来。
+      wowmod::logf("客户端保持运行（本次没有改动它的任何字节）。"
+                   "你可以直接进游戏，或关掉它重试。");
       CloseHandle(pi.hThread);
       CloseHandle(pi.hProcess);
       end_job();

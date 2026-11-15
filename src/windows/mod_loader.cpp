@@ -266,7 +266,12 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
         }
       }
     }
-    const auto probe = dump_module_full(process, "", "");
+    // 注意：这里【不能】每轮再整块读一遍 176 MB 做解密进度采样。
+    // 一轮已经读了 100~250 MB（scan_arctium_signatures 内部要读整幅映像），
+    // 再加一次光是搬运就是几百 MB/轮；实测 5 轮之后客户端就没了。
+    // 采样只在「还需要判断解密进度」时做，并且跳过纯区域级统计。
+    const auto probe = (init_round == 0) ? dump_module_full(process, "", "")
+                                         : ModuleDump{};
     if (probe.text_checked) {
       best_low = probe.text_low_entropy;
       last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
@@ -287,7 +292,16 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       break;
     }
     if (GetTickCount() - t0 > wait_ms) break;
-    ::Sleep(2000);
+    // 轮间退避：一轮要跨进程读整幅映像（176 MB 级别），
+    // 每 2 秒一次等于持续给客户端加压 —— 实测 5 轮之后客户端就没了。
+    // 改成递增（2s, 3s, 4.5s, 6.75s …，上限 8s），把总读取量压下来，
+    // 同时仍然每轮都在观察，不会错过窗口。
+    {
+      DWORD backoff = 2000;
+      for (int k = 0; k < init_round && backoff < 8000; ++k) backoff = backoff * 3 / 2;
+      if (backoff > 8000) backoff = 8000;
+      ::Sleep(backoff);
+    }
     ++init_round;
   }
   if (!ready) {
@@ -324,8 +338,13 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
 
   const DWORD scan_t0 = GetTickCount();
   int scan_round = 0;
+  uint64_t last_image_base = 0;
+  size_t last_image_size = 0, last_image_read = 0;
   for (;;) {
     const auto sig = scan_arctium_signatures(process, "", {"Init", "CustomFileIdHook"});
+    last_image_base = sig.main_image_base;
+    last_image_size = sig.main_image_size;
+    last_image_read = sig.main_image_read;
     int round_best = 0;
     bool round_rx = false;
     uint64_t round_target = 0;
@@ -368,11 +387,16 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     ++scan_round;
   }
   if (!target || !best_rx) {
-    r.error = "CustomFileIdHook 在等待期内始终没有可执行命中（最佳语义分 " +
-              std::to_string(best) + "/8, 需要 >= " + std::to_string(kNeedScore) +
-              "/8）。含义：本轮扫过的字节里不含这段代码 —— 要么扫描范围没覆盖到"
-              "代码段（看上面每轮的 MB 数），要么目标函数所在页还没被解密。"
-              "这不是需要你操作的事，是加载器自己的覆盖/时序问题。";
+    // 这句提示必须"能据此判断下一步"，而不是让人反复重跑。
+    // 关键信息：扫的是哪一块、声明多大、实际读到多少、命中几处。
+    r.error = "等待期内没能定位 CustomFileIdHook 的可执行命中（最佳语义分 " +
+              std::to_string(best) + "/8，需要 >= " + std::to_string(kNeedScore) +
+              "/8）。映像 0x" + to_hex(last_image_base, 16) + "，SizeOfImage " +
+              std::to_string(last_image_size / 1048576) + " MB，实际读到 " +
+              std::to_string(last_image_read / 1048576) + " MB。"
+              "如果「实际读到」明显小于「SizeOfImage」，是读取覆盖问题；"
+              "如果两者接近但 0 命中，说明这段代码不在这份映像里（客户端把它放在别处）"
+              "或所在页还没被解密。";
     return r;
   }
   if (best < kNeedScore) {

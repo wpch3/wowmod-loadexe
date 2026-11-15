@@ -43,11 +43,16 @@ struct FetchResult {
 // 下载 listfile 到 out_path。
 //
 // 策略（按顺序尝试，第一个成功的就用）：
-//   1. GitHub release 的 verified-listfile.csv  —— 已核验子集，72 MB，
-//      覆盖所有真实游戏资源，假阳性最低
-//   2. GitHub release 的 community-listfile.csv —— 完整版，147 MB
+//   1. GitHub release 的 verified-listfile.csv / community-listfile.csv
+//      —— 一个文件、一次请求，最省事
+//   2. API 直链的 parts/*.csv，逐个下完再合并
+//      —— release 的下载会 302 到 objects.githubusercontent.com，
+//         国内网络经常 403/超时（实测用户日志就是 4 次 HTTP 403）。
+//         而 parts/*.csv 和 api.github.com 同源，API 能通就能下，
+//         所以必须有这条备用通路，否则用户会卡在"下载失败"。
+//         格式与发布页 CSV 完全相同（id;路径），合并后可直接喂给解析器。
 //
-// 都失败时返回 error，里面写明每一步的 HTTP 状态，便于用户判断是
+// 两条都失败时返回 error，里面写明每一步的 HTTP 状态，便于判断是
 // "网络/代理问题" 还是 "上游换了地址"。
 FetchResult fetch_listfile(const std::string& out_path,
                            std::function<void(const FetchProgress&)> on_progress);

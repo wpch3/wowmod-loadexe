@@ -222,13 +222,17 @@ SigScanResult scan_arctium_signatures(HANDLE process, const std::string& exe_pat
   out.images = scan_process_images(process);
   const auto& images = out.images;
   out.images_scanned = images.size();
-  // 主映像 = 最大那一块（PEB 整块读出来的那个一定最大）
-  for (const auto& img : images) {
-    if (img.size > out.main_image_size) {
-      out.main_image_size = img.size;
-      out.main_image_base = img.base;
-      out.main_image_read = img.bytes.size();
-    }
+  // 主映像 = scan_process_images 选定的那一份（第 0 项）。
+  //
+  // 这里【不能】再"取最大那块"：实测日志里这个数字随轮次从 108 MB 跳到
+  // 256 MB，而 SizeOfImage 是 PE 头里的定值、不可能变化。
+  // 也就是说当时选错了对象 —— 报出来的不是客户端映像。
+  // scan_process_images 现在保证第 0 项是 PEB/PE 头确认过的映像，
+  // 它的 size 就是 SizeOfImage，bytes 是实际读到的量。
+  if (!images.empty()) {
+    out.main_image_size = images[0].size;
+    out.main_image_base = images[0].base;
+    out.main_image_read = images[0].bytes.size();
   }
 
   // 每个特征码挑「命中次数最少」的那个映像作为可用目标；次数相同取最大映像。

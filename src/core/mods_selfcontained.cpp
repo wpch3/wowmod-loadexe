@@ -102,6 +102,34 @@ std::string strip_to_game_prefix(const std::string& rel) {
   return "";
 }
 
+// 一条磁盘相对路径 -> 若干「可能对应的游戏内路径」。
+//
+// 为什么不能只算一条：模组目录常常【本身就是】游戏前缀目录。
+// 用户实测：他选的是 ...\_midnight_\Character，
+// 里面的文件是 BloodElf/Female/bloodelffemale_hd_skin_color_3500114.blp。
+// 相对于他选的目录，路径里根本没有 "character" 这一段，
+// 于是精确匹配一条都命中不了（日志：精确 0 / 文件名 797）。
+// 而 listfile 里存的是 character/bloodelf/female/...。
+//
+// 所以这里对每条文件都额外尝试「补上某个已知前缀」的形态。
+// 14 次哈希查找而已，代价可以忽略，但能把精确率从 0 拉回来。
+std::vector<std::string> candidate_keys(const std::string& rel) {
+  std::vector<std::string> out;
+  const std::string low = norm_key(rel);
+  if (low.empty()) return out;
+  out.push_back(low);
+  // 已经以某个前缀开头就不必再补
+  for (const char* p : kPrefixes) {
+    if (low.rfind(p, 0) == 0) return out;
+  }
+  for (const char* p : kPrefixes) {
+    std::string name(p);
+    if (!name.empty() && name.back() == '/') name.pop_back();
+    out.push_back(name + "/" + low);
+  }
+  return out;
+}
+
 struct ListfileTable {
   std::unordered_map<std::string, uint64_t> by_key;    // 归一化路径 -> id
   std::unordered_map<std::string, std::string> path_of; // 归一化路径 -> 官方写法
@@ -223,17 +251,21 @@ SelfContainedReport build_selfcontained_mods(const std::string& mods_dir,
     }
     const std::string key = norm_key(rel);
 
-    // 精确匹配
+    // 精确匹配（含「补上游戏前缀」的候选）
     uint64_t id = 0;
     std::string official;
     const char* how = nullptr;
-    auto it = lf.by_key.find(key);
-    if (it != lf.by_key.end()) {
-      id = it->second;
-      official = lf.path_of[key];
+    for (const auto& cand : candidate_keys(rel)) {
+      auto itc = lf.by_key.find(cand);
+      if (itc == lf.by_key.end()) continue;
+      id = itc->second;
+      official = lf.path_of[cand];
       how = "exact";
+      if (cand != key) ++rep.by_prefix;
       ++rep.by_exact;
-    } else {
+      break;
+    }
+    if (!id) {
       // _HD 变体
       if (key.size() > 4 && key.compare(key.size() - 4, 4, ".blp") == 0) {
         const std::string stem = key.substr(0, key.size() - 4);
@@ -300,7 +332,12 @@ SelfContainedReport build_selfcontained_mods(const std::string& mods_dir,
 
     ModEntry e;
     e.file_data_id = id;
-    e.game_path = normalize_game_path(rel);
+    // game_path 是【客户端认的路径】，必须和 id 来自同一个 listfile 键。
+    // 早先这里用 normalize_game_path(rel)（纯磁盘相对路径），
+    // 于是在"模组目录本身就是 Character"的情况下，
+    // id 是 character/bloodelf/... 而 game_path 却是 bloodelf/...，
+    // 两条 LoadByFilePath 通路对不上，模组自然不生效。
+    e.game_path = official.empty() ? normalize_game_path(rel) : norm_key(official);
     e.local_path = abs;
     e.file_exists = true;
     rep.entries.push_back(std::move(e));
