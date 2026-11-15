@@ -1906,6 +1906,60 @@ static void test_readiness_criteria_on_real_log() {
   CHECK_EQ(kRounds[0].hits, 0);
 }
 
+// 这次线上失败链路上剩下的两个「自己卡自己」的关卡。
+//
+// 用户 2026-11-15 第二次实测日志：
+//   hook 目标 0x6ea06a0（语义分 0/8，命中页原本不可执行）
+//   anti-crash 规划基于映像 0x00000000ffff0000，SizeOfImage 256 MB
+//   [失败] NoJump 无法安全安装: 没有任何一条可以安全安装的分支补丁
+//
+// 两个独立缺陷：
+//   A) anticrash.cpp 里在取到 images[0] 之后，又有一行
+//      "if (img.size > main_img->size) main_img = &img;" 把它覆盖成最大那块，
+//      于是规划用的是 256 MB 假映像（0xffff0000），一条校验点都找不到。
+//   B) arctium_patch.cpp 先按「必须在可执行页上」筛命中，筛空即拒绝；
+//      而壳初始化阶段 .text 是 RW，此刻不可执行完全正常。Arctium 从不看这个。
+static void test_no_self_inflicted_gates() {
+  group("no_self_inflicted_gates");
+  auto slurp = [](const char* p) {
+    std::string s;
+    std::ifstream in(p, std::ios::binary);
+    if (in) s.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return s;
+  };
+
+  // A) anticrash 必须只用 images[0]
+  const std::string ac = slurp("src/windows/anticrash.cpp");
+  CHECK(!ac.empty(), "应能读到 anticrash.cpp");
+  if (!ac.empty()) {
+    // 不搜源码文本（注释里引用旧代码就会误报），而是检查一个结构性事实：
+    // 取 main_img 之后到使用它之间，不能出现任何重新赋值给 main_img 的循环。
+    // 这里用「images 里出现 main_img = 」这种可执行赋值模式来判断。
+    CHECK(ac.find("main_img = &img;") == std::string::npos,
+          "anticrash 不能再把 main_img 重新指向别的映像（max-size 覆盖）");
+    CHECK(ac.find("const ScannedImage* main_img = &images[0];") != std::string::npos,
+          "anti-crash 必须基于 scan_process_images 选定的第 0 项");
+  }
+
+  // B) NoJump 规划：离线确证 RVA 必须先于页属性判断
+  const std::string ap = slurp("src/windows/arctium_patch.cpp");
+  CHECK(!ap.empty(), "应能读到 arctium_patch.cpp");
+  if (!ap.empty()) {
+    const size_t rva_block = ap.find("离线确证的 RVA 是最高证据");
+    const size_t cand_block = ap.find("std::vector<size_t> candidates;");
+    CHECK(rva_block != std::string::npos, "必须有一段按 known_rva 优先采纳的逻辑");
+    CHECK(cand_block != std::string::npos, "应有 candidates 筛选段");
+    if (rva_block != std::string::npos && cand_block != std::string::npos) {
+      CHECK(rva_block < cand_block,
+            "known_rva 判定必须【早于】candidates/页属性筛选，"
+            "否则「命中页不可执行」会再次把已确证的 RVA 拒掉");
+    }
+    // 候选集不能再被 executable 过滤
+    CHECK(ap.find("if (hits[i].executable) candidates.push_back(i);") == std::string::npos,
+          "candidates 不能再按 executable 过滤 —— 壳初始化阶段 .text 是 RW");
+  }
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -2757,6 +2811,7 @@ int main() {
   test_cert_patches();
   test_image_select();
   test_readiness_criteria_on_real_log();
+  test_no_self_inflicted_gates();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

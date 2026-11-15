@@ -32,9 +32,22 @@ AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches) {
         "这种情况下 anti-crash 无从规划 —— 不是「本版本没有这些校验」。";
     return plan;
   }
+  // 【这里曾经有一处致命逻辑，必须记录】
+  //
+  // 旧代码在取到 images[0] 之后，又用一个 max-size 循环重新指向了
+  // 「尺寸最大的那块内存」，把它覆盖掉了（具体写法见本文件 git 历史）。
+  //
+  // 上面刚把 images[0] 修成「PEB + PE 头确认过的客户端映像」，
+  // 这三行立刻又把它覆盖成「size 最大的那块」—— 也就是那个假映像。
+  // 线上实测证据：
+  //     anti-crash 规划基于映像 0x00000000ffff0000，SizeOfImage 256 MB
+  // 而同一轮里 hook 目标是 0x6ea06a0（= base + 0x33E06A0，真映像内）。
+  // 两个数字来自【完全不同的映像】，所以 anti-crash 一条校验点都找不到，
+  // 报告就写成「本版本可能没有这些校验」—— 完全是假原因。
+  //
+  // 现在只用 images[0]。它由 scan_process_images 用 PEB 基址 +
+  // PE 头 SizeOfImage 自洽性选出，是唯一可信的那一份。
   const ScannedImage* main_img = &images[0];
-  for (const auto& img : images)
-    if (img.size > main_img->size) main_img = &img;
   if (main_img->bytes.size() < 0x1000) {
     plan.error = "映像内容不可读（读到 " + std::to_string(main_img->bytes.size()) + " 字节）";
     return plan;

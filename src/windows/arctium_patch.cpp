@@ -357,10 +357,45 @@ BranchPatchReport plan_branch_patches(HANDLE process,
     //   2. 都排除后仍有多处 → 用「命中处前 16 字节上下文」分组：
     //      上下文完全一致说明是同一份代码的多个副本，可用；不一致说明是
     //      不同函数撞了同一串字节，必须拒绝。
-    std::vector<size_t> candidates;
-    for (size_t i = 0; i < hits.size(); ++i) {
-      if (hits[i].executable) candidates.push_back(i);
+    // ---- 离线确证的 RVA 是最高证据，先于任何页属性判断 ----
+    //
+    // 【这里曾经是致命错误】
+    //
+    // 旧代码先按“必须在可执行页上”筛一遍，筛空了就直接拒绝：
+    //     if (candidates.empty()) { p.error = "命中处都不在可执行页上，拒绝安装"; }
+    // 用户实测日志：
+    //     hook 目标 ...（语义分 0/8，命中页原本不可执行...）
+    //     [失败] NoJump 无法安全安装: 没有任何一条可以安全安装的分支补丁
+    //
+    // 也就是说：离线 dump 里逐字节确证过的 RVA（0x33d7976 / 0x33d7b58）
+    // 明明已经点名成功，却因为“当时那页不可执行”被整条拒掉。
+    //
+    // Arctium 根本不看页属性：它 FindPattern 找到就 QueuePatch。
+    // 壳在初始化阶段会把 .text 映射成 RW，执行到才临时翻成 RX，
+    // 所以“此刻不可执行”完全正常 —— 它根本不是“这条路不对”的证据。
+    //
+    // 判据改成：RVA 精确吻合（离线双重确证）> 页属性。
+    if (s.known_rva != 0) {
+      std::vector<size_t> by_rva_all;
+      for (size_t i = 0; i < hits.size(); ++i)
+        if (hits[i].offset_in_image == s.known_rva) by_rva_all.push_back(i);
+      if (by_rva_all.size() == 1) {
+        const RawHit& h = hits[by_rva_all[0]];
+        p.match_va = h.va;
+        p.patch_va = p.match_va + static_cast<uint64_t>(p.patch_offset);
+        p.rva_in_image = h.offset_in_image;
+        p.image_base = h.image_base;
+        p.used_strong = used_strong;
+        p.matched_known_rva = true;
+        p.executable_copy = h.executable;
+        verify_and_fix_hits(process, images, &p);
+        rep.patches.push_back(p);
+        continue;
+      }
     }
+
+    std::vector<size_t> candidates;
+    for (size_t i = 0; i < hits.size(); ++i) candidates.push_back(i);
     if (candidates.empty()) {
       p.error = "命中处都不在可执行页上，拒绝安装";
       rep.patches.push_back(p);
