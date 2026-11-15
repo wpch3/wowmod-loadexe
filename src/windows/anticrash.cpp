@@ -4,6 +4,7 @@
 #include "windows/anticrash.hpp"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "wowmod/util.hpp"
@@ -67,15 +68,54 @@ bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan) {
     std::string err;
     DWORD old = 0;
     const size_t len = p.bytes.size();
-    if (!VirtualProtectEx(process, reinterpret_cast<void*>(p.va), len,
+
+    // 【VirtualProtectEx 的硬性要求，曾经写错】
+    //   * lpAddress 必须是页对齐地址
+    //   * dwSize 必须覆盖到「从该地址到该页末尾」的整个范围
+    // 我过去直接传 (p.va, len) —— p.va 中途、len=5，都会被判
+    // ERROR_INVALID_PARAMETER(87)。线上实测正是 87 失败。
+    //
+    // 正确做法：把地址按页下舍、把长度扩到覆盖这一页（甚至跨页时覆盖全部）。
+    const uint64_t page_mask = 0xFFF;
+    const uint64_t va_page = p.va & ~page_mask;
+    const uint64_t end = p.va + len;
+    const uint64_t end_page = (end + page_mask) & ~page_mask;
+    const size_t prot_len = static_cast<size_t>(end_page - va_page);
+
+    // 写前确认：这一页确实处在客户端映像范围内、且已提交。
+    //
+    // 只靠"规划时算出来的地址"不够 —— 一次错误的命中也会给出一个
+    // 看起来合理的地址，然后在 VirtualProtectEx 处以 87 失败。
+    // 先问内核这块内存是什么，能立刻区分「地址错」与「权限问题」。
+    {
+      MEMORY_BASIC_INFORMATION mbi;
+      std::memset(&mbi, 0, sizeof(mbi));
+      if (!VirtualQueryEx(process, reinterpret_cast<LPCVOID>(p.va), &mbi, sizeof(mbi))) {
+        plan->notes.push_back("跳过 @" + p.name + "：VirtualQueryEx 失败 (err=" +
+                             std::to_string(GetLastError()) + ")");
+        continue;
+      }
+      if (mbi.State != MEM_COMMIT) {
+        plan->notes.push_back("跳过 @" + p.name + "：该地址未提交 (State=0x" +
+                             to_hex(mbi.State, 8) + ")");
+        continue;
+      }
+      plan->notes.push_back("  " + p.name + ": 页 0x" + to_hex(va_page, 16) +
+                           " State=committed Type=0x" + to_hex(mbi.Type, 8) +
+                           " Protect=0x" + to_hex(mbi.Protect, 8));
+    }
+
+    if (!VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len,
                           PAGE_EXECUTE_READWRITE, &old)) {
-      plan->notes.push_back("VirtualProtectEx 失败 @" + p.name + ": GetLastError=" +
+      plan->notes.push_back("VirtualProtectEx 失败 @" + p.name + " (va=0x" +
+                           to_hex(p.va, 16) + ", 保护 0x" + to_hex(va_page, 16) +
+                           " 长度 " + std::to_string(prot_len) + "): GetLastError=" +
                            std::to_string(GetLastError()));
       continue;
     }
     const bool ok = write_remote(process, p.va, p.bytes.data(), len, &err);
     DWORD tmp = 0;
-    VirtualProtectEx(process, reinterpret_cast<void*>(p.va), len, old, &tmp);
+    VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len, old, &tmp);
     if (!ok) {
       plan->notes.push_back("写入失败 @" + p.name + ": " + err);
       continue;

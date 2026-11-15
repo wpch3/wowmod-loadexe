@@ -1960,6 +1960,66 @@ static void test_no_self_inflicted_gates() {
   }
 }
 
+// anti-crash / NoJump 的坐标原点必须唯一。
+//
+// 用户 2026-11-15 第三次实测日志：
+//   anti-crash 规划: remap 校验 1 处, 跳转补丁 1 条        <- 终于找对了映像
+//   规划基于映像 0x0000000003b30000, SizeOfImage 108 MB     <- 正确基址
+//   hook 目标 0x0000000006f106a0                            <- base + 0x33E06A0
+//   VirtualProtectEx 失败 @jmp_rel32@108975995: err=87
+//   [失败] NoJump 无法安全安装
+//
+// 两件事：
+//   A) VirtualProtectEx 要求页对齐地址 + 覆盖整页。传 (中途地址, 5) 必得 87。
+//   B) 补丁搜索必须只在 images[0]（确认的客户端映像）里做，否则别的区域
+//      也能命中同一串字节，得到"看着合理"的假地址。
+static void test_single_image_origin_and_protect() {
+  group("single_image_origin");
+
+  auto slurp = [](const char* p) {
+    std::string s;
+    std::ifstream in(p, std::ios::binary);
+    if (in) s.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return s;
+  };
+
+  // A) VirtualProtectEx 必须按页对齐 + 覆盖整页
+  const std::string ac = slurp("src/windows/anticrash.cpp");
+  CHECK(!ac.empty(), "应能读到 anticrash.cpp");
+  if (!ac.empty()) {
+    CHECK(ac.find("va_page") != std::string::npos,
+          "VirtualProtectEx 前必须把地址按页下舍（va_page）");
+    CHECK(ac.find("page_mask") != std::string::npos, "必须有页掩码计算");
+    CHECK(ac.find("VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len") !=
+              std::string::npos,
+          "VirtualProtectEx 必须用页对齐地址 + 整页长度");
+    // 不能再用 (p.va, len) 直接调
+    CHECK(ac.find("VirtualProtectEx(process, reinterpret_cast<void*>(p.va), len") ==
+              std::string::npos,
+          "不能再把 (p.va, len) 直接传给 VirtualProtectEx —— 那是 err=87 的原因");
+  }
+
+  // B) NoJump 规划只能搜 images[0]
+  const std::string ap = slurp("src/windows/arctium_patch.cpp");
+  CHECK(!ap.empty(), "应能读到 arctium_patch.cpp");
+  if (!ap.empty()) {
+    CHECK(ap.find("const std::vector<ScannedImage> images = {all_images[0]};") !=
+              std::string::npos,
+          "NoJump 必须只搜确认的客户端映像 images[0]，"
+          "否则会在别的区域命中同一串字节、算出假地址");
+  }
+
+  // 页对齐算例（用日志里的真实 VA）
+  const uint64_t va = 108975995ULL;
+  const uint64_t mask = 0xFFF;
+  const uint64_t va_page = va & ~mask;
+  const uint64_t end_page = (va + 5 + mask) & ~mask;
+  CHECK_EQ(va_page % 0x1000, 0ULL);
+  CHECK(va_page <= va, "页起点必须在 VA 之前");
+  CHECK(va + 5 <= end_page, "保护范围必须覆盖补丁字节");
+  CHECK_EQ(end_page - va_page, 0x1000ULL);
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -2812,6 +2872,7 @@ int main() {
   test_image_select();
   test_readiness_criteria_on_real_log();
   test_no_self_inflicted_gates();
+  test_single_image_origin_and_protect();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

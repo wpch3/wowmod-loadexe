@@ -146,8 +146,20 @@ AntiCrashPlan plan_anti_crash_from_image(const std::vector<uint8_t>& image, uint
           continue;
         }
 
+        // 坐标系说明（我一度误判这里有 bug，记录清楚避免再折腾）：
+        //
+        // Arctium: var jumpToValue = a + operandValue + 4;   // a 是 RVA
+        // 我们:    jump_to_value   = image_base + a + operand_value + 4;
+        //
+        // 看起来"多加了 image_base"，但后面比较的是
+        //     jump_size = jump_to_value - (image_base + i) - 6
+        // 基址在减法里完全抵消，两种写法**数学等价**（已用构造用例证明）。
+        // 所以这里保留加基址的写法，只是为了和下面的减法一致、便于阅读，
+        // 它并不是 0x67ED77B 那个地址的来源。
+        //
+        // 真正的原因是 VirtualProtectEx 的调用方式（见 anticrash.cpp）。
         const uint64_t jump_to_value =
-            image_base + a + static_cast<uint64_t>(operand_value) + 4;
+            image_base + static_cast<uint64_t>(a) + static_cast<uint64_t>(operand_value) + 4;
 
         // 全映像搜索：跳转目标正好是 jump_to_value 的跳转。
         //

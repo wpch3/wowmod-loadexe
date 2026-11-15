@@ -205,11 +205,26 @@ BranchPatchReport plan_branch_patches(HANDLE process,
                                       const std::map<std::string, uint32_t>& rva_override) {
   BranchPatchReport rep;
 
-  const auto images = scan_process_images(process);
-  if (images.empty()) {
+  const auto all_images = scan_process_images(process);
+  if (all_images.empty()) {
     rep.error = "没有扫到任何可执行映像（客户端可能还没解密完）";
     return rep;
   }
+
+  // 【只在确认的客户端映像里搜，这是本轮的根因修复】
+  //
+  // scan_process_images 的第 0 项是 PEB 基址 + PE 头 SizeOfImage 自洽选出的
+  // 唯一可信映像；其余项是进程里的别的区域（堆、映射视图、壳的临时缓冲）。
+  //
+  // 旧代码对【全部映像】跑 find_all。后果：同一串字节在别的区域里也能命中，
+  // 得到一个"看起来在映像内"的绝对地址，于是
+  //     anti-crash 报 jmp_rel32@108975995
+  //     VirtualProtectEx 该地址 -> ERROR_INVALID_PARAMETER(87)
+  // 因为那个地址根本不是真实的指令位置。
+  //
+  // Arctium 全程只操作 memory.Data —— 就是主模块那一份。
+  // 我们照做：只搜 images[0]，与 hook/anti-crash 用同一个坐标原点。
+  const std::vector<ScannedImage> images = {all_images[0]};
 
   // 主模块基址：报告里给出，方便把 RVA 换算成绝对地址核对。
   {
