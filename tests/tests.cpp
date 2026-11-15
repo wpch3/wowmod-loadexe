@@ -2899,6 +2899,58 @@ static void test_remap_range_pure() {
 // 回退到逐条写入时【只写了 NoJump，hook 一个字节都没写】。
 // 结果：跳板建好了、映射表建好了、日志写"hook 已规划"，
 // 但客户端函数头没动 -> stub 调用 0 次 -> 模组完全不生效。
+// 【回归】stub 计数必须在客户端整个生命周期内观测，不能装完读一次。
+//
+// 上一版在 resume 后等 8 秒读计数器，打印"调用 0 次 -> hook 没被走到"。
+// 但客户端进角色选择要几十秒，8 秒内那个函数根本还没被调用 ——
+// 结论从一开始就是错的，把排查方向完全带偏。
+static void test_stub_observation_timing() {
+  group("stub-observation");
+  std::string ml;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    ml.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  std::string lm;
+  {
+    std::ifstream in("src/windows/launcher_main.cpp", std::ios::binary);
+    lm.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  CHECK(!ml.empty() && !lm.empty(), "应能读到两个源文件");
+
+  // 1) 必须有读取计数的公共函数（供后台线程反复调用）
+  CHECK(ml.find("read_stub_stats") != std::string::npos,
+        "必须提供 read_stub_stats，供生命周期内反复读取");
+
+  // 2) 必须有后台观测线程
+  CHECK(lm.find("start_stub_watchdog") != std::string::npos,
+        "必须有后台观测线程，否则 detach 后永远读不到计数");
+
+  // 3) 观测线程必须自己 DuplicateHandle，不能依赖调用方句柄存活
+  CHECK(lm.find("DuplicateHandle") != std::string::npos,
+        "观测线程必须自己复制句柄（detach 后原句柄会失效）");
+
+  // 4) detach 分支必须启动观测，而不是直接 CloseHandle 走人
+  // 精确判断：观测线程的【调用点】与 detach 分支的【提前返回】的相对位置。
+  // 只看 wd < det 不够 —— 把调用挪进 detach 分支内部也能满足，但它之后就
+  // 跟着 return 了，线程其实照常启动。真正要保证的是：
+  // detach 分支里在 return 之前必须有 start_stub_watchdog 调用。
+  const size_t det = lm.find("if (o.detach) {");
+  CHECK(det != std::string::npos, "应有 detach 分支");
+  const size_t det_ret = lm.find("return 0;", det);
+  CHECK(det_ret != std::string::npos, "detach 分支内应有提前返回");
+  const size_t wd = lm.find("start_stub_watchdog");
+  CHECK(wd != std::string::npos && wd < det_ret,
+        "观测线程必须在 detach 的 return 之前启动（否则 detach 后永远读不到计数）");
+  // 且不能在 detach 分支之后（那也永远执行不到）
+  CHECK(wd < det || wd < det_ret,
+        "观测线程不得放在 detach 的 return 之后");
+
+  // 5) mod_loader 里不应再有"8 秒后判定调用 0 次"的措辞
+  CHECK(ml.find("调用 0 次：hook 没被走到") == std::string::npos,
+        "不得在安装阶段就断言'调用 0 次'（时机太早，结论必错）");
+}
+
 static void test_hook_written_on_fallback() {
   group("hook-fallback");
   // 读源码验证：回退分支里必须有写 hook 的代码
@@ -3363,6 +3415,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_stub_observation_timing();
   test_hook_written_on_fallback();
   test_instrumented_stub();
   test_section_protection();

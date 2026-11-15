@@ -424,4 +424,18 @@ std::string Diagnostics::render(bool color) const {
   return out;
 }
 
+bool append_text_file(const std::string& p, const std::string& text, std::string* err) {
+  std::ofstream out(p, std::ios::binary | std::ios::app);
+  if (!out) {
+    if (err) *err = "无法以追加方式打开 " + p;
+    return false;
+  }
+  out.write(text.data(), static_cast<std::streamsize>(text.size()));
+  if (!out) {
+    if (err) *err = "写入失败 " + p;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace wowmod

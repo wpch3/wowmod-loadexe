@@ -52,6 +52,8 @@ bool dir_exists(const std::string& p);
 bool read_text_file(const std::string& p, std::string* out, std::string* err);
 bool read_binary_file(const std::string& p, std::vector<uint8_t>* out, std::string* err);
 bool write_text_file(const std::string& p, const std::string& text, std::string* err);
+// 追加一行到文件末尾（不存在则创建）。用于后台观测线程边跑边记。
+bool append_text_file(const std::string& p, const std::string& text, std::string* err);
 // 递归列出普通文件（相对 root 的路径，使用 '/' 分隔），按字典序返回。
 std::vector<std::string> list_files_recursive(const std::string& root, std::string* err);
 uint64_t file_size(const std::string& p);

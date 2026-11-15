@@ -1249,23 +1249,23 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     }
   }
 
-  // ---- 7. 存活验证：resume 之后立刻看客户端还在不在 ----
+  // ---- 7. 存活验证（只判"有没有立刻死"，不判模组是否生效）----
   //
-  // 【为什么必须做】
+  // 【这里以前错得离谱，必须写清楚】
   //
-  // 上一版 remap 把整个 108 MB 设成 PAGE_EXECUTE_READ，.data 变成只读。
-  // 客户端一写全局变量就访问违例，窗口都不出 —— 而我们的日志照样
-  // 打印 "已恢复进程，客户端可以继续运行" + "安装成功"，完全没发现
-  // 进程已经死了。用户看到的是"点了没反应"，日志却是绿色的。
+  // 我曾在 resume 后等 8 秒读 stub 计数器，然后据此打印
+  //     "stub 观测: 调用 0 次 -> hook 没被走到"
+  // 但客户端从启动到进入角色选择界面要几十秒。8 秒内那个函数
+  // 【根本还没被调用过】。也就是说"0 次"这个结论从一开始就是错的，
+  // 它把排查方向完全带偏（让我去怀疑 hook 点、去怀疑 id 表）。
   //
-  // 这里在 resume 后短暂等待并检查退出码。崩了就如实报出退出码，
-  // 并且明确指出是补丁链的哪一环导致的。
+  // 正确的观测方式：计数器留在客户端内存里，由调用方在整个游戏
+  // 生命周期内持续监测，客户端退出时报告【累计值】。
+  // 这里只做一件事：确认客户端没有立刻死。
   {
     bool alive = true;
     DWORD code = 0;
-    // 等 8 秒而不是 3 秒：客户端要到角色选择界面才开始按 FileDataID
-    // 取资源，3 秒内 stub 很可能还没被调用过，会得出"调用 0 次"的错误结论。
-    for (int i = 0; i < 32; ++i) {          // 最多等约 8 秒
+    for (int i = 0; i < 20; ++i) {          // 约 5 秒，只用来抓"立刻崩"
       ::Sleep(250);
       if (!GetExitCodeProcess(process, &code)) break;
       if (code != STILL_ACTIVE) {
@@ -1275,39 +1275,31 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     }
     if (!alive) {
       r.error = "客户端在补丁写入后立即退出了（exit code 0x" + to_hex(code, 8) + "）。"
-                "这不是特征码问题 —— 是补丁链本身让客户端无法继续运行。"
-                "请把上面的 '重映射写入完成' 与 '按节设置保护' 两行发出来，"
-                "它们决定了是哪一环。";
+                "这不是特征码问题 —— 是补丁链本身让客户端无法继续运行。";
       step("[失败] 客户端已退出，退出码 0x" + to_hex(code, 8));
       return r;
     }
-    step("存活验证通过：客户端在补丁写入后 8 秒内未退出");
-
-    // ---- stub 观测：它到底被调用了吗？ ----
-    //
-    // 这是"模组不生效"唯一能直接定性的证据：
-    //   call == 0        -> hook 没生效（或这个函数根本不被走）
-    //   call > 0, hit == 0 -> hook 生效了，但 FileDataID 一个都没对上
-    //   hit > 0          -> 查表命中，问题在客户端是否使用返回值
-    if (r.call_counter_va && r.hit_counter_va) {
-      uint64_t calls = 0, hits = 0;
-      SIZE_T n1 = 0, n2 = 0;
-      ReadProcessMemory(process, reinterpret_cast<LPCVOID>(r.call_counter_va), &calls, 8, &n1);
-      ReadProcessMemory(process, reinterpret_cast<LPCVOID>(r.hit_counter_va), &hits, 8, &n2);
-      step("stub 观测（8 秒内）: 调用 " + std::to_string(calls) + " 次, 命中 " +
-           std::to_string(hits) + " 次");
-      if (calls == 0) {
-        step("  -> 调用 0 次：hook 没被走到。要么 hook 点不对，要么该函数在进角色选择前不会被调用。");
-      } else if (hits == 0) {
-        step("  -> 有调用但零命中：FileDataID 与表里 796 个 id 全不匹配（id 来源有问题）。");
-      } else {
-        step("  -> 有命中：查表已生效。若画面仍不变，问题在客户端未使用该返回值。");
-      }
+    step("存活验证通过：补丁写入后 5 秒内未退出");
+    if (r.call_counter_va) {
+      step("stub 观测点已就绪（@0x" + to_hex(r.call_counter_va, 16) +
+           "），客户端退出时会报告累计调用/命中次数");
     }
   }
 
   r.ok = true;
   return r;
+}
+
+StubStats read_stub_stats(HANDLE process, uint64_t call_counter_va, uint64_t hit_counter_va) {
+  StubStats st;
+  if (!process || !call_counter_va || !hit_counter_va) return st;
+  SIZE_T n1 = 0, n2 = 0;
+  const bool a = ReadProcessMemory(process, reinterpret_cast<LPCVOID>(call_counter_va), &st.calls,
+                                  sizeof(st.calls), &n1) && n1 == sizeof(st.calls);
+  const bool b = ReadProcessMemory(process, reinterpret_cast<LPCVOID>(hit_counter_va), &st.hits,
+                                  sizeof(st.hits), &n2) && n2 == sizeof(st.hits);
+  st.ok = a && b;
+  return st;
 }
 
 }  // namespace win

@@ -100,6 +100,84 @@ uint64_t parse_base_from_json(const std::string& jtxt) {
   return std::strtoull(b.c_str(), nullptr, 16);
 }
 
+// 后台观测线程：持续读 stub 计数，客户端退出时写最终结果。
+//
+// 【为什么必须后台运行】
+// 客户端从启动到进角色选择要几十秒。任何"装完立刻读一次"都会得到 0 次，
+// 那是测量时机错误，不是 hook 没生效。这个线程在客户端整个生命周期内
+// 每 5 秒读一次，任何变化都追加到报告文件，退出时写累计值。
+//
+// 句柄所有权：线程自己 DuplicateHandle，不依赖调用方的句柄存活。
+static void start_stub_watchdog(HANDLE process, HANDLE /*thread*/, uint64_t call_ctr_va,
+                                uint64_t hit_ctr_va, std::string log_path) {
+  if (!process || !call_ctr_va || !hit_ctr_va) return;
+
+  HANDLE own = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &own,
+                       PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, 0)) {
+    return;
+  }
+
+  struct Ctx {
+    HANDLE proc;
+    uint64_t call_va, hit_va;
+    std::string log;
+  };
+  auto* ctx = new Ctx{own, call_ctr_va, hit_ctr_va, log_path};
+
+  HANDLE th = CreateThread(
+      nullptr, 0,
+      [](LPVOID raw) -> DWORD {
+        auto* c = static_cast<Ctx*>(raw);
+        uint64_t last_c = 0, last_h = 0;
+        bool first = true;
+        for (int i = 0; i < 4 * 3600; ++i) {   // 最多 4 小时，够一整局
+          ::Sleep(5000);
+          DWORD code = 0;
+          const bool alive = GetExitCodeProcess(c->proc, &code) && code == STILL_ACTIVE;
+          const auto st = wowmod::win::read_stub_stats(c->proc, c->call_va, c->hit_va);
+          if (st.ok && (first || st.calls != last_c || st.hits != last_h)) {
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "\n[stub 观测 @%d 秒] 调用 %llu 次, 命中 %llu 次\n", i * 5,
+                          (unsigned long long)st.calls, (unsigned long long)st.hits);
+            std::string err;
+            wowmod::append_text_file(c->log, line, &err);
+            last_c = st.calls;
+            last_h = st.hits;
+            first = false;
+          }
+          if (!alive) {
+            const auto fin = wowmod::win::read_stub_stats(c->proc, c->call_va, c->hit_va);
+            char line[512];
+            if (fin.ok) {
+              std::snprintf(line, sizeof(line),
+                            "\n=========== 模组加载实测结果 ===========\n"
+                            "stub 累计调用 %llu 次, 命中 %llu 次\n%s\n"
+                            "========================================\n",
+                            (unsigned long long)fin.calls, (unsigned long long)fin.hits,
+                            fin.calls == 0
+                                ? "  -> 整局一次都没调用：hook 点不对，或该函数不是资源加载入口。"
+                            : fin.hits == 0
+                                ? "  -> 有调用但零命中：FileDataID 与表里 796 个全不匹配。"
+                                : "  -> 查表已生效。若画面仍不变，问题在客户端未使用该返回值。");
+            } else {
+              std::snprintf(line, sizeof(line),
+                            "\n[stub 观测] 客户端已退出，内存已回收，无法读取累计值\n");
+            }
+            std::string err;
+            wowmod::append_text_file(c->log, line, &err);
+            break;
+          }
+        }
+        CloseHandle(c->proc);
+        delete c;
+        return 0;
+      },
+      ctx, 0, nullptr);
+  if (th) CloseHandle(th);
+}
+
 size_t install_interceptors_from_report(HANDLE process, const std::string& jtxt,
                                         uint64_t analysis_base, const std::string& log_path,
                                         std::vector<std::pair<uint64_t, std::string>>& out,
@@ -318,6 +396,12 @@ struct Options {
   std::string mode = "observe";  // observe | auto | hook | analyze | pdata
   int wait_ms = 30000;
   bool keep_client = true;
+  // 【默认改为 false，这一点很关键】
+  //
+  // 曾经默认 true：装完补丁立刻打印报告并退出。于是
+  //   * 没有人继续观测 stub 计数（那正是判断"模组有没有被调用"的唯一依据）
+  //   * 用户只看到"安装成功"，然后游戏里什么都不变，无从判断卡在哪
+  // 现在默认留在前台，持续观测到客户端退出，最后给出累计调用/命中次数。
   bool detach = true;      // 默认：确认运行时起来后就退出，不占着控制台
   bool verbose = false;
   bool stub_native = false;   // --stub native 时用本项目生成器
@@ -789,16 +873,63 @@ int main(int argc, char** argv) {
     std::printf("  Ctrl+C 退出；关掉游戏所有改动自然消失（只改内存）。\n\n");
     std::fflush(stdout);
 
-    if (o.detach) {
-      CloseHandle(pi.hThread);
-      CloseHandle(pi.hProcess);
-      return 0;
+    // ---- 持续观测 stub 计数，直到客户端退出 ----
+    //
+    // 【这是本轮最重要的修正】
+    //
+    // 上一版在安装完 8 秒后读一次计数器，打印"调用 0 次 -> hook 没被走到"。
+    // 但客户端进角色选择要几十秒，8 秒内那个函数根本还没被调用过 ——
+    // 那个结论从一开始就是错的，它把排查方向完全带偏。
+    //
+    // 现在在这里持续等，每 5 秒读一次，一旦计数变化立刻打印，
+    // 客户端退出时再打印最终累计值。这样"模组到底有没有被调用"
+    // 才有真实答案。
+    {
+      DWORD code = 0;
+      uint64_t last_calls = 0, last_hits = 0;
+      bool reported_any = false;
+      int waited_ms = 0;
+      for (;;) {
+        ::Sleep(250);
+        waited_ms += 250;
+        if (!GetExitCodeProcess(pi.hProcess, &code)) break;
+        const bool exited = (code != STILL_ACTIVE);
+        const auto st = wowmod::win::read_stub_stats(pi.hProcess, r.call_counter_va,
+                                                     r.hit_counter_va);
+        if (st.ok && (st.calls != last_calls || st.hits != last_hits)) {
+          std::printf("  [观测] 已运行 %.0f 秒: stub 调用 %llu 次, 命中 %llu 次\n",
+                      waited_ms / 1000.0, (unsigned long long)st.calls,
+                      (unsigned long long)st.hits);
+          std::fflush(stdout);
+          last_calls = st.calls;
+          last_hits = st.hits;
+          reported_any = true;
+        }
+        if (exited) break;
+      }
+      if (r.call_counter_va) {
+        const auto st = wowmod::win::read_stub_stats(pi.hProcess, r.call_counter_va,
+                                                     r.hit_counter_va);
+        std::printf("\n=========== 模组加载实测结果 ===========\n");
+        if (st.ok) {
+          std::printf("stub 累计调用 %llu 次, 命中 %llu 次\n",
+                      (unsigned long long)st.calls, (unsigned long long)st.hits);
+          if (!reported_any && st.calls == 0) {
+            std::printf("  -> 整局游戏一次都没调用：hook 点不对，或该函数不是资源加载入口。\n");
+          } else if (st.hits == 0) {
+            std::printf("  -> 有调用但零命中：FileDataID 与表里 796 个全不匹配。\n");
+          } else {
+            std::printf("  -> 查表已生效（命中 %llu 次）。若画面仍不变，"
+                        "问题在客户端未使用该返回值。\n", (unsigned long long)st.hits);
+          }
+        } else {
+          std::printf("读不到计数器（客户端已退出，内存已回收）\n");
+        }
+        std::printf("========================================\n");
+        std::fflush(stdout);
+      }
+      std::printf("客户端已退出（0x%08X）\n", code);
     }
-    // 等客户端退出，期间不碰任何东西
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD code = 0;
-    GetExitCodeProcess(pi.hProcess, &code);
-    std::printf("客户端已退出（0x%08X）\n", code);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 0;

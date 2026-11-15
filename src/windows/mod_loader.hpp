@@ -72,6 +72,20 @@ struct ModLoaderResult {
 
 // 已经准备好的数据侧（来自 mappings/files 目录，或来自 --mods 自包含扫描）。
 // 两条来源产出的结构完全一样，安装流程只认这个。
+// 持续观测 stub 计数（客户端整个生命周期内）。
+//
+// 【为什么必须以函数形式提供，而不是"装完读一次"】
+// 客户端从启动到进角色选择要几十秒，装完后立刻读必然是 0 次，
+// 那个结论会把人带偏（上一版就是这么错的）。
+// 调用方应在客户端运行期间反复调用它，或至少在退出时调用一次。
+struct StubStats {
+  uint64_t calls = 0;
+  uint64_t hits = 0;
+  bool ok = false;   // 是否成功读到
+};
+
+StubStats read_stub_stats(HANDLE process, uint64_t call_counter_va, uint64_t hit_counter_va);
+
 struct ModLoaderOptions {
   // 是否同时打 Arctium 的证书补丁。只有连私有服务器才需要（客户端不校验
   // 登录服务器证书）。模组加载完全不需要，所以默认关。
