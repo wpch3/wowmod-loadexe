@@ -41,6 +41,19 @@ struct AntiCrashPlan {
 AntiCrashPlan plan_anti_crash_from_image(const std::vector<uint8_t>& image, uint64_t image_base,
                                          bool cert_patches = false);
 
+// ---- 把补丁应用到本地快照（RemapAndPatch 的核心，纯函数便于单测）----
+//
+// 上游 ApplyPatches(remap: true)：
+//     for (var i = 0; i < patch.Length; i++) Data[address + i] = patch[i];
+// 其中 address 是【相对映像基址的偏移】。这里用 VA 形式，内部换算。
+//
+// 返回实际应用成功的条数。以下情况跳过（不报错，与上游一致）：
+//   * 补丁完全落在快照之外
+//   * 补丁跨越快照末尾
+// 部分覆盖会被【拒绝】（上游会越界写，我们不复制这个缺陷）。
+size_t apply_patches_to_snapshot(std::vector<uint8_t>* snapshot, uint64_t image_base,
+                                 const std::vector<AntiCrashPatch>& patches);
+
 // Arctium 的四条证书特征码与对应补丁（Patterns/Windows.cs + Patches/Windows.cs 原样）。
 struct CertPatchSpec {
   const char* name;

@@ -576,6 +576,15 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     }
   } resume_guard{process, suspended, false};
 
+  // 所有需要写进【客户端模块视图内】的字节补丁统一收集，最后由
+  // remap_and_patch 一次性写穿透（对齐 Arctium：全部 QueuePatch，
+  // 由 RemapAndPatch 重映射后整块写入）。
+  std::vector<AntiCrashPatch> module_patches;
+  AntiCrashPlan ac_plan;
+  bool ac_planned = false;
+  // hook 点的 13 字节跳转先算出来存着，等统一写入时一起打进快照。
+  std::vector<uint8_t> hook_bytes_for_remap;
+
   // ---- 3b2. anti-crash 规划（Arctium PrepareAntiCrash，挂起状态下、NoJump 之前）----
   //
   // 精确对齐 src/Launcher.cs：
@@ -600,14 +609,10 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
            " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
            std::to_string(ac.remap_jump_patches) + " 条" +
            (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
-      if (!ac.patches.empty()) {
-        if (apply_anti_crash(process, &ac)) {
-          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
-          r.anticrash_patches = ac.patches.size();
-        } else {
-          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
-        }
-      }
+      // 只【规划】，不在这里写。所有补丁统一交给后面的
+      // remap_and_patch 一次性写穿透（对齐 Arctium RemapAndPatch）。
+      ac_plan = ac;
+      ac_planned = true;
       for (const auto& n : ac.notes) step("  " + n);
     }
   }
@@ -822,18 +827,14 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     step("跳板写入完成: " + std::to_string(code.size()) + " 字节 @0x" + to_hex(tramp_va, 16) +
          "（50 stub + 13 原指令 + 13 跳回）");
 
-    // 4f. 在 hook 点写 13 字节跳转（Arctium 的 hookInstructions 原样）
-    auto hook = arctium::build_hook_jump(tramp_va);
-    DWORD oldh = 0;
-    VirtualProtectEx(process, reinterpret_cast<void*>(target), hook.size(),
-                     PAGE_EXECUTE_READWRITE, &oldh);
-    if (!write_remote(process, target, hook.data(), hook.size(), &werr)) {
-      r.error = "写入 hook 跳转失败: " + werr;
-      return r;
-    }
-    VirtualProtectEx(process, reinterpret_cast<void*>(target), hook.size(), oldh, &oldh);
-    FlushInstructionCache(process, reinterpret_cast<void*>(target), hook.size());
-    step("hook 已安装: 0x" + to_hex(target, 16) + " -> 0x" + to_hex(tramp_va, 16));
+    // 4f. 生成 13 字节 hook 跳转，但【不在这里写】。
+    //
+    // Arctium 是 memory.QueuePatch(hookAddress, hookInstructions, ...)，
+    // 由最后的 RemapAndPatch 统一写穿透。我们照做 ——
+    // 在壳自己的视图上直接写会被完整性校验抓到（0xC00000E5）。
+    hook_bytes_for_remap = arctium::build_hook_jump(tramp_va);
+    step("hook 已规划: 0x" + to_hex(target, 16) + " -> 0x" + to_hex(tramp_va, 16) +
+         "（等统一写入）");
 
     r.hook_installed = true;
     r.hook_target = target;
@@ -897,15 +898,124 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     r.trampoline_va = irep.trampoline_va;
   }
 
-  // ---- 5. 应用已规划好的 NoJump（第一半）----
-  if (!apply_branch_patches(process, &branch_plan)) {
-    r.error = "NoJump 写入失败: " + branch_plan.error +
-              "（查表跳板已装，但第一半没成 —— 请重启客户端后重试）";
-    return r;
+  // ---- 5. 统一写入：一次重映射 + 整块写穿透（Arctium RemapAndPatch）----
+  //
+  // 这是此前【完全缺失】的一步。过去我们逐条 WriteProcessMemory 到壳自己
+  // 映射的原视图上（实测 Protect=0x04 RW），客户端的完整性校验读到被改
+  // 的字节 -> 判定篡改 -> EXCEPTION_INTERNAL_ERROR (0xC00000E5)。
+  //
+  // 现在按上游做：
+  //   1) 把 anti-crash / NoJump / hook 全部收集成一批补丁
+  //   2) 读整块模块快照，把补丁打在【快照】上
+  //   3) NtCreateSection + NtUnmapViewOfSection + NtMapViewOfSection(RX)
+  //   4) 再映射一个 RW 视图，整块写穿透，然后卸掉 RW 视图
+  // 客户端之后读到的就是我们这个 section 的内容，校验自然通过。
+  {
+    // 5a. 收集 anti-crash
+    if (ac_planned) {
+      for (const auto& p : ac_plan.patches) module_patches.push_back(p);
+    }
+    // 5b. 收集 NoJump（4 字节 0，Arctium Patches.Windows.NoJump）
+    for (const auto& p : branch_plan.patches) {
+      if (p.match_va == 0 || !p.error.empty() || p.patch_va == 0) continue;
+      AntiCrashPatch np;
+      np.va = p.patch_va;
+      np.bytes = {0x00, 0x00, 0x00, 0x00};
+      np.name = "NoJump:" + p.name;
+      module_patches.push_back(std::move(np));
+    }
+    // 5c. 收集 hook 跳转（13 字节）
+    if (r.hook_installed && hook_bytes_for_remap.size() == kArctiumHookLen) {
+      AntiCrashPatch hp;
+      hp.va = r.hook_target;
+      hp.bytes = hook_bytes_for_remap;
+      hp.name = "CustomFileIdHook";
+      module_patches.push_back(std::move(hp));
+    }
+
+    std::sort(module_patches.begin(), module_patches.end(),
+              [](const AntiCrashPatch& a, const AntiCrashPatch& b) { return a.va < b.va; });
+
+    step("待写入模块内补丁 " + std::to_string(module_patches.size()) + " 条（一次性重映射写入）");
+
+    // 【重映射的范围必须用 VirtualQueryEx 的实际区域，不是 PE 的 SizeOfImage】
+    //
+    // 上游 RemapAndPatch 是：
+    //     VirtualQueryEx(BaseAddress) -> RemapAndPatch(mbi.BaseAddress, (int)mbi.RegionSize)
+    // 它用整个已映射区域的大小。PE 的 SizeOfImage 常常比实际映射区域小
+    // （对齐差异），按 SizeOfImage 重映射会把尾部切掉 —— 那部分代码/数据
+    // 直接消失，客户端必崩。
+    uint64_t remap_base = last_image_base;
+    uint64_t remap_size = 0;
+    {
+      MEMORY_BASIC_INFORMATION mbi{};
+      if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(last_image_base), &mbi, sizeof(mbi))) {
+        remap_base = reinterpret_cast<uint64_t>(mbi.BaseAddress);
+        remap_size = static_cast<uint64_t>(mbi.RegionSize);
+      }
+      step("重映射范围: 基址 0x" + to_hex(remap_base, 16) + ", 区域 " +
+           std::to_string(remap_size / 1048576) + " MB（PE SizeOfImage " +
+           std::to_string(last_image_size / 1048576) + " MB）");
+    }
+
+    // 【重映射会整体替换这个区间，绝不能覆盖我们自己分配的块】
+    //
+    // trampoline / id 表 / 字符串块都是 VirtualAllocEx 拿到的独立区域，
+    // 正常不会落在模块区间内。但"正常不会"不是"不会"——一旦重叠，
+    // 重映射之后这些块就变成模块内容，跳板变成一个随机函数指针，
+    // 客户端一调用就跳飞。
+    {
+      // 只判"起始地址是否落在区间内"：这几块都比模块小得多，
+      // 起点在区间外就不可能整体落进来。
+      auto overlaps = [&](uint64_t va) {
+        return va != 0 && va >= remap_base && va < remap_base + remap_size;
+      };
+      const bool bad = overlaps(r.id_table_va) || overlaps(r.string_blob_va) || overlaps(r.stub_va);
+      if (bad) {
+        r.error = "内部错误: 跳板/映射表 落在了客户端模块区间内 —— "
+                  "重映射会把它们覆盖，已中止（这是分配器异常，请报告）";
+        return r;
+      }
+    }
+
+    std::string rerr;
+    const bool remapped = !module_patches.empty() && remap_size > 0 &&
+                          remap_and_patch(process, remap_base, remap_size,
+                                          module_patches, &rerr, suspended);
+    if (remapped) {
+      step("重映射写入完成: " + rerr);
+      r.anticrash_patches = ac_planned ? ac_plan.patches.size() : 0;
+      r.branch_patched = true;
+      r.branch_count = branch_plan.applied_count;
+      step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条");
+    } else {
+      // 回退：逐条写（行为与上一版一致）。必须如实说明为什么没用重映射。
+      step("重映射写入不可用: " + rerr);
+      // 若失败原因是"原视图已卸下、新视图未建立"，模块已经没了，
+      // 逐条写毫无意义 —— 必须直接报告，不能假装还能继续。
+      if (rerr.find("客户端模块已丢失") != std::string::npos) {
+        r.error = "重映射失败且不可恢复: " + rerr;
+        return r;
+      }
+      step("回退为逐条写入 —— 字节会落在客户端自己的视图里，完整性校验可能抓到");
+      if (ac_planned && !ac_plan.patches.empty()) {
+        if (apply_anti_crash(process, &ac_plan)) {
+          r.anticrash_patches = ac_plan.patches.size();
+          step("anti-crash 已写入 " + std::to_string(ac_plan.patches.size()) + " 条（逐条）");
+        } else {
+          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
+        }
+      }
+      if (!apply_branch_patches(process, &branch_plan)) {
+        r.error = "NoJump 写入失败: " + branch_plan.error +
+                  "（查表跳板已装，但第一半没成 —— 请重启客户端后重试）";
+        return r;
+      }
+      r.branch_patched = true;
+      r.branch_count = branch_plan.applied_count;
+      step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条（逐条）");
+    }
   }
-  r.branch_patched = true;
-  r.branch_count = branch_plan.applied_count;
-  step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条");
 
   // 显式恢复进程（守卫还会兜一次，但这里要能把失败报出来）
   if (suspended) {

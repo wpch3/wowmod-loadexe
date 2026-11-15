@@ -2156,13 +2156,26 @@ static void test_mod_loader_ordering() {
   // 注意 PrepareAntiCrash 里自己做 NtSuspendProcess，不需要"先挂起再规划"。
   // 所以 anti-crash 规划必须在 NoJump 规划【之前】、resume【之前】。
   const size_t p_ac_plan = src.find("plan_anti_crash(process");
-  const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac)");
+  const size_t p_remap = src.find("remap_and_patch(process");
+  const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac_plan)");
   CHECK(p_ac_plan != std::string::npos, "必须调用 plan_anti_crash（Arctium PrepareAntiCrash）");
-  CHECK(p_ac_apply != std::string::npos, "必须调用 apply_anti_crash");
+  CHECK(p_remap != std::string::npos,
+        "必须调用 remap_and_patch（Arctium RemapAndPatch —— 此前完全缺失的一步）");
   CHECK(p_ac_plan < p_plan,
         "anti-crash 规划必须在 NoJump 规划之前（Arctium: PrepareAntiCrash 在 WaitForUnpack 末尾）");
-  CHECK(p_ac_apply < p_resume,
-        "anti-crash 写入必须在 resume 之前（Arctium 在 NtResumeProcess 前完成所有写入）");
+  CHECK(p_remap < p_resume,
+        "重映射写入必须在 resume 之前（Arctium: RemapAndPatch 后自己 resume）");
+  CHECK(p_ac_apply != std::string::npos && p_ac_apply > p_remap,
+        "逐条写只能作为重映射失败后的回退路径，不能是主路径");
+
+  // ---- 必须把三种补丁都汇进同一批，做一次重映射 ----
+  //
+  // Arctium 全是 QueuePatch，最后由 RemapAndPatch 统一写。
+  // 少收进任何一种，那种补丁就还写在壳自己的视图上，照样被校验抓到。
+  CHECK(src.find("NoJump:") != std::string::npos,
+        "NoJump 必须并入 module_patches（否则单独写会被完整性校验抓到）");
+  CHECK(src.find("hook_bytes_for_remap") != std::string::npos,
+        "hook 跳转必须暂存到统一写入，不能就地写");
 
   // ---- WaitForUnpack 的第二步：等 Init 立即数指向的标记置位 ----
   //
@@ -2854,6 +2867,100 @@ static void test_protect_plan() {
 // 用纯函数测，而不是 grep 源码文本：上一轮我用 grep 断言
 // `h.name == "Init" && h.has_rx` 不存在，结果变异把 has_rx 加回
 // hook 选择那段，测试完全没报错。文本断言会漏。
+// RemapAndPatch 的核心：把补丁应用到本地快照。
+//
+// 这是此前【整条缺失】的步骤。它错了的后果是"补丁打偏/打半"，
+// 客户端立刻崩，而且现象和校验失败一模一样，极难区分。
+// remap 的区间约束：补丁必须在区间内，否则写入不会生效。
+static void test_remap_range_pure() {
+  group("remap-range");
+  // 这条是区间判断的纯逻辑镜像 —— Windows 侧 remap_and_patch 用的是同一判据。
+  auto in_range = [](uint64_t va, size_t len, uint64_t base, uint64_t size) {
+    return va >= base && va + len <= base + size;
+  };
+  CHECK(in_range(0x10010, 4, 0x10000, 0x1000), "区间内应通过");
+  CHECK(!in_range(0x0FFF0, 4, 0x10000, 0x1000), "基址之下必须拒绝");
+  CHECK(!in_range(0x10FFE, 5, 0x10000, 0x1000), "跨越上界必须拒绝");
+  CHECK(in_range(0x10FFC, 4, 0x10000, 0x1000), "恰好到上界应通过");
+}
+
+static void test_patch_snapshot() {
+  group("remap-snapshot");
+  const uint64_t base = 0x10000;
+  std::vector<uint8_t> snap(0x1000, 0x90);   // 全 NOP 的假映像
+
+  // 1) 正常应用两条
+  std::vector<wowmod::AntiCrashPatch> ps;
+  {
+    wowmod::AntiCrashPatch a;
+    a.va = base + 0x10;
+    a.bytes = {0xC2, 0x00, 0x00};
+    ps.push_back(a);
+    wowmod::AntiCrashPatch b;
+    b.va = base + 0x20;
+    b.bytes = {0xE9, 0x01, 0x02, 0x03, 0x04};
+    ps.push_back(b);
+  }
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, ps) == 2, "两条补丁都应应用成功");
+  CHECK(snap[0x10] == 0xC2 && snap[0x11] == 0x00 && snap[0x12] == 0x00,
+        "patch A 的字节必须落在 base+0x10 处");
+  CHECK(snap[0x20] == 0xE9 && snap[0x24] == 0x04, "patch B 的 5 字节必须完整落位");
+  CHECK(snap[0x0F] == 0x90 && snap[0x13] == 0x90, "补丁前后一个字节都不能被碰");
+
+  // 2) 完全落在快照之外 -> 跳过，且不计入成功
+  std::vector<wowmod::AntiCrashPatch> out;
+  {
+    wowmod::AntiCrashPatch c;
+    c.va = base + 0x5000;
+    c.bytes = {0xAA};
+    out.push_back(c);
+  }
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, out) == 0, "快照外的补丁必须跳过");
+  CHECK(snap[0x10] == 0xC2, "跳过时不能破坏已有内容");
+
+  // 3) 跨越快照末尾 -> 【必须整条拒绝】，不能写半条
+  //
+  // 半条指令 = 跳到指令中间 = 立刻 EXCEPTION_INTERNAL_ERROR。
+  std::vector<wowmod::AntiCrashPatch> cross;
+  {
+    wowmod::AntiCrashPatch d;
+    d.va = base + 0xFFE;       // 只剩 2 字节空间
+    d.bytes = {0xE9, 0x11, 0x22, 0x33, 0x44};   // 5 字节
+    cross.push_back(d);
+  }
+  const uint8_t before_ffE = snap[0xFFE];
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, cross) == 0,
+        "跨越末尾的补丁必须整条拒绝（写半条会崩）");
+  CHECK(snap[0xFFE] == before_ffE && snap[0xFFF] == 0x90, "被拒绝时不能留下半条");
+
+  // 4) 基址以下的补丁跳过
+  std::vector<wowmod::AntiCrashPatch> low;
+  {
+    wowmod::AntiCrashPatch e;
+    e.va = base - 1;
+    e.bytes = {0xAA};
+    low.push_back(e);
+  }
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, low) == 0, "基址以下的补丁必须跳过");
+
+  // 5) 空字节的补丁不算应用
+  std::vector<wowmod::AntiCrashPatch> empty;
+  empty.push_back(wowmod::AntiCrashPatch{base + 0x10, {}, "empty"});
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, empty) == 0, "空补丁不得计入");
+
+  // 6) 恰好填满末尾的补丁必须成功（边界正确性）
+  std::vector<wowmod::AntiCrashPatch> edge;
+  {
+    wowmod::AntiCrashPatch f;
+    f.va = base + 0xFFE;
+    f.bytes = {0x66, 0x90};    // 正好 2 字节
+    edge.push_back(f);
+  }
+  CHECK(wowmod::apply_patches_to_snapshot(&snap, base, edge) == 1,
+        "恰好填满末尾的补丁必须成功（off+len == size 是合法的）");
+  CHECK(snap[0xFFE] == 0x66 && snap[0xFFF] == 0x90, "末尾 2 字节应写入");
+}
+
 static void test_hit_selection_and_unpack() {
   group("hit-selection");
 
@@ -3093,6 +3200,8 @@ int main() {
   test_file_layout_remap();
   test_no_false_negative();
   test_protect_plan();
+  test_remap_range_pure();
+  test_patch_snapshot();
   test_hit_selection_and_unpack();
   test_site_window_fallback();
   test_arctium_signature_table();

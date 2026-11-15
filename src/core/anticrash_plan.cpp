@@ -271,4 +271,24 @@ const uint8_t* anticrash_integrity_bytes(size_t* len) {
   return kIntegrityPatch;
 }
 
+size_t apply_patches_to_snapshot(std::vector<uint8_t>* snapshot, uint64_t image_base,
+                                 const std::vector<AntiCrashPatch>& patches) {
+  if (!snapshot || snapshot->empty()) return 0;
+  size_t applied = 0;
+  for (const auto& p : patches) {
+    if (p.bytes.empty()) continue;
+    if (p.va < image_base) continue;
+    const uint64_t off = p.va - image_base;
+    // 【必须整条落在快照内】
+    //
+    // 部分覆盖是危险的：上游 ApplyPatches 直接按长度写，越过 Data.Length
+    // 会写进 .NET 数组边界（在那里是异常）。我们宁可整条跳过并让调用方
+    // 知道少了哪条，也不能把半条指令写进去 —— 半条指令 = 立刻崩溃。
+    if (off + p.bytes.size() > snapshot->size()) continue;
+    std::memcpy(snapshot->data() + off, p.bytes.data(), p.bytes.size());
+    ++applied;
+  }
+  return applied;
+}
+
 }  // namespace wowmod

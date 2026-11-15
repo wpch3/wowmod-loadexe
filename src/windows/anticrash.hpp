@@ -45,6 +45,32 @@ AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches = false);
 // 写入计划里的补丁。返回是否全部成功。
 bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan);
 
+// ---- Arctium WinMemory.RemapAndPatch 的移植（此前完全缺失的一步）----
+//
+// 上游原文（src/IO/WinMemory.cs:217-285）：
+//   NtSuspendProcess
+//   Data = Read(BaseAddress, RegionSize)          // 整块模块快照
+//   NtCreateSection(maxSize=RegionSize, PAGE_EXECUTE_READWRITE, SEC_COMMIT)
+//   NtUnmapViewOfSection(process, BaseAddress)    // 卸掉原来的视图
+//   NtMapViewOfSection(... PAGE_EXECUTE_READ)     // 用新 section 重新映射成 RX
+//   ApplyPatches(true)                            // 补丁打在【本地快照】上
+//   NtMapViewOfSection(... PAGE_READWRITE)        // 再开一个可写视图
+//   WriteProcessMemory(可写视图, Data, viewSize)  // 整块写穿透到 section
+//   NtUnmapViewOfSection(可写视图)                // 卸掉可写视图
+//   NtResumeProcess
+//
+// 为什么必须这么做，而不是直接在原页上 WriteProcessMemory：
+//   * 原视图是壳自己映射的，页属性可疑（实测 Protect=0x04 RW）；
+//     在上面写的字节会被完整性校验读到，判定为篡改 -> 0xC00000E5。
+//   * 换成我们自己创建的 section 后，我们写的是【这个 section 的内容】。
+//     客户端读到的就是"它本来该有的样子"，校验通过。
+//
+// patches: 已按 VA 排序、且 VA 都在 [base, base+size) 内的字节补丁。
+// 返回 false 时进程一定已被恢复（不会留下挂起）。
+bool remap_and_patch(HANDLE process, uint64_t base, uint64_t size,
+                     const std::vector<AntiCrashPatch>& patches, std::string* err = nullptr,
+                     bool caller_already_suspended = false);
+
 }  // namespace win
 }  // namespace wowmod
 #endif
