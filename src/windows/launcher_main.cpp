@@ -873,6 +873,20 @@ int main(int argc, char** argv) {
     std::printf("  Ctrl+C 退出；关掉游戏所有改动自然消失（只改内存）。\n\n");
     std::fflush(stdout);
 
+    // ---- 后台 anti-crash：resume 之后继续等完整性校验函数被解密 ----
+    //
+    // 实测 12.0.7：挂起时主映像只有 ~53/260 页明文，Integrity 特征码
+    // 命中 0 处。但客户端几十秒后【确实执行了自检】，并以
+    // 0xC00000E5 / 断言 e1d04e02-303 终止（十五轮同一个断言）。
+    // 说明那两个函数是惰性解密的，挂起时还没解密出来。
+    //
+    // 所以 resume 之后在后台每 2 秒重扫一次，一旦命中立刻写 ret 0。
+    if (r.anticrash_patches == 0) {
+      wowmod::win::start_anticrash_watchdog(pi.hProcess, log_path);
+      std::printf("anti-crash 后台监测已启动：完整性校验函数一旦解密就自动关闭\n\n");
+      std::fflush(stdout);
+    }
+
     // ---- 持续观测 stub 计数，直到客户端退出 ----
     //
     // 【这是本轮最重要的修正】

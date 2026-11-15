@@ -541,11 +541,22 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
 
     // 记录下来（不论可执行与否），供 Init 提前结束时兜底
     if (round_target) {
-      if (!best_rx || round_best > best) { best = round_best; target = round_target; best_rx = true; }
+      // 【best_rx 必须来自实际命中，不能硬写 true】
+      //
+      // 上一版这里写死 best_rx = true，于是日志永远打印
+      //     "可执行副本 —— 客户端执行的就是这份"
+      // 而同一轮的上面一行明明写着 "其中可执行 0, 选中的是不可执行副本"。
+      // 两行互相矛盾，把排查方向彻底带偏。
+      if (!best_rx || round_best > best) {
+        best = round_best;
+        target = round_target;
+        best_rx = round_rx;
+      }
     } else if (round_any && !target) {
       // 只有不可执行命中：先记下，等 Init 出现时就用它
       best = round_best;
       target = round_any_va;
+      best_rx = false;
     }
 
     // 注意：走到这里时第一个循环【已经】确认过 Init（否则我们不会在
@@ -1356,6 +1367,83 @@ StubStats read_stub_stats(HANDLE process, uint64_t call_counter_va, uint64_t hit
                                   sizeof(st.hits), &n2) && n2 == sizeof(st.hits);
   st.ok = a && b;
   return st;
+}
+
+void start_anticrash_watchdog(HANDLE process, std::string log_path) {
+  if (!process) return;
+  HANDLE own = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &own,
+                       PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE |
+                           PROCESS_VM_OPERATION | PROCESS_SUSPEND_RESUME,
+                       FALSE, 0)) {
+    return;
+  }
+
+  struct Ctx {
+    HANDLE proc;
+    std::string log;
+  };
+  auto* ctx = new Ctx{own, log_path};
+
+  HANDLE th = CreateThread(
+      nullptr, 0,
+      [](LPVOID raw) -> DWORD {
+        auto* c = static_cast<Ctx*>(raw);
+        int rounds = 0;
+        size_t done_integrity = 0;
+        for (int i = 0; i < 4 * 3600; ++i) {   // 最多 4 小时
+          ::Sleep(500);
+          DWORD code = 0;
+          if (!GetExitCodeProcess(c->proc, &code) || code != STILL_ACTIVE) break;
+
+          ++rounds;
+          // 每 2 秒扫一次（读整块映像很贵，不能太频繁）
+          if (rounds % 4) continue;
+
+          // 只规划 anti-crash，不碰别的
+          const AntiCrashPlan ac = plan_anti_crash(c->proc, false);
+          if (!ac.ok || ac.integrity_hits == 0) continue;
+
+          // 命中了！立刻打。
+          AntiCrashPlan mut = ac;
+          // 【只要完整性校验补丁，不要 remap 跳转】
+          //
+          // remap 跳转必须与完整性补丁【配套】才有意义；这里我们只找到了
+          // 完整性函数（迟到的解密），remap 那部分如果在挂起时已经没找到，
+          // 现在补上也不配套。先只关校验函数 —— 那是导致断言的东西。
+          std::vector<AntiCrashPatch> only_integrity;
+          for (const auto& p : mut.patches) {
+            if (p.name.rfind("Integrity", 0) == 0) only_integrity.push_back(p);
+          }
+          if (only_integrity.empty()) continue;
+          mut.patches = only_integrity;
+
+          const bool ok = apply_anti_crash(c->proc, &mut);
+          char line[512];
+          std::snprintf(line, sizeof(line),
+                        "\n[anti-crash 后台 @%d 秒] 完整性校验终于解密：命中 %zu 处，"
+                        "写入 %s\n",
+                        i / 2, only_integrity.size(), ok ? "成功" : "失败");
+          std::string err;
+          wowmod::append_text_file(c->log, line, &err);
+          if (ok) {
+            done_integrity += only_integrity.size();
+            break;   // 已关掉校验，收工
+          }
+        }
+        if (done_integrity == 0) {
+          std::string err;
+          wowmod::append_text_file(
+              c->log,
+              "\n[anti-crash 后台] 整局都没等到完整性校验解密 —— 该特征码在 12.0.7 上不适用\n",
+              &err);
+        }
+        CloseHandle(c->proc);
+        delete c;
+        return 0;
+      },
+      ctx, 0, nullptr);
+  if (th) CloseHandle(th);
 }
 
 }  // namespace win

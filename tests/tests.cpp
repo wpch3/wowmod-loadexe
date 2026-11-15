@@ -2915,6 +2915,44 @@ static void test_remap_range_pure() {
 // 上一版无条件 VirtualProtectEx(RWX) 再恢复成 oldh。对实测的
 // Protect=0x04 页面，恢复后该页不可执行，客户端访问即
 // ACCESS_VIOLATION（截图：读 0x6f30000 失败，而 hook 在 0x6f306a0）。
+// 【回归】两处让日志不可信的 bug。
+static void test_honest_reporting() {
+  group("honest-reporting");
+  std::string ml, lm;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    ml.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  {
+    std::ifstream in("src/windows/launcher_main.cpp", std::ios::binary);
+    lm.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  CHECK(!ml.empty() && !lm.empty(), "应能读到源文件");
+
+  // 1) best_rx 不得硬编码为 true。
+  //    上一版写死 true，日志永远打印"可执行副本"，而同一轮上面一行
+  //    明明写着"其中可执行 0, 选中的是不可执行副本"。两行互相矛盾。
+  // 注意：用带上下文的针，避免命中我自己注释里的说明文字
+  CHECK(ml.find("best_rx = true;") == std::string::npos,
+        "best_rx 不得硬编码 true（会让日志永远声称'可执行副本'）");
+  CHECK(ml.find("best_rx = round_rx") != std::string::npos,
+        "best_rx 必须来自实际命中的可执行标志");
+
+  // 2) 必须有后台 anti-crash：resume 后继续等完整性校验解密。
+  //    实测 12.0.7 挂起时只有 ~53/260 页明文，Integrity 命中 0；
+  //    但客户端确实执行了自检并崩溃，说明它迟些才解密。
+  CHECK(ml.find("start_anticrash_watchdog") != std::string::npos,
+        "必须有后台 anti-crash：resume 后继续重扫，解密即打补丁");
+  CHECK(lm.find("start_anticrash_watchdog") != std::string::npos,
+        "主程序必须启动后台 anti-crash");
+  // 后台只打 Integrity，不能连带 remap 跳转（那必须配套才有意义）
+  CHECK(ml.find("only_integrity") != std::string::npos,
+        "后台补丁必须只针对 Integrity，不能连带 remap 跳转");
+  // 扫不到要如实说明，不能静默
+  CHECK(ml.find("整局都没等到完整性校验解密") != std::string::npos,
+        "扫不到时必须如实报告，而不是静默结束");
+}
+
 static void test_no_protect_change_when_writable() {
   group("hook-write-protect");
   std::string ml;
@@ -3454,6 +3492,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_honest_reporting();
   test_no_protect_change_when_writable();
   test_stub_observation_timing();
   test_hook_written_on_fallback();

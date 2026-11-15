@@ -86,6 +86,25 @@ struct StubStats {
 
 StubStats read_stub_stats(HANDLE process, uint64_t call_counter_va, uint64_t hit_counter_va);
 
+// ---- 后台 anti-crash：resume 之后继续等完整性校验函数被解密 ----
+//
+// 【为什么必须在 resume 之后做】
+//
+// 实测 12.0.7：进程挂起时主映像只有 ~53/260 页是明文，Integrity 特征码
+// 命中 0 处。但客户端【确实会运行】完整性自检 —— 进世界几十秒后
+// 以 0xC00000E5 / 断言终止，十五轮都是同一个断言。
+// 结论：那个校验函数是惰性解密的，在我们扫描的那几秒还没解密。
+//
+// 所以正确的时序是：
+//   1) 挂起时先装好 NoJump + hook（客户端要用的代码此刻已就绪）
+//   2) resume，让客户端继续跑
+//   3) 后台线程每 500ms 重扫 Integrity 特征码
+//   4) 一旦命中 -> 立刻打 ret 0 补丁（并打印命中地址）
+//
+// 这条路径与 Arctium 的差别：Arctium 在解包完成瞬间一次性做完；
+// 12.0.7 是惰性解密，只能等它自己走到。
+void start_anticrash_watchdog(HANDLE process, std::string log_path);
+
 struct ModLoaderOptions {
   // 是否同时打 Arctium 的证书补丁。只有连私有服务器才需要（客户端不校验
   // 登录服务器证书）。模组加载完全不需要，所以默认关。
