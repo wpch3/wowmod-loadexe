@@ -57,6 +57,48 @@ AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches) {
   plan.notes.push_back("规划基于映像 0x" + to_hex(main_img->base, 16) + "，SizeOfImage " +
                        std::to_string(main_img->size / 1048576) + " MB，已读 " +
                        std::to_string(main_img->bytes.size() / 1048576) + " MB");
+
+  // ---- 主映像里没找到完整性校验时，扫全进程 ----
+  //
+  // 【这是 12.0.7 上与上游的关键差异，必须记录】
+  //
+  // 实测日志：
+  //   第 1 轮（只扫主映像）: CustomFileIdHook 0 处
+  //   第 2 轮（全进程 181 区域）: CustomFileIdHook 1 处，语义分 8/8
+  // 也就是说被壳解密出来的代码【副本落在主映像之外的分配里】。
+  // 上游没有这个现象（9.x/10.x 原地解密），所以它只扫主映像就够。
+  //
+  // 我们一直只扫 images[0]，于是 Integrity 恒为 0 处 ——
+  // 报告写成"12.0.7 上特征码可能已变"，那是假原因。
+  // 真相是：那两个完整性校验函数也被复制到了别处，主映像里没有明文副本。
+  if (plan.integrity_hits == 0 && images.size() > 1) {
+    size_t extra_hits = 0;
+    for (size_t i = 1; i < images.size(); ++i) {
+      const auto& im = images[i];
+      if (im.bytes.size() < 0x1000) continue;
+      AntiCrashPlan sub = plan_anti_crash_from_image(im.bytes, im.base, cert_patches);
+      if (sub.integrity_hits == 0 && sub.remap_jump_patches == 0) continue;
+      // 只并入非证书补丁（证书补丁与映像位置无关，主映像那次已经算过）
+      for (auto& p : sub.patches) {
+        if (p.cert) continue;
+        plan.patches.push_back(std::move(p));
+      }
+      plan.integrity_hits += sub.integrity_hits;
+      plan.remap_hits += sub.remap_hits;
+      plan.remap_jump_patches += sub.remap_jump_patches;
+      extra_hits += sub.integrity_hits;
+      plan.notes.push_back("补充扫描映像 0x" + to_hex(im.base, 16) + "（" +
+                           std::to_string(im.bytes.size() / 1048576) + " MB）: 完整性 " +
+                           std::to_string(sub.integrity_hits) + " 处");
+    }
+    if (extra_hits) {
+      plan.notes.push_back("主映像内完整性校验 0 处，但在其它映像里找到 " +
+                           std::to_string(extra_hits) + " 处（12.0.7 把解密副本放在主映像之外）");
+    } else {
+      plan.notes.push_back("已扫全部 " + std::to_string(images.size()) +
+                           " 份映像，仍未找到完整性校验 —— 这批特征码在本版本确实不适用");
+    }
+  }
   return plan;
 }
 

@@ -2888,6 +2888,75 @@ static void test_remap_range_pure() {
 //
 // 上一版整块设成 PAGE_EXECUTE_READ，.data 变只读，客户端写全局变量
 // 立刻访问违例，连窗口都不出。这条测试钉住 .data 必须可写。
+// 带观测点的 stub：跳转偏移必须精确，错一个字节就跳飞。
+//
+// 这里不复刻 x64 语义，而是直接校验【三个跳转的相对位移】算得对不对 ——
+// 这正是手工编码最容易错、错了又最难查的地方。
+static void test_instrumented_stub() {
+  group("instrumented-stub");
+  const uint64_t id_alloc = 0x1000, call_ctr = 0x9000, hit_ctr = 0x9008;
+  const auto code = wowmod::arctium::build_instrumented_stub(id_alloc, 2, call_ctr, hit_ctr, 42);
+  CHECK(code.size() > 50, "带观测点的 stub 应比 50 字节长");
+
+  // 找 js 0F 88（第一个）
+  size_t js = std::string::npos;
+  for (size_t i = 0; i + 6 <= code.size(); ++i) {
+    if (code[i] == 0x0F && code[i + 1] == 0x88) { js = i; break; }
+  }
+  CHECK(js != std::string::npos, "必须存在 js rel32");
+
+  // js 目标 = stub 末尾（原指令起点）
+  int32_t rel = 0;
+  std::memcpy(&rel, code.data() + js + 2, 4);
+  CHECK(static_cast<size_t>(js + 6 + rel) == code.size(),
+        "js 必须跳到 stub 末尾（原指令起点）");
+
+  // 找 je 74（命中分支）
+  size_t je = std::string::npos;
+  for (size_t i = 0; i + 2 <= code.size(); ++i) {
+    if (code[i] == 0x74) { je = i; break; }
+  }
+  CHECK(je != std::string::npos, "必须存在 je rel8");
+  const size_t hit_target = je + 2 + static_cast<size_t>(static_cast<int8_t>(code[je + 1]));
+  // 命中分支开头是【命中计数】：49 BB <u64> ; 49 FF 03 (inc qword [r11])
+  CHECK(hit_target + 12 <= code.size() && code[hit_target] == 0x49 && code[hit_target + 1] == 0xBB,
+        "je 必须跳到命中计数的 movabs r11");
+  CHECK(code[hit_target + 10] == 0x49 && code[hit_target + 11] == 0xFF &&
+            code[hit_target + 12 - 0] >= 0x03,
+        "命中计数之后必须是 inc qword [r11]");
+  // 之后才是 mov rax,[rcx+r9+4]（4A 8B 44 09 04）与 ret
+  CHECK(hit_target + 13 + 5 <= code.size() && code[hit_target + 13] == 0x4A &&
+            code[hit_target + 14] == 0x8B && code[hit_target + 15] == 0x44 &&
+            code[hit_target + 16] == 0x09 && code[hit_target + 17] == 0x04,
+        "命中分支必须取 mov rax,[rcx+r9+4]（表项的路径字段）");
+  CHECK(code[hit_target + 18] == 0xC3, "命中分支末尾必须是 ret");
+
+  // jb 必须跳回 lea ecx,[rax+rax*2]（8D 0C 40）
+  size_t jb = std::string::npos;
+  for (size_t i = je + 2; i + 2 <= code.size(); ++i) {
+    if (code[i] == 0x72) { jb = i; break; }
+  }
+  CHECK(jb != std::string::npos, "必须存在 jb rel8");
+  const size_t loop_top =
+      jb + 2 + static_cast<size_t>(static_cast<int8_t>(code[jb + 1]));
+  CHECK(loop_top + 3 <= code.size() && code[loop_top] == 0x8D && code[loop_top + 1] == 0x0C &&
+            code[loop_top + 2] == 0x40,
+        "jb 必须跳回 lea ecx,[rax+rax*2]（查表循环顶）");
+
+  // id_alloc 与两个计数器地址必须原样出现在代码里
+  auto contains_u64 = [&](uint64_t v) {
+    for (size_t i = 0; i + 8 <= code.size(); ++i) {
+      uint64_t got = 0;
+      std::memcpy(&got, code.data() + i, 8);
+      if (got == v) return true;
+    }
+    return false;
+  };
+  CHECK(contains_u64(id_alloc), "idAlloc 地址必须写进 stub");
+  CHECK(contains_u64(call_ctr), "调用计数地址必须写进 stub");
+  CHECK(contains_u64(hit_ctr), "命中计数地址必须写进 stub");
+}
+
 static void test_section_protection() {
   group("section-protection");
 
@@ -3262,6 +3331,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_instrumented_stub();
   test_section_protection();
   test_patch_snapshot();
   test_hit_selection_and_unpack();

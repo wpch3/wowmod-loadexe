@@ -70,6 +70,24 @@ std::vector<uint8_t> arctium_stub_template();
 std::vector<uint8_t> build_arctium_stub(uint64_t id_alloc_va, uint32_t count,
                                         int32_t js_rel32 = 42);
 
+// ---- 带观测点的 stub ----
+//
+// 【为什么必须有它】
+//
+// 纯 Arctium 的 50 字节 stub 是"哑"的：它查表、返回路径或 0，但我们
+// 从外部完全无法知道它被调用过几次、命中几次。于是"装好了但不生效"
+// 完全无法定位 —— 是 hook 没生效？id 对不上？还是客户端根本没用返回值？
+// 这三种情况在外部表现一模一样。
+//
+// 这里在 stub 里加两个计数：
+//   call_counter  (u64): 每进入 stub 一次 +1
+//   hit_counter   (u64): 每命中一次 +1
+// 两个地址由调用方分配并写入。功能行为与 Arctium 完全一致，只是多了计数。
+std::vector<uint8_t> build_instrumented_stub(uint64_t id_alloc_va, uint32_t count,
+                                             uint64_t call_counter_va,
+                                             uint64_t hit_counter_va,
+                                             int32_t js_rel32);
+
 // 13 字节绝对跳转：48 B8 <u64> FF E0 90
 std::vector<uint8_t> build_hook_jump(uint64_t dst);
 

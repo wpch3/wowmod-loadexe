@@ -363,14 +363,17 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
             break;
           }
         }
-        if (round_init && !init_flag_seen) {
+        // 注意：这个分支只在标记【确实为 0】时才打印。
+        // 上一版漏了 !flagged 判断，于是和上面的"标记已置位"同时打印，
+        // 日志自相矛盾（同一轮里既说已置位、又说仍为 0）。
+        if (round_init && !flagged && !init_flag_seen) {
           init_flag_seen = true;
           step("Init 特征码已出现，但标记 0x" + to_hex(init_target_va, 16) +
                " 仍为 0 —— 客户端还没执行到初始化，继续等（Arctium WaitForUnpack 第二步）");
         }
         // 已见到 Init 但标记迟迟不置位：超过一半等待时间后不再死等，
         // 但必须如实说明，绝不假装"已初始化"。
-        if (round_init && GetTickCount() - t0 > wait_ms / 2) {
+        if (round_init && !flagged && GetTickCount() - t0 > wait_ms / 2) {
           step("警告: 标记 0x" + to_hex(init_target_va, 16) +
                " 在等待期内始终为 0，按已初始化继续（可能该版本 mov 语义不同）");
           ready = true;
@@ -626,6 +629,27 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   // 正确时机就是【解包完成之后、任何写入之前、进程挂起时】。
   {
     AntiCrashPlan ac = plan_anti_crash(process, opts.cert_patches);
+    // ---- 【全有或全无】：不完整的 anti-crash 比不做更糟 ----
+    //
+    // 上游的 remap 补丁与完整性补丁是【配套】的：
+    //   * Integrity 特征码命中 -> 校验函数改成 ret 0（校验直接返回"没问题"）
+    //   * Remap 特征码命中     -> 把校验里"跳向真实代码"的跳转挪 1 字节
+    //                            （校验拿不到真实代码，也就比不出差异）
+    //
+    // 实测 12.0.7 上 Integrity 命中 0 处、Remap 命中 1 处。于是我们只写了
+    // 那条"跳转错位"——跳转被挪了，但配套的校验函数还完好无损。
+    // 校验函数执行时看到的是一个自相矛盾的跳转，反而触发断言
+    // （EXCEPTION_INTERNAL_ERROR 0xC00000E5，参数 e1d04e02 / 303）。
+    //
+    // 也就是说：半套 anti-crash 是【有害的】，它自己制造了崩溃。
+    // 规矩：完整性补丁为 0 时，一条 anti-crash 都不写。
+    if (ac.ok && ac.integrity_hits == 0 && !ac.patches.empty()) {
+      step("anti-crash 不完整（完整性 0 处 / remap " + std::to_string(ac.remap_hits) +
+           " 处）—— 半套补丁会破坏校验的一致性，已全部放弃，一条都不写");
+      ac.patches.clear();
+      ac.remap_jump_patches = 0;
+      ac_planned = false;
+    }
     if (!ac.ok) {
       step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
     } else {
@@ -838,7 +862,20 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     }
     const uint64_t tramp_va = reinterpret_cast<uint64_t>(tramp.addr());
 
-    std::vector<uint8_t> code = arctium::build_arctium_stub(id_va, static_cast<uint32_t>(ser.count));
+    // 带观测点的 stub：多两个计数器，语义与 Arctium 完全一致。
+    // 没有它，"装好了但不生效"无法定位（hook 没生效 / id 不匹配 /
+    // 客户端不用返回值，三种情况外部表现完全相同）。
+    RemoteBlock call_ctr(process, 8, PAGE_READWRITE);
+    RemoteBlock hit_ctr(process, 8, PAGE_READWRITE);
+    const uint64_t call_ctr_va = reinterpret_cast<uint64_t>(call_ctr.addr());
+    const uint64_t hit_ctr_va = reinterpret_cast<uint64_t>(hit_ctr.addr());
+    std::vector<uint8_t> code =
+        arctium::build_instrumented_stub(id_va, static_cast<uint32_t>(ser.count),
+                                         call_ctr_va, hit_ctr_va, 42);
+    r.call_counter_va = call_ctr_va;
+    r.hit_counter_va = hit_ctr_va;
+    step("观测点: 调用计数 @0x" + to_hex(call_ctr_va, 16) + ", 命中计数 @0x" +
+         to_hex(hit_ctr_va, 16));
     code.insert(code.end(), orig.begin(), orig.end());
     auto back = arctium::build_hook_jump(target + kArctiumHookLen);
     code.insert(code.end(), back.begin(), back.end());
@@ -1132,7 +1169,9 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   {
     bool alive = true;
     DWORD code = 0;
-    for (int i = 0; i < 12; ++i) {          // 最多等约 3 秒
+    // 等 8 秒而不是 3 秒：客户端要到角色选择界面才开始按 FileDataID
+    // 取资源，3 秒内 stub 很可能还没被调用过，会得出"调用 0 次"的错误结论。
+    for (int i = 0; i < 32; ++i) {          // 最多等约 8 秒
       ::Sleep(250);
       if (!GetExitCodeProcess(process, &code)) break;
       if (code != STILL_ACTIVE) {
@@ -1148,7 +1187,29 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       step("[失败] 客户端已退出，退出码 0x" + to_hex(code, 8));
       return r;
     }
-    step("存活验证通过：客户端在补丁写入后 3 秒内未退出");
+    step("存活验证通过：客户端在补丁写入后 8 秒内未退出");
+
+    // ---- stub 观测：它到底被调用了吗？ ----
+    //
+    // 这是"模组不生效"唯一能直接定性的证据：
+    //   call == 0        -> hook 没生效（或这个函数根本不被走）
+    //   call > 0, hit == 0 -> hook 生效了，但 FileDataID 一个都没对上
+    //   hit > 0          -> 查表命中，问题在客户端是否使用返回值
+    if (r.call_counter_va && r.hit_counter_va) {
+      uint64_t calls = 0, hits = 0;
+      SIZE_T n1 = 0, n2 = 0;
+      ReadProcessMemory(process, reinterpret_cast<LPCVOID>(r.call_counter_va), &calls, 8, &n1);
+      ReadProcessMemory(process, reinterpret_cast<LPCVOID>(r.hit_counter_va), &hits, 8, &n2);
+      step("stub 观测（8 秒内）: 调用 " + std::to_string(calls) + " 次, 命中 " +
+           std::to_string(hits) + " 次");
+      if (calls == 0) {
+        step("  -> 调用 0 次：hook 没被走到。要么 hook 点不对，要么该函数在进角色选择前不会被调用。");
+      } else if (hits == 0) {
+        step("  -> 有调用但零命中：FileDataID 与表里 796 个 id 全不匹配（id 来源有问题）。");
+      } else {
+        step("  -> 有命中：查表已生效。若画面仍不变，问题在客户端未使用该返回值。");
+      }
+    }
   }
 
   r.ok = true;

@@ -46,6 +46,96 @@ std::vector<uint8_t> build_arctium_stub(uint64_t id_alloc_va, uint32_t count,
   return s;
 }
 
+std::vector<uint8_t> build_instrumented_stub(uint64_t id_alloc_va, uint32_t count,
+                                             uint64_t call_counter_va, uint64_t hit_counter_va,
+                                             int32_t js_rel32) {
+  // 指令级构造（全部手工编码，逐条注释见下）。
+  //
+  // 与原版 stub 的语义完全一致，只是多了两个 inc qword ptr [mem]。
+  // 计数用 movabs r11,<addr> + inc qword [r11]，避免 32 位位移不够。
+  // r11 是易失寄存器，且原函数序言会自己保存它需要的东西，所以安全。
+  std::vector<uint8_t> s;
+  auto u32 = [&](uint32_t v) {
+    s.push_back(v & 0xFF); s.push_back((v >> 8) & 0xFF);
+    s.push_back((v >> 16) & 0xFF); s.push_back((v >> 24) & 0xFF);
+  };
+  auto u64 = [&](uint64_t v) {
+    for (int i = 0; i < 8; ++i) s.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+  };
+
+  // 调用计数：movabs r11, call_counter ; inc qword [r11]
+  s.push_back(0x49); s.push_back(0xBB); u64(call_counter_va);
+  s.push_back(0x49); s.push_back(0xFF); s.push_back(0x03);        // inc qword [r11]
+
+  // ---- 以下与原版 stub 逐条对应 ----
+  // test edx,edx
+  s.push_back(0x85); s.push_back(0xD2);
+
+  // js <未命中/负数 -> 回原函数>
+  // 目标 = stub 末尾（原指令起始）。先把位置记下来，最后回填。
+  const size_t js_at = s.size();
+  s.push_back(0x0F); s.push_back(0x88); u32(0);                   // 占位
+
+  // xor eax,eax
+  s.push_back(0x33); s.push_back(0xC0);
+
+  // movabs r9, idAlloc
+  s.push_back(0x49); s.push_back(0xB9); u64(id_alloc_va);
+
+  // lea ecx,[rax+rax*2] ; shl ecx,2
+  s.push_back(0x8D); s.push_back(0x0C); s.push_back(0x40);
+  s.push_back(0xC1); s.push_back(0xE1); s.push_back(0x02);
+
+  // cmp [rcx+r9],edx
+  s.push_back(0x42); s.push_back(0x39); s.push_back(0x14); s.push_back(0x09);
+
+  // je <命中>
+  const size_t je_at = s.size();
+  s.push_back(0x74); s.push_back(0);                              // 占位 rel8
+
+  // inc eax ; cmp eax,count ; jb <循环顶>
+  s.push_back(0xFF); s.push_back(0xC0);
+  s.push_back(0x3D); u32(count);
+  const size_t jb_at = s.size();
+  s.push_back(0x72); s.push_back(0);                              // 占位 rel8
+
+  // 未命中：xor eax,eax ; ret
+  s.push_back(0x33); s.push_back(0xC0);
+  s.push_back(0xC3);
+
+  // 命中：命中计数 ; mov rax,[rcx+r9+4] ; ret
+  const size_t hit_at = s.size();
+  s.push_back(0x49); s.push_back(0xBB); u64(hit_counter_va);
+  s.push_back(0x49); s.push_back(0xFF); s.push_back(0x03);        // inc qword [r11]
+  s.push_back(0x4A); s.push_back(0x8B); s.push_back(0x44); s.push_back(0x09); s.push_back(0x04);
+  s.push_back(0xC3);
+
+  // ---- 回填 ----
+  const size_t tail = s.size();          // 原指令从这里开始
+  const int32_t js_rel = static_cast<int32_t>(tail) - static_cast<int32_t>(js_at + 6);
+  s[js_at + 2] = static_cast<uint8_t>(js_rel & 0xFF);
+  s[js_at + 3] = static_cast<uint8_t>((js_rel >> 8) & 0xFF);
+  s[js_at + 4] = static_cast<uint8_t>((js_rel >> 16) & 0xFF);
+  s[js_at + 5] = static_cast<uint8_t>((js_rel >> 24) & 0xFF);
+
+  const size_t je_rel = hit_at - (je_at + 2);
+  s[je_at + 1] = static_cast<uint8_t>(je_rel);
+
+  // jb 回到 "lea ecx,[rax+rax*2]"（循环顶）
+  const size_t loop_top = 8 + 2 + 6 + 2 + 10;   // 见下方计算说明
+  // 实际循环顶 = lea 的偏移。用符号化方式重算：从头找 8D 0C 40
+  size_t lt = 0;
+  for (size_t i = 0; i + 2 < s.size(); ++i) {
+    if (s[i] == 0x8D && s[i + 1] == 0x0C && s[i + 2] == 0x40) { lt = i; break; }
+  }
+  (void)loop_top;
+  const int jb_rel = static_cast<int>(lt) - static_cast<int>(jb_at + 2);
+  s[jb_at + 1] = static_cast<uint8_t>(jb_rel);
+
+  (void)js_rel32;   // 保留参数以对齐旧接口；这里按实际布局重算
+  return s;
+}
+
 std::vector<uint8_t> build_hook_jump(uint64_t dst) {
   // 48 B8 <u64> FF E0 90   —— Arctium 的 hookInstructions 原样
   std::vector<uint8_t> j = {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xE0, 0x90};

@@ -58,6 +58,10 @@ struct ModLoaderResult {
   uint64_t id_table_va = 0;
   uint64_t string_blob_va = 0;
   uint64_t stub_va = 0;
+  // 观测点：stub 的调用次数 / 命中次数（u64，在客户端进程里）。
+  // 没有它们，"装好了但不生效"完全无法定位。
+  uint64_t call_counter_va = 0;
+  uint64_t hit_counter_va = 0;
   uint64_t trampoline_va = 0;
 
   // 第一半：NoJump
@@ -72,6 +76,19 @@ struct ModLoaderOptions {
   // 是否同时打 Arctium 的证书补丁。只有连私有服务器才需要（客户端不校验
   // 登录服务器证书）。模组加载完全不需要，所以默认关。
   bool cert_patches = false;
+
+  // 【诊断开关】是否装 anti-crash 补丁。
+  //
+  // 为什么需要：12.0.7 上 Integrity 特征码命中 0 处，只有 remap 命中 1 处。
+  // 于是 anti-crash 只写了那 1 条"跳转错位"补丁 —— 这会让客户端的
+  // remap 校验流程走到一个不一致的状态（跳转被挪了，但校验函数还在），
+  // 反而可能是 0xC00000E5 的来源。
+  //
+  // 关掉它，就能一次运行就区分"是 anti-crash 害的"还是"NoJump/跳板害的"。
+  bool no_anticrash = false;
+
+  // 只装跳板、不打 NoJump。用于区分两半各自的影响。
+  bool no_jump_patches = false;
 };
 
 struct ModDataSet {
