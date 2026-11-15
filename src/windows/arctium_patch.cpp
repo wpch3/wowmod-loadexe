@@ -108,7 +108,8 @@ std::vector<uint8_t> read_exact(HANDLE process, uint64_t addr, size_t n) {
 //      真正的 je 操作码在 match+1（01 是上一条 test 指令的立即数尾巴）。
 //      所以补丁点必须在运行时【按操作码校验后重算】，不能硬信匹配起点。
 static void verify_and_fix_hits(HANDLE process, const std::vector<ScannedImage>& images,
-                                BranchPatch* p) {
+                                BranchPatch* p,
+                                const std::vector<uint8_t>* scanned = nullptr) {
   if (!p) return;
 
   // ---- 1) 选出要改的那一处 ----
@@ -148,7 +149,14 @@ static void verify_and_fix_hits(HANDLE process, const std::vector<ScannedImage>&
   //
   // 优先采用「与签名导出时一致的偏移」；不一致才退化为就近搜索，
   // 但会把实际用到的偏移写进报告，绝不让报告和自己矛盾。
-  const auto win = read_exact(process, best_va, 16);
+  std::vector<uint8_t> win = read_exact(process, best_va, 16);
+
+  // 现场读取可能失败（壳拒绝读该页 / 换页），read_exact 会静默返回全 0，
+  // 于是 "前 6 字节里没有 0F 84" -> 规划失败。回退到扫描阶段缓存的字节。
+  const bool have_je = resolve_site_window(win, scanned, p->rva_in_image);
+  if (!have_je && scanned && p->rva_in_image + 16 <= scanned->size()) {
+    std::memcpy(win.data(), scanned->data() + p->rva_in_image, 16);
+  }
   char win_hex[64];
   std::snprintf(win_hex, sizeof(win_hex), "%02X %02X %02X %02X %02X %02X %02X %02X",
                 win[0], win[1], win[2], win[3], win[4], win[5], win[6], win[7]);
@@ -399,17 +407,26 @@ BranchPatchReport plan_branch_patches(HANDLE process,
           rep.patches.push_back(p);
           continue;
         }
-        if (!chosen->executable) {
-          p.error = "用户点名的 RVA 0x" + to_hex(it->second, 0) + " 不在可执行页上，拒绝";
-          rep.patches.push_back(p);
-          continue;
-        }
+        // 【这里曾经拒绝掉所有可用的点名】
+        //
+        // 旧代码要求 chosen->executable 才继续。而 executable 来自
+        // va_is_executable（只看当时的页保护）。线上实测那页是
+        // Protect=0x04 (PAGE_READWRITE) —— 壳把 .text 映射成可写视图。
+        // 于是每一次点名都被这句拦死。
+        //
+        // 关键认知：这页"现在不可执行"并不代表它不是代码。
+        // 壳在执行前会把页临时翻成 RX，或者执行的是另一份映射视图。
+        // Arctium 从头到尾都不看页属性。
+        //
+        // 所以我们只在报告里注明，不再拒绝。
+        // 真正的安全线在写入时：复读那 4 字节确认仍是 0F 84 的 rel32，
+        // 且 VirtualQueryEx 确认已提交。
         p.match_va = chosen->va;
         p.patch_va = p.match_va + static_cast<uint64_t>(p.patch_offset);
         p.rva_in_image = chosen->offset_in_image;
         p.image_base = chosen->image_base;
         p.used_strong = used_strong;
-        verify_and_fix_hits(process, images, &p);
+        verify_and_fix_hits(process, images, &p, &all_bytes);
         rep.patches.push_back(p);
         continue;
       }
@@ -454,7 +471,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
         p.used_strong = used_strong;
         p.matched_known_rva = true;
         p.executable_copy = h.executable;
-        verify_and_fix_hits(process, images, &p);
+        verify_and_fix_hits(process, images, &p, &all_bytes);
         rep.patches.push_back(p);
         continue;
       }
@@ -493,7 +510,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
         p.image_base = h.image_base;
         p.used_strong = used_strong;
         p.matched_known_rva = true;
-        verify_and_fix_hits(process, images, &p);
+        verify_and_fix_hits(process, images, &p, &all_bytes);
         rep.patches.push_back(p);
         continue;
       }
@@ -527,7 +544,7 @@ BranchPatchReport plan_branch_patches(HANDLE process,
     p.image_base = h.image_base;
     p.used_strong = used_strong;
 
-    verify_and_fix_hits(process, images, &p);
+    verify_and_fix_hits(process, images, &p, &all_bytes);
     rep.patches.push_back(p);
   }
 

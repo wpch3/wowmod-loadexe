@@ -39,6 +39,21 @@ struct ArctiumSignatureSpec {
   uint32_t known_build = 0;              // 该 known_rva 对应的 build 号，0 = 通用
 };
 
+// ---- 站点窗口校验（纯函数，便于单测）----
+//
+// 输入：现场从目标进程读到的 16 字节窗口 `live`，
+//       以及全映像缓存的指针 `scanned`（扫描阶段 ReadProcessMemory 的结果）
+//       和该站点的 rva_in_image。
+// 输出：应当用于判定 je 的窗口。
+//
+// 为什么需要：现场 ReadProcessMemory 失败时 read_exact 会【静默返回全 0】，
+// 于是 "前 6 字节里没有 0F 84" -> 规划失败 -> NoJump 装不上。
+// 线上出现过 "诊断（用缓存字节）说位置正确，规划（用现场字节）说找不到" 的矛盾。
+// 判据用 "能否定位到 je"，而不是猜数据是否有效。
+bool resolve_site_window(std::vector<uint8_t> live,
+                         const std::vector<uint8_t>* scanned,
+                         uint64_t rva_in_image);
+
 // 指针失效风险：返回的是静态表的引用，进程生命周期内有效。
 const std::vector<ArctiumSignatureSpec>& arctium_signature_specs();
 

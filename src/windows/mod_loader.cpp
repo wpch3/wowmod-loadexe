@@ -521,32 +521,6 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   // 用户实测踩过：跳板装成功、NoJump 失败，结果是「改了内存但行为没变」——
   // 比什么都不做更糟，因为占用了 id 表/字符串块并且 hook 了文件加载主函数。
   // 所以顺序改成：先把 NoJump 的规划做完（纯读），确认能打，再动第二半。
-  // ---- 3a2. anti-crash（Arctium PrepareAntiCrash）----
-  //
-  // 缺了它，NoJump / 跳板即便装对了，客户端也会在几十秒内以
-  // EXCEPTION_INTERNAL_ERROR 结束 —— 崩溃栈落在 ntdll!RtlReportCriticalFailure，
-  // 因为那是"完整性校验失败"的统一出口，不是客户端代码的问题。
-  {
-    AntiCrashPlan ac = plan_anti_crash(process, opts.cert_patches);
-    if (!ac.ok) {
-      step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
-    } else {
-      step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
-           " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
-           std::to_string(ac.remap_jump_patches) + " 条" +
-           (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
-      if (!ac.patches.empty()) {
-        if (apply_anti_crash(process, &ac)) {
-          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
-          r.anticrash_patches = ac.patches.size();
-        } else {
-          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
-        }
-      }
-      for (const auto& n : ac.notes) step("  " + n);
-    }
-  }
-
   std::map<std::string, uint32_t> by_rva;
   for (const auto& s2 : arctium_signature_specs()) {
     // 注意："s2.name != \"...\"" 是指针比较，两个字符串字面量在不同编译单元里
@@ -846,6 +820,47 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     } else {
       r.error = "补丁已写入，但恢复进程失败: " + rerr + "（请手动结束客户端后重试）";
       return r;
+    }
+  }
+
+  // ---- 6. anti-crash（对齐 Arctium：NoJump 之后、resume 之后才做）----
+  //
+  // 曾经放在挂起阶段（resume 之前），线上实测 “完整性校验 0 处” ——
+  // 因为壳此时还没解密那些函数，特征码一个都匹配不到；随后只写进了
+  // 1 条 remap，客户端 resume 后几十秒就 EXCEPTION_INTERNAL_ERROR。
+  //
+  // Arctium Launcher.cs 的真实顺序是：
+  //   NoJump -> LoadFileMappings -> HookClient -> NtResumeProcess -> RemapAndPatch(antiCrash)
+  // 即 anti-crash 是【恢复进程之后】才做的。这里照做，并对 “0 命中”
+  // 做短重试，给按需解密留时间。
+  {
+    AntiCrashPlan ac;
+    int integ = 0;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      if (attempt) {
+        step("anti-crash 第 " + std::to_string(attempt) + " 次重试（完整性校验尚未解密）");
+        ::Sleep(1500);
+      }
+      ac = plan_anti_crash(process, opts.cert_patches);
+      integ = ac.ok ? ac.integrity_hits : 0;
+      if (ac.ok && (integ > 0 || ac.remap_hits > 0)) break;
+    }
+    if (!ac.ok) {
+      step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
+    } else {
+      step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
+           " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
+           std::to_string(ac.remap_jump_patches) + " 条" +
+           (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
+      if (!ac.patches.empty()) {
+        if (apply_anti_crash(process, &ac)) {
+          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
+          r.anticrash_patches = ac.patches.size();
+        } else {
+          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
+        }
+      }
+      for (const auto& n : ac.notes) step("  " + n);
     }
   }
 

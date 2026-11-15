@@ -2112,6 +2112,7 @@ static void test_mod_loader_ordering() {
   const size_t p_hook = src.find("build_hook_jump(tramp_va)");
   const size_t p_apply = src.find("apply_branch_patches(process, &branch_plan)");
   const size_t p_resume = src.find("resume_process(process, &rerr)");
+  const size_t p_apply_branch = src.find("apply_branch_patches(process, &branch_plan)");
 
   CHECK(p_suspend != std::string::npos, "必须调用 suspend_process");
   CHECK(p_plan != std::string::npos, "必须调用 plan_branch_patches");
@@ -2129,19 +2130,28 @@ static void test_mod_loader_ordering() {
   CHECK(src.find("struct ResumeGuard") != std::string::npos,
         "必须有 ResumeGuard 保证进程被恢复（否则客户端会永久挂起）");
 
-  // ---- anti-crash 必须最先写 ----
+  // ---- anti-crash 必须在 NoJump 之后、resume 之后写 ----
   //
-  // 客户端在运行时会核对代码页完整性与映射基址。只要这些校验还在，
-  // 我们改的每一个字节都会被判定为篡改 -> EXCEPTION_INTERNAL_ERROR
-  // (0xC00000E5)，崩溃栈落在 ntdll!RtlReportCriticalFailure。
-  // 所以 anti-crash 必须在【任何】其它写入之前完成，并且在挂起状态下。
+  // 这条断言曾经写成反的（要求 anti-crash 最先写、且在任何其它写入之前），
+  // 依据是"越早关掉校验越好"。但第 5 轮线上实测推翻了它：
+  // 在进程仍挂起时规划 anti-crash，日志是
+  //     anti-crash 规划: 完整性校验 0 处, remap 校验 1 处, 跳转补丁 1 条
+  // —— 完整性校验那 3 个函数此刻还没被壳解密，特征码一个都匹配不到。
+  // 结果只写进 1 条 remap，客户端 resume 后即以 EXCEPTION_INTERNAL_ERROR
+  // (0xC00000E5) 结束。
+  //
+  // Arctium Launcher.cs 的真实顺序是不容再猜的：
+  //   NoJump -> LoadFileMappings -> HookClient -> NtResumeProcess -> RemapAndPatch(antiCrash)
+  // 也就是 anti-crash 是【恢复进程之后】才做的。这里断言上游顺序。
   const size_t p_ac_plan = src.find("plan_anti_crash(process");
   const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac)");
   CHECK(p_ac_plan != std::string::npos, "必须调用 plan_anti_crash（Arctium PrepareAntiCrash）");
   CHECK(p_ac_apply != std::string::npos, "必须调用 apply_anti_crash");
   CHECK(p_suspend < p_ac_plan, "anti-crash 必须在挂起之后规划（要读已解密的映像）");
-  CHECK(p_ac_apply < p_plan, "anti-crash 必须在 NoJump 规划之前写入");
-  CHECK(p_ac_apply < p_hook, "anti-crash 必须在装 hook 之前写入");
+  CHECK(p_apply_branch < p_ac_apply,
+        "anti-crash 必须在 NoJump 写入之后（对齐 Arctium: RemapAndPatch 在 NtResumeProcess 之后）");
+  CHECK(p_resume < p_ac_apply,
+        "anti-crash 必须在 resume 之后（挂起时代码页未解密，Integrity 特征码 0 命中）");
 
   // ---- 字符串块必须存绝对路径 ----
   //
@@ -2803,6 +2813,43 @@ static void test_protect_plan() {
 // Arctium 特征码表的自检：不依赖客户端，只用合成映像验证
 // 「特征码能解析、能在已知字节处唯一命中、改写点偏移指向预期位置」。
 // 真正的 12.0.7 匹配结果由 launcher --mode sigscan 现场给出，这里不伪造。
+// 现场读取失败时，站点窗口必须回退到扫描缓存的字节。
+//
+// 线上症状：诊断（读缓存）说「明文且位置正确」，规划（现场 read_exact）
+// 却说「找不到 0F 84」，于是 NoJump 7 次重试全部失败。
+// 根因是 read_exact 在读取失败时静默返回全 0。
+static void test_site_window_fallback() {
+  group("site-window");
+  const uint64_t rva = 0x20;
+  std::vector<uint8_t> scanned(rva + 16, 0);
+  // 真实字节：01 0F 84 9C 00 00 00 48 8B 0D 4C 01 FD 00
+  const uint8_t real[16] = {0x01, 0x0F, 0x84, 0x9C, 0x00, 0x00, 0x00, 0x48,
+                            0x8B, 0x0D, 0x4C, 0x01, 0xFD, 0x00, 0x8B, 0xD6};
+  std::memcpy(scanned.data() + rva, real, 16);
+
+  // 1) 现场读到的窗口是全 0（读取失败）-> 回退后必须能定位到 je
+  std::vector<uint8_t> zero(16, 0);
+  CHECK(wowmod::resolve_site_window(zero, &scanned, rva),
+        "现场读取失败（全 0）时必须回退到扫描缓存，否则 NoJump 永远定位不到");
+
+  // 2) 现场读取成功 -> 直接可用
+  std::vector<uint8_t> live(real, real + 16);
+  CHECK(wowmod::resolve_site_window(live, &scanned, rva), "现场读取成功时直接可用");
+
+  // 3) 没有缓存（nullptr）时不能假装成功
+  CHECK(!wowmod::resolve_site_window(zero, nullptr, rva),
+        "没有缓存字节时不能谎报成功");
+
+  // 4) 缓存里也确实没有 je -> 必须返回 false（不能靠回退掩盖真失败）
+  std::vector<uint8_t> no_je(rva + 16, 0x90);
+  CHECK(!wowmod::resolve_site_window(zero, &no_je, rva),
+        "缓存字节里没有 0F 84 时必须返回 false");
+
+  // 5) rva 越界不能读飞
+  CHECK(!wowmod::resolve_site_window(zero, &scanned, 0xFFFF0),
+        "rva 超出缓存范围时必须安全返回 false");
+}
+
 static void test_arctium_signature_table() {
   group("arctium-signature-table");
   const auto& sigs = wowmod::arctium_signature_specs();
@@ -2963,6 +3010,7 @@ int main() {
   test_file_layout_remap();
   test_no_false_negative();
   test_protect_plan();
+  test_site_window_fallback();
   test_arctium_signature_table();
   {
     int extra = 0;

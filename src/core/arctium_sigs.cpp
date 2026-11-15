@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 #include "wowmod/arctium_sigs.hpp"
 
+#include <cstring>
+
 namespace wowmod {
 
 namespace {
@@ -96,5 +98,25 @@ const std::vector<ArctiumSignatureSpec> kSpecs = {
 }  // namespace
 
 const std::vector<ArctiumSignatureSpec>& arctium_signature_specs() { return kSpecs; }
+
+
+namespace {
+bool window_has_je(const std::vector<uint8_t>& b) {
+  for (size_t i = 0; i + 1 < b.size() && i <= 5; ++i)
+    if (b[i] == 0x0F && b[i + 1] == 0x84) return true;
+  return false;
+}
+}  // namespace
+
+bool resolve_site_window(std::vector<uint8_t> live,
+                         const std::vector<uint8_t>* scanned,
+                         uint64_t rva_in_image) {
+  if (!scanned || live.size() < 16) return window_has_je(live);
+  if (window_has_je(live)) return true;
+  if (rva_in_image + 16 > scanned->size()) return false;
+  std::vector<uint8_t> alt(16);
+  std::memcpy(alt.data(), scanned->data() + rva_in_image, 16);
+  return window_has_je(alt);
+}
 
 }  // namespace wowmod
