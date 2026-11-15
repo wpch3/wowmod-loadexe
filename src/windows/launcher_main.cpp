@@ -56,6 +56,7 @@
 #include "windows/arctium_sig.hpp"
 #include "windows/arctium_patch.hpp"
 #include "windows/mod_loader.hpp"
+#include "wowmod/mods_selfcontained.hpp"
 #include "windows/probe_reader.hpp"
 #include "windows/crash_evidence.hpp"
 #include "windows/fd_hook.hpp"
@@ -334,6 +335,12 @@ struct Options {
   // patch 模式的兜底：当同一段代码被映射多份、无法自动判定该改哪一份时，
   // 允许用 --rva NAME=0x... 点名。值是【相对主模块的 RVA】，来自离线 dump 的实测。
   std::vector<std::pair<std::string, uint32_t>> patch_rva;
+
+  // ---- 自包含模式（不需要 python / 不需要预先生成 mappings）----
+  // Arctium 的形态是 exe + mappings\ + files\；
+  // 这里允许直接把「模组目录 + listfile」交给 exe，由 exe 自己换算。
+  std::string mods_dir;
+  std::string listfile_spec;   // 多个文件用 ';' 分隔
 };
 
 void say(const std::string& s) {
@@ -553,6 +560,8 @@ int main(int argc, char** argv) {
     else if (a == "--terminate-on-fail") o.keep_client = false;
     else if (a == "--wait-exit") o.detach = false;
     else if (a == "--no-detach") o.detach = false;
+    else if (a == "--mods") o.mods_dir = glue_path(argc, argv, &i);
+    else if (a == "--listfile") o.listfile_spec = glue_path(argc, argv, &i);
     else if (a == "--verbose") o.verbose = true;
     else if (a == "--stub") {
       const std::string v = next("arctium");
@@ -574,6 +583,7 @@ int main(int argc, char** argv) {
           "  --mode sigscan   用 Arctium 的公开特征码扫运行时映像，找真正的文件打开函数\n"
           "  --mode probe     【旁路记录】在 FileDataID 查找函数上装跳板，只记录客户端实际\n"
           "                   传入了哪些 id，不改变任何返回值（无风险，用来确认 ABI）\n"
+          "  --mode mods      【完整机制】anti-crash + NoJump + FileDataID 查表跳板，三件一起上\n"
           "  --mode patch     【Arctium 机制】把「按 FileDataID/路径从 CASC 加载」的\n"
           "                   条件跳转改成不跳（4 个 00），让客户端回头查本地文件。\n"
           "                   这是 Arctium 真正用的做法，不加 hook、不搬指令、不写跳板\n"
@@ -584,6 +594,9 @@ int main(int argc, char** argv) {
           "                   --rva LoadByFileIdAlternate=0x33d7976\n"
           "  --target NAME    probe 用哪条特征码定位目标（默认 CustomFileIdHook；\n"
           "                   另一条是 FileIdLookupFNV，实测更可能加载角色资源）\n"
+          "  --mods DIR       自包含模式：直接扫这个模组目录（exe 自己换算 FileDataID，\n"
+          "                   不需要 python、不需要预先生成 mappings\\files\n"
+          "  --listfile PATH  与 --mods 配合；多个文件用 ';' 分隔\n"
           "  --wait MS        等待客户端解密完成的最长时间（默认 30000）\n"
           "  --terminate-on-fail  失败时终止客户端（默认保留）\n"
           "  --wait-exit      一直等到客户端退出再返回（默认启动后即返回）\n\n"
@@ -702,7 +715,50 @@ int main(int argc, char** argv) {
                                     : wowmod::win::StubKind::kArctium;
     std::printf("  跳板实现: %s\n\n", o.stub_native ? "native（本项目生成器）"
                                                      : "Arctium（逐字节照抄）");
-    const auto r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms, kind);
+    // 数据侧从哪里来：
+    //   给了 --mods  ->  exe 自己扫模组目录 + listfile 换算 FileDataID
+    //   否则        ->  读 <workdir>\wowmod\mappings + files（Arctium 磁盘形态）
+    wowmod::win::ModLoaderResult r;
+    if (!o.mods_dir.empty()) {
+      const auto lfs = wowmod::win::split_listfiles(o.listfile_spec);
+      if (lfs.empty()) {
+        std::printf("\n[失败] --mods 需要同时给 --listfile（FileDataID 只能由 listfile 换算）\n");
+        std::printf("       wowmod_loader.exe --mode mods --exe \"...\\Wow.exe\" \\\n");
+        std::printf("           --mods \"D:\\Midnight Open Beta\\_midnight_\" \\\n");
+        std::printf("           --listfile \"D:\\Midnight Open Beta\\_midnight_\\.lf\\wow-listfile.csv\"\n");
+        std::printf("       （tools\\fetch-listfile.cmd 可以下载，约 147 MB，只需一次）\n\n");
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return 2;
+      }
+      std::printf("  数据侧: 自包含扫描 %s（listfile %zu 个）\n", o.mods_dir.c_str(),
+                  lfs.size());
+      std::fflush(stdout);
+      const auto sc = wowmod::win::build_selfcontained_mods(o.mods_dir, lfs);
+      std::printf("    扫到文件 %zu, 解析出 FileDataID %zu（精确 %zu / _HD %zu / 文件名 %zu）\n",
+                  sc.files_scanned, sc.matched, sc.by_exact, sc.by_hd, sc.by_name);
+      if (sc.ambiguous || sc.missing)
+        std::printf("    无法确定 %zu（其中重名 %zu）, 同 id 重复 %zu\n", sc.missing,
+                    sc.ambiguous, sc.duplicates);
+      for (size_t k = 0; k < sc.unresolved.size() && k < 8; ++k)
+        std::printf("      未解析: %s\n", sc.unresolved[k].c_str());
+      std::fflush(stdout);
+      if (!sc.ok) {
+        std::printf("\n[失败] %s\n", sc.error.c_str());
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return 4;
+      }
+      wowmod::win::ModDataSet ds;
+      ds.entries = sc.entries;
+      // 自包含模式下 local_path 已经是绝对路径；files_dir 只用于报告。
+      ds.files_dir = sc.game_root;
+      ds.source_note = "--mods 自包含（" + std::to_string(sc.matched) + " 项）";
+      r = wowmod::win::install_mod_loader_with_data(pi.hProcess, wowmod_dir, ds, o.wait_ms,
+                                                    kind);
+    } else {
+      r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms, kind);
+    }
     const std::string text = wowmod::win::format_mod_loader_report(r);
     std::printf("\n%s", text.c_str());
     std::fflush(stdout);

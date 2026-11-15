@@ -183,17 +183,155 @@ def guess_by_family(table, table_path, rel):
     return [(fid, path) for num, fid, path in out if num != want]
 
 
-def walk_mod(mod_root):
+def find_game_root(path, max_up=3):
+    """在一棵模组目录里找出「游戏根」应有的那一层。
+
+    为什么必须这样做 —— 用户手上真实模组包的形状五花八门：
+
+      T21WarriorNSFW/item/texturecomponents/...
+        ^ 这是 item/ 的【父目录】，游戏根就是它
+
+      Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelite.m2
+        ^ 这是 creature/ 的父目录，游戏根是它
+
+      Wrath NPC Pack/Textures/BakedNpcTextures/*.blp
+        ^ 【没有任何一层叫 creature/ 或 item/】，但 Textures/BakedNpcTextures
+          就是 creature 贴图在游戏里的路径（creature/bakednpctextures/）
+
+    上一版只会「以选定目录的父目录为基准」算相对路径，于是上面三种
+    （也就是用户实际拿到的那三种）全部匹配失败，或者被 MOD_PREFIXES
+    过滤掉 —— 表现就是「扫到 0 个文件」或者「一个 id 都匹配不上」。
+
+    规则（按顺序，先命中先返回）：
+      1. 从 path 往下找，第一层出现 MOD_PREFIXES 里某个名字的目录，
+         它的父目录就是游戏根；
+      2. 否则，如果某个子目录名是 Textures/Textures 之类，
+         视作 creature 贴图的常见别名，挂在 creature/ 下；
+      3. 都不满足就返回 None（调用方退回旧行为）。
+    """
+    root = os.path.abspath(path)
+    names = set(p.rstrip("/") for p in MOD_PREFIXES)
+
+    def scan(start, depth):
+        if depth > max_up:
+            return None
+        try:
+            entries = sorted(os.scandir(start), key=lambda e: e.name.lower())
+        except OSError:
+            return None
+        for e in entries:
+            if not e.is_dir() or e.name.startswith("."):
+                continue
+            if e.name.lower() in names:
+                return start
+        # 没有直接的资源目录，继续往下找（限制深度，避免扫整棵树）
+        for e in entries:
+            if not e.is_dir() or e.name.startswith("."):
+                continue
+            got = scan(e.path, depth + 1)
+            if got:
+                return got
+        return None
+
+    got = scan(root, 0)
+    if got:
+        return got
+    return None
+
+
+def build_name_index(table, table_path):
+    """按【文件名】建索引：basename -> [(id, 官方路径)]。
+
+    为什么不按"尾部 N 段"建：真实 listfile 有 180 万条，尾部 2/3/4 段会让
+    索引膨胀到 500 万项（几百 MB 内存）。按文件名索引只有一条一项，
+    然后对每个候选算"尾部有几段对得上"，同样精确，而且更快。
+
+    真实需求（用户手上的包）：
+        Wrath NPC Pack/Textures/BakedNpcTextures/CreatureDisplayExtra-15876.blp
+      listfile 里是
+        creature/bakednpctextures/creaturedisplayextra-15876.blp
+    文件名唯一 -> 直接确定；目录名 textures 和 creature 对不上也不影响。
+    而 common.blp 这种在 listfile 里对应多条的，会因为"尾部段数打平"被拒绝。
+    """
+    idx = {}
+    for key, fid in table.items():
+        base = key.rsplit("/", 1)[-1]
+        idx.setdefault(base, []).append((fid, table_path.get(key, key)))
+    return idx
+
+
+def _tail_score(rel_key, cand_key):
+    """rel 与候选路径从末尾开始连续相同的段数。"""
+    a = rel_key.split("/")
+    b = cand_key.split("/")
+    n = 0
+    for i in range(1, min(len(a), len(b)) + 1):
+        if a[-i] != b[-i]:
+            break
+        n += 1
+    return n
+
+
+def suffix_candidates(name_idx, rel):
+    """诊断用：返回 (候选数, 命中尾部段数, [候选 id])。"""
+    k = normalize_key(rel)
+    base = k.rsplit("/", 1)[-1]
+    cands = name_idx.get(base, [])
+    if not cands:
+        return 0, 0, []
+    scored = sorted(((_tail_score(k, ck), fid) for fid, ck in cands), reverse=True)
+    return len(cands), scored[0][0], sorted({fid for _sc, fid in scored})
+
+
+def lookup_by_suffix(name_idx, rel):
+    """用文件名 + 尾部目录打分，在 listfile 里确定唯一 FileDataID。
+
+    安全阀（比"猜"重要得多）：
+      * 只有一个候选          -> 直接采用；
+      * 多个候选但最高分唯一   -> 采用；
+      * 最高分并列（分不出来） -> 拒绝，报给用户，绝不随手挑一个。
+    拒绝的后果只是"这个文件不生效"，猜错会让别的资源变成这张图 —— 后者
+    在游戏里极难排查，所以宁可漏。
+    返回 (id, 官方路径, 命中尾部段数) 或 None。
+    """
+    k = normalize_key(rel)
+    base = k.rsplit("/", 1)[-1]
+    cands = name_idx.get(base, [])
+    if not cands:
+        return None
+    if len(cands) == 1:
+        fid, path = cands[0]
+        return fid, path, _tail_score(k, normalize_key(path))
+    scored = sorted(((_tail_score(k, normalize_key(ck)), fid, ck) for fid, ck in cands),
+                    reverse=True)
+    best = scored[0][0]
+    winners = [(fid, ck) for sc, fid, ck in scored if sc == best]
+    if len(winners) != 1:
+        return None
+    fid, path = winners[0]
+    return fid, path, best
+
+
+def walk_mod(mod_root, gamedir=None):
     """遍历模组树，返回 {游戏相对路径: 绝对磁盘路径}。
 
-    关键点：以 mod_root 的【父目录】为基准算相对路径。
-    这样 --mod "...\\_midnight_\\Character" 得到的是
-    "Character/BloodElf/Female/xxx.blp"，正好是游戏内的路径形式。
-    如果直接把 mod_root 当基准，会丢掉最外层那一段，得到
-    "BloodElf/Female/xxx.blp" —— 那是错的，客户端永远匹配不上。
+    游戏根的确定顺序（这就是「为什么有些包完全没反应」的答案）：
+      1. 显式给出的 --gamedir（用户最清楚，优先）；
+      2. 在 mod_root 下自动找：第一层出现 character/creature/item/... 的
+         目录的父目录（见 find_game_root）；
+      3. 退回旧行为：mod_root 的父目录。
+
+    只有 3 能工作时，包必须长得像 "_midnight_/Character/..."。
+    用户实际的包（T21WarriorNSFW/item、Titaa .../Creature、Wrath NPC Pack/
+    Textures/...）都不是这个形状，所以 1/2 是必需的。
     """
     root = os.path.abspath(mod_root)
-    base = os.path.dirname(root)
+    if gamedir:
+        base = os.path.abspath(gamedir)
+    else:
+        auto = find_game_root(root)
+        base = auto if auto else os.path.dirname(root)
+
     out = {}
     skipped_prefix = 0
     for dirpath, dirnames, filenames in os.walk(root):
@@ -205,7 +343,13 @@ def walk_mod(mod_root):
             rel = os.path.relpath(full, base).replace("\\", "/")
             low = rel.lower()
             if not any(low.startswith(p) for p in MOD_PREFIXES):
+                # 不是已知资源前缀：先留着，交给 listfile 尾部匹配去判。
+                # 过去这里直接 continue，于是 Textures/... 这类包被整体丢弃，
+                # 表现是「扫到 0 个文件」。现在只统计，由调用方决定。
                 skipped_prefix += 1
+                # 仍然收进来（标记为「前缀不认识」），让尾部匹配和
+                # --mod-root 指定后的重算有机会救回它们。
+                out[rel] = full
                 continue
             out[rel] = full
     return out, skipped_prefix
@@ -233,6 +377,7 @@ def main():
     ap = argparse.ArgumentParser(description="扫描模组目录树，生成 Arctium 风格的 mappings + files")
     ap.add_argument("--mod", required=True, help="模组目录（例如 ...\\_midnight_\\Character）")
     ap.add_argument("--listfile", nargs="+", required=True, help="一个或多个 id;path 文件")
+    ap.add_argument("--gamedir", help="游戏根目录（不指定则自动在模组目录里找）")
     ap.add_argument("--out", help="输出到 <out>\\mappings 与 <out>\\files（不给则只打印）")
     ap.add_argument("--mapping-name", default="mod.txt", help="生成的 mappings 文件名")
     ap.add_argument("--copy", action="store_true", help="复制而不是硬链接")
@@ -260,8 +405,14 @@ def main():
     print(f"    条目 {len(table)}")
 
     print(f"==> 扫描模组树: {args.mod}")
-    files, skipped = walk_mod(args.mod)
+    files, skipped = walk_mod(args.mod, args.gamedir)
     print(f"    游戏资源文件 {len(files)} 个（另有 {skipped} 个非资源路径已忽略）")
+    # 打印前 3 条实际会用的相对路径：用户据此一眼就能看出根锚得对不对，
+    # 而不用等加载器跑完发现"没反应"。
+    for _i, _k in enumerate(sorted(files)):
+        if _i >= 3:
+            break
+        print(f"      例: {_k}")
     if not files:
         print("[失败] 没有找到任何游戏资源文件。", file=sys.stderr)
         print("       路径必须以 character/ creature/ item/ interface/ sound/ fonts/ 等开头。",
@@ -279,9 +430,17 @@ def main():
     # 和官方 "HumanFemaleNakedTorsoSkin00_15_HD.blp" 同时映射到 1348798。
     # 客户端只会用其中一个，而带空格的那个是错的 —— 表现就是"没反应"。
     # 既然 listfile 已经明确告诉我们官方名字，就该用官方的。
+    suffix_idx = build_name_index(table, table_path)
     matched, missing, inferred = [], [], []
     for rel in sorted(files):
         fid, official, how = lookup_variants(table, table_path, rel)
+        if fid is None:
+            # 前缀对不上 / 目录层级不同 -> 用路径尾部去 listfile 里找唯一项。
+            # 只接受唯一匹配，绝不按"第几个"去对齐。
+            hit = lookup_by_suffix(suffix_idx, rel)
+            if hit:
+                fid, official, nseg = hit
+                how = f"name+tail({nseg})"
         if fid is None:
             missing.append(rel)
             continue
@@ -347,11 +506,25 @@ def main():
             family_cands.append((rel, cands))
 
     if missing:
-        print("\n    以下文件在公开 listfile 里没有 id（不会生效，但也不影响其它文件）:")
+        print("\n    以下文件没能在 listfile 里确定 FileDataID（不会生效，但不影响其它文件）:")
+        ambiguous = []
         for rel in missing[:20]:
-            print(f"      {rel}")
+            ncand, nseg, ids = suffix_candidates(suffix_idx, rel)
+            if len(ids) > 1:
+                ambiguous.append((rel, n, ids))
+                print(f"      {rel}")
+                print(f"        -> 同名文件在 listfile 里有 {len(ids)} 条，"
+                      f"尾部最多只能对上 {nseg} 段，无法确定是哪一个（拒绝猜）")
+            else:
+                print(f"      {rel}")
         if len(missing) > 20:
             print(f"      ... 还有 {len(missing) - 20} 个")
+        if ambiguous:
+            print("\n    上面标注「对应多个 id」的，原因是这个文件名在游戏里到处都有")
+            print("    （例如 common.blp / skin.blp）。这种情况下靠文件名分不出来，")
+            print("    必须让目录层级和游戏内路径一致，或者手工写一条映射：")
+            print("        <FileDataID>;<游戏内相对路径>")
+            print("    写进 wowmod\\mappings\\ 下的任意 .txt 即可，和自动生成的不冲突。")
 
     if not matched:
         print("\n[失败] 一个都没匹配上，生成的 mappings 会是空的。", file=sys.stderr)

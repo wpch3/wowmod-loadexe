@@ -21,15 +21,10 @@
 #include <string>
 #include <vector>
 
+#include "wowmod/mod_entry.hpp"
+
 namespace wowmod {
 namespace win {
-
-struct ModEntry {
-  uint64_t file_data_id = 0;
-  std::string game_path;    // 游戏内相对路径（mappings 里写的那个）
-  std::string local_path;   // 磁盘上的绝对路径
-  bool file_exists = false;
-};
 
 struct MappingLoadReport {
   size_t files_read = 0;         // 读到的 mappings/*.txt 数量
@@ -67,7 +62,16 @@ struct ModLoaderResult {
 
   // 第一半：NoJump
   bool branch_patched = false;
+  size_t anticrash_patches = 0;   // Arctium PrepareAntiCrash 写入的补丁数
   size_t branch_count = 0;
+};
+
+// 已经准备好的数据侧（来自 mappings/files 目录，或来自 --mods 自包含扫描）。
+// 两条来源产出的结构完全一样，安装流程只认这个。
+struct ModDataSet {
+  std::vector<ModEntry> entries;
+  std::string files_dir;      // 绝对路径：表里存的路径必须落在它下面
+  std::string source_note;    // "mappings/files" 或 "--mods 自包含"
 };
 
 // 跳板实现选择。
@@ -87,6 +91,12 @@ enum class StubKind {
 ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir,
                                    uint32_t wait_ms,
                                    StubKind kind = StubKind::kArctium);
+
+// 同一套安装流程，但数据侧由调用方直接给出（--mods 自包含模式用）。
+// wowmod_dir 只用来放报告；数据不再从 <wowmod_dir>/mappings 读。
+ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& wowmod_dir,
+                                             const ModDataSet& data, uint32_t wait_ms,
+                                             StubKind kind = StubKind::kArctium);
 
 std::string format_mod_loader_report(const ModLoaderResult& r);
 

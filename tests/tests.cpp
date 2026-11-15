@@ -15,6 +15,8 @@
 #include "wowmod/arctium.hpp"
 #include "wowmod/fileid_stub.hpp"
 #include "wowmod/x64sim.hpp"
+#include "wowmod/anticrash_plan.hpp"
+#include "wowmod/mods_selfcontained.hpp"
 #include "windows/arctium_clone.hpp"
 #include "wowmod/launcher_stub.hpp"
 #include "wowmod/x64_decode.hpp"
@@ -1344,6 +1346,201 @@ static void test_peb_image_protect_and_reach() {
         "区域起点早于映像基址时必须夹到 [at, to_read)，否则下溢");
 }
 
+// Arctium 的 anti-crash 机制（PrepareAntiCrash）：这是「补丁装上了但客户端崩」
+// 的唯一原因。崩溃栈落在 ntdll!RtlReportCriticalFailure，不是客户端代码。
+//
+// 这里用合成映像验证三件事（纯计算，不碰进程）：
+//   1. Integrity / Integrity2 命中处写 C2 00 00（ret 0）
+//   2. Remap 命中处：读出它之后的跳转，算出 jumpToValue，
+//      再把「目标正好是 jumpToValue」的 Jcc 全部改成往前挪 1 字节
+//   3. 无关跳转一个字节都不许动
+static void test_anticrash_plan() {
+  group("anticrash_plan");
+  const uint64_t base = 0x140000000ULL;
+  const size_t N = 0x20000;
+  std::vector<uint8_t> img(N, 0x90);
+
+  // 1) Integrity / Integrity2
+  const uint8_t integ[] = {0x44,0x89,0x04,0x24,0x00, 0x44,0x89,0x04,0x24,0x00,
+                           0x89,0x04,0x24,0x00, 0x48,0x89,0x04,0x24,0x00, 0x53,0x56,0x57};
+  std::memcpy(img.data() + 0x100, integ, sizeof(integ));
+  const uint8_t integ2[] = {0x44,0x89,0x04,0x24,0x00, 0x44,0x89,0x04,0x24,0x00,
+                            0x89,0x04,0x24,0x00, 0x48,0x89,0x04,0x24,0x00, 0x53,0x57};
+  std::memcpy(img.data() + 0x200, integ2, sizeof(integ2));
+
+  // 2) Remap 特征码 48 ?? ?? 1E 0F 83：它自己的 0F 83 就是后续那条跳转
+  const size_t a = 0x1000;
+  img[a+0]=0x48; img[a+1]=0x83; img[a+2]=0xC4; img[a+3]=0x1E;
+  img[a+4]=0x0F; img[a+5]=0x83;
+  const int32_t remap_rel = static_cast<int32_t>(0x3000 - static_cast<long long>(a) - 10);
+  std::memcpy(img.data()+a+6, &remap_rel, 4);
+  const uint64_t jump_to = base + a + static_cast<uint64_t>(static_cast<int64_t>(remap_rel)) + 10;
+
+  // 3) 一条短跳转（0x7C = jl rel8；Arctium 的 IsShortJump 是 0x70..0x7E，不含 0xEB）
+  const size_t tj = static_cast<size_t>(jump_to - base) - 0x20;
+  img[tj-3] = 0x48;
+  img[tj] = 0x7C;
+  img[tj+1] = static_cast<uint8_t>(static_cast<long long>(jump_to) -
+                                   static_cast<long long>(base + tj) - 2);
+
+  // 4) 一条长跳转（0F 84 rel32），目标也是 jump_to
+  const size_t j5 = 0x4000;
+  img[j5] = 0x0F; img[j5+1] = 0x84;
+  int32_t rel32 = static_cast<int32_t>(static_cast<long long>(jump_to) -
+                                       static_cast<long long>(base + j5) - 6);
+  std::memcpy(img.data()+j5+2, &rel32, 4);
+
+  // 5) 一条目标不同的长跳转：必须原封不动
+  const size_t other = 0x5000;
+  img[other] = 0x0F; img[other+1] = 0x84;
+  int32_t other_rel = 0x123;
+  std::memcpy(img.data()+other+2, &other_rel, 4);
+
+  const auto plan = plan_anti_crash_from_image(img, base);
+  CHECK(plan.ok, "anti-crash 规划必须成功");
+  CHECK_EQ(plan.integrity_hits, 2u);
+  CHECK_EQ(plan.remap_hits, 1u);
+  // remap 自身的 0F 83 + 短跳 + 长跳 = 3 条
+  CHECK_EQ(plan.remap_jump_patches, 3u);
+
+  int integ_n = 0, short_n = 0, long_n = 0, saw_j5 = 0;
+  for (const auto& p : plan.patches) {
+    if (p.bytes.size() == 3 && p.bytes[0] == 0xC2) {
+      ++integ_n;
+      CHECK(p.bytes[1] == 0 && p.bytes[2] == 0, "Integrity 补丁必须是 C2 00 00（ret 0）");
+    } else if (p.name.rfind("jmp_rel8@", 0) == 0) {
+      ++short_n;
+      CHECK_EQ(p.bytes.size(), 1u);
+      CHECK_EQ(p.bytes[0], 0xEB);
+      CHECK_EQ(p.va, base + tj);
+    } else if (p.name.rfind("jmp_rel32@", 0) == 0) {
+      ++long_n;
+      CHECK_EQ(p.bytes.size(), 5u);
+      CHECK_EQ(p.bytes[0], 0xE9);
+      if (p.va == base + j5) ++saw_j5;
+    }
+  }
+  CHECK_EQ(integ_n, 2);
+  CHECK_EQ(short_n, 1);
+  CHECK_EQ(long_n, 2);
+  CHECK_EQ(saw_j5, 1);
+
+  // 语义：rel 相对【跳转指令起点】编码，所以补丁本身不改变落点；
+  // 效果来自"指令变短"——短跳转被压成 1 字节后，紧随其后的字节整体前移，
+  // 于是校验逻辑读到的"真实代码"错位 1 字节。这里验证两点：
+  //   1. 补丁后的编码仍然精确指向 jump_to（不是跳到别处，那样会崩）
+  //   2. 短跳转确实只占 1 字节（原来占 2 字节）
+  for (const auto& p : plan.patches) {
+    if (p.name.rfind("jmp_rel8@", 0) == 0) {
+      std::memcpy(img.data() + (p.va - base), p.bytes.data(), 1);
+      const int8_t nr = static_cast<int8_t>(img[p.va - base + 1]);
+      CHECK_EQ(p.va + 2 + static_cast<int64_t>(nr), jump_to);
+      CHECK_EQ(p.bytes.size(), 1u);   // 2 字节 -> 1 字节，后续指令前移
+    } else if (p.name.rfind("jmp_rel32@", 0) == 0) {
+      std::memcpy(img.data() + (p.va - base), p.bytes.data(), 5);
+      int32_t r = 0;
+      std::memcpy(&r, img.data() + (p.va - base) + 1, 4);
+      CHECK_EQ(p.va + 5 + static_cast<int64_t>(r), jump_to);
+      CHECK_EQ(p.bytes.size(), 5u);   // 与原来等长
+    }
+  }
+  // 无关跳转一个字节都不许动
+  CHECK_EQ(img[other], 0x0F);
+  CHECK_EQ(img[other+1], 0x84);
+  int32_t still = 0;
+  std::memcpy(&still, img.data() + other + 2, 4);
+  CHECK_EQ(still, 0x123);
+}
+
+// 自包含模式（--mods + --listfile）必须能吃下用户手上真实的三种包形状。
+// 这一段不依赖 Windows：只验证"目录树 -> FileDataID + 绝对路径"的换算。
+//
+// 用户截图里的三种：
+//   Wrath NPC Pack/Textures/BakedNpcTextures/CreatureDisplayExtra-*.blp
+//   T21WarriorNSFW/item/texturecomponents|objectcomponents|weapon
+//   Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelite.m2/.skin/.blp
+static void test_mods_selfcontained() {
+  group("mods_selfcontained");
+  using wowmod::win::build_selfcontained_mods;
+  using wowmod::win::split_listfiles;
+
+  // split_listfiles：Windows 路径里可能有盘符，但 ';' 是唯一分隔符
+  {
+    const auto v = split_listfiles("C:/a/lf.csv;D:/b/lf2.csv");
+    CHECK_EQ(v.size(), 2u);
+    if (v.size() == 2) {
+      CHECK_EQ(v[0], std::string("C:/a/lf.csv"));
+      CHECK_EQ(v[1], std::string("D:/b/lf2.csv"));
+    }
+    CHECK_EQ(split_listfiles("").size(), 0u);
+    CHECK_EQ(split_listfiles("only.csv").size(), 1u);
+  }
+
+  // 用临时目录造一棵和用户包同构的树
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path root = fs::temp_directory_path(ec) / "wowmod-selfcontained-test";
+  fs::remove_all(root, ec);
+  auto mk = [&](const std::string& rel, const std::string& body) {
+    const fs::path f = root / fs::path(rel);
+    fs::create_directories(f.parent_path(), ec);
+    std::ofstream(f) << body;
+  };
+
+  // 包 1：Wrath NPC Pack —— 目录名不叫 creature/，只能靠文件名 + 尾部打分
+  mk("Wrath NPC Pack/Textures/BakedNpcTextures/CreatureDisplayExtra-15876.blp", "a");
+  mk("Wrath NPC Pack/Textures/BakedNpcTextures/CreatureDisplayExtra-15877.blp", "b");
+  // 包 2：T21WarriorNSFW —— item/ 打头，根就是包的父目录
+  mk("T21WarriorNSFW/item/texturecomponents/T21Warrior_belt.blp", "c");
+  mk("T21WarriorNSFW/item/weapon/T21Warrior_sword.blp", "d");
+  // 包 3：Titaa 坐骑 —— Creature/ 打头，含 .m2 / .skin / .blp
+  mk("Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelite.m2", "e");
+  mk("Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelite00.skin", "f");
+  mk("Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelitewhite.blp", "g");
+  // 重名文件：必须被拒绝，不能猜
+  mk("SomeMod/Textures/common.blp", "h");
+
+  const fs::path lf = root / "lf.csv";
+  {
+    std::ofstream o(lf);
+    o << "1;creature/bakednpctextures/creaturedisplayextra-15876.blp\n"
+      << "2;creature/bakednpctextures/creaturedisplayextra-15877.blp\n"
+      << "3;item/texturecomponents/t21warrior_belt.blp\n"
+      << "4;item/weapon/t21warrior_sword.blp\n"
+      << "5;creature/cockatrice/cockatricelite.m2\n"
+      << "6;creature/cockatrice/cockatricelite00.skin\n"
+      << "7;creature/cockatrice/cockatricelitewhite.blp\n"
+      << "8;character/human/female/common.blp\n"
+      << "9;character/orc/male/common.blp\n";
+  }
+
+  const auto rep = build_selfcontained_mods(root.u8string(), {lf.u8string()});
+  CHECK(rep.ok, "自包含扫描应成功");
+  // 8 个模组文件 + 1 个 listfile（它本身不是游戏资源，会被跳过不计）
+  CHECK_EQ(rep.files_scanned, 9u);
+  CHECK_EQ(rep.matched, 7u);
+  CHECK_EQ(rep.ambiguous, 1u);   // common.blp 重名 -> 拒绝
+  CHECK_EQ(rep.missing, 1u);     // 被拒绝的那条也在 missing 里
+
+  // 每条都要能直接打开：这是 Arctium 语义（字符串块存绝对路径）
+  for (const auto& e : rep.entries) {
+    CHECK(e.file_data_id >= 1 && e.file_data_id <= 7, "id 必须在 1..7");
+    CHECK(fs::is_regular_file(fs::u8path(e.local_path), ec),
+          "表里存的本地路径必须真实存在: " + e.local_path);
+    CHECK(!e.game_path.empty(), "game_path 不能为空");
+    // 游戏内相对路径必须是小写、正斜杠、不含盘符
+    CHECK(e.game_path.find(':') == std::string::npos, "相对路径不能含盘符");
+    CHECK(e.game_path.find('\\') == std::string::npos, "相对路径必须是正斜杠");
+  }
+  // 重名文件不能被随便选中
+  bool picked_common = false;
+  for (const auto& e : rep.entries)
+    if (e.file_data_id == 8 || e.file_data_id == 9) picked_common = true;
+  CHECK(!picked_common, "重名文件必须拒绝，不能猜一个 id");
+
+  fs::remove_all(root, ec);
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -1375,6 +1572,32 @@ static void test_mod_loader_ordering() {
   // 必须有 RAII 守卫，保证异常/提前 return 时也会恢复
   CHECK(src.find("struct ResumeGuard") != std::string::npos,
         "必须有 ResumeGuard 保证进程被恢复（否则客户端会永久挂起）");
+
+  // ---- anti-crash 必须最先写 ----
+  //
+  // 客户端在运行时会核对代码页完整性与映射基址。只要这些校验还在，
+  // 我们改的每一个字节都会被判定为篡改 -> EXCEPTION_INTERNAL_ERROR
+  // (0xC00000E5)，崩溃栈落在 ntdll!RtlReportCriticalFailure。
+  // 所以 anti-crash 必须在【任何】其它写入之前完成，并且在挂起状态下。
+  const size_t p_ac_plan = src.find("plan_anti_crash(process)");
+  const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac)");
+  CHECK(p_ac_plan != std::string::npos, "必须调用 plan_anti_crash（Arctium PrepareAntiCrash）");
+  CHECK(p_ac_apply != std::string::npos, "必须调用 apply_anti_crash");
+  CHECK(p_suspend < p_ac_plan, "anti-crash 必须在挂起之后规划（要读已解密的映像）");
+  CHECK(p_ac_apply < p_plan, "anti-crash 必须在 NoJump 规划之前写入");
+  CHECK(p_ac_apply < p_hook, "anti-crash 必须在装 hook 之前写入");
+
+  // ---- 字符串块必须存绝对路径 ----
+  //
+  // Arctium 的 ModLoader 存的是 files 目录下枚举出来的【绝对路径】；
+  // 存相对路径的话，客户端按自己的当前目录解析，文件不存在，
+  // 于是「跳板装好、id 命中、画面一点不变」，且与资源类型无关。
+  CHECK(src.find("arctium_stored_path") != std::string::npos,
+        "字符串块必须用 arctium_stored_path 拼绝对路径");
+  CHECK(src.find("字符串块自检") != std::string::npos,
+        "必须有运行时自检：不是绝对路径就拒绝安装");
+  // 自包含模式产出的条目也必须走同一条绝对路径逻辑（见 mod_loader.cpp
+  // 里 req.entries 的构造），否则 --mods 模式下同样不生效。
 }
 
 static void test_arctium_clone() {
@@ -1421,23 +1644,57 @@ static void test_arctium_clone() {
     CHECK(std::memcmp(j.data(), want, 13) == 0, "hook 必须是 48 B8 <u64> FF E0 90");
   }
 
-  // 3) 12 字节表布局 + 路径改写
+  // 3) 12 字节表布局 + 字符串块内容
+  //
+  // 【这条测试以前是错的，而且错的正是被它"验证"的代码】。
+  // 旧断言要求字符串被小写化、并且就是相对路径：
+  //     路径必须小写 + 正斜杠 + NUL 结尾
+  //     CHECK_EQ(s0, "character/human/female/a.blp")
+  // 但 Arctium（ModLoader.cs GetFileMappingData）存进去的是
+  //     var pathBytes = Encoding.UTF8.GetBytes(f);   // f = files 下的绝对路径
+  // 相对路径只用来查 id。存相对路径 = 客户端按自己的当前目录去打开
+  // = 文件不存在 = 装了也不生效，且与资源类型无关（blp/m2/skin 都一样）。
   {
-    std::vector<std::pair<uint64_t, std::string>> e = {
-        {100, "Character/Human/Female/A.BLP"}, {200, "Character\\Orc\\B.blp"}};
+    std::vector<arctium::MappingEntry> e = {
+        {100, "D:/mods/wowmod/files/Character/Human/Female/A.BLP"},
+        {200, "D:/mods/wowmod/files/character/orc/b.blp"}};
     auto m = arctium::serialize_arctium_mappings(e);
     CHECK_EQ(m.table.size(), 24u);          // 2 * 12
     CHECK_EQ(m.count, 2u);
     uint32_t id0 = 0;
     std::memcpy(&id0, m.table.data(), 4);
     CHECK_EQ(id0, 100u);
-    // 路径必须小写 + 正斜杠 + NUL 结尾
+    // 字符串必须【原样】写入：不小写、不改斜杠、NUL 结尾
     const std::string s0(reinterpret_cast<const char*>(m.strings.data()));
-    CHECK_EQ(s0, std::string("character/human/female/a.blp"));
+    CHECK_EQ(s0, std::string("D:/mods/wowmod/files/Character/Human/Female/A.BLP"));
+    const std::string s1 = "D:/mods/wowmod/files/character/orc/b.blp";
+    CHECK_EQ(m.strings.size(), s0.size() + 1 + s1.size() + 1);
+    CHECK_EQ(std::string(reinterpret_cast<const char*>(m.strings.data()) + s0.size() + 1), s1);
+    CHECK_EQ(m.offsets.size(), 2u);
+    CHECK_EQ(m.offsets[1], static_cast<uint32_t>(s0.size() + 1));
     arctium::patch_string_addresses(&m, 0x50000000ULL);
     uint64_t abs0 = 0;
     std::memcpy(&abs0, m.table.data() + 4, 8);
     CHECK_EQ(abs0, 0x50000000ULL);
+  }
+
+  // 3b) 绝对路径拼接：这就是 Arctium 枚举 files 目录时拿到的那个 f
+  {
+    using arctium::arctium_stored_path;
+    CHECK_EQ(arctium_stored_path("D:/g/wowmod/files", "character/x/y.blp"),
+             std::string("D:/g/wowmod/files/character/x/y.blp"));
+    // 反斜杠目录前缀要规整成正斜杠，且不留双斜杠
+    CHECK_EQ(arctium_stored_path("D:\\g\\wowmod\\files\\", "character/x/y.blp"),
+             std::string("D:/g/wowmod/files/character/x/y.blp"));
+    // 已经是绝对路径就不要再拼前缀（否则变成 .../files/D:/...）
+    CHECK_EQ(arctium_stored_path("D:/g/wowmod/files", "E:/other/a.blp"),
+             std::string("E:/other/a.blp"));
+    // UNC
+    CHECK_EQ(arctium_stored_path("D:/g/wowmod/files", "\\\\srv\\share\\a.blp"),
+             std::string("\\\\srv\\share\\a.blp"));
+    // 结果必须能被识别成「绝对路径」——加载器运行时会自检这一条
+    const std::string p = arctium_stored_path("D:/g/wowmod/files", "character/x/y.blp");
+    CHECK(p.size() > 3 && p[1] == ':' && p[2] == '/', "拼接结果必须是绝对路径");
   }
 
   // 4) 用 x64sim 执行 Arctium 原版 stub，核对三条路径的真实行为
@@ -2130,6 +2387,8 @@ int main() {
   test_x64_decode();
   test_plain_page_accounting();
   test_peb_image_protect_and_reach();
+  test_anticrash_plan();
+  test_mods_selfcontained();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

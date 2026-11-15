@@ -79,8 +79,45 @@ struct SerializedMappings {
   std::vector<uint32_t> offsets;   // 每条在 strings 内的偏移
 };
 
+// 一条映射：id + 要写进字符串块的【那条字符串】。
+//
+// 关键：Arctium（ModLoader.cs GetFileMappingData）写进字符串块的
+// 不是游戏内相对路径，而是 **files 目录下的磁盘绝对路径**：
+//     var pathBytes = Encoding.UTF8.GetBytes(f);            // f = 绝对路径
+//     ...
+//     loadedMappings.Add((BitConverter.GetBytes(id), pathBytes, stringLength));
+// 它只用相对路径去 mappings 里【查 id】（mappings[path]），
+// 查完之后存下来的是 f 本身。
+//
+// 我们之前存的是相对路径 —— 于是 stub 返回
+//     "character/bloodelf/female/xxx.blp"
+// 而客户端拿到的是一个路径指针，会把它当文件去打开；相对路径相对的是
+// 客户端进程的当前目录（游戏根），那里没有这个文件。表现就是
+// 「跳板装了、id 也命中、但模型/贴图一点变化都没有」。
+//
+// 文件格式对 .blp / .m2 / .skin 一视同仁（都由同一条查表路径返回），
+// 但只要返回值不是可打开的磁盘路径，任何类型的模组都不会生效。
+struct MappingEntry {
+  uint64_t file_id = 0;
+  std::string string_to_store;   // 写进字符串块的内容（Arctium: 绝对路径）
+};
+
+SerializedMappings serialize_arctium_mappings(const std::vector<MappingEntry>& entries);
+
+// 兼容旧签名：把 (id, stored_string) 对转成 MappingEntry。
 SerializedMappings serialize_arctium_mappings(
     const std::vector<std::pair<uint64_t, std::string>>& entries);
+
+// 按 Arctium 的方式算出「写进字符串块的绝对路径」。
+//
+// Arctium 直接在 files 目录里枚举文件，f 天然是绝对路径。
+// 我们从 mappings 声明了相对路径，所以必须由
+//     files 目录的绝对路径 + 相对路径
+// 显式拼出来，否则写进去的还是相对路径。
+//
+// files_dir_abs : files 目录的绝对路径（例如 D:/.../wowmod/files）
+// relative_path : mappings 里写的游戏相对路径
+std::string arctium_stored_path(const std::string& files_dir_abs, const std::string& relative_path);
 
 // 把 table 里每条路径字段从"字符串块内偏移"改成"绝对地址"。
 void patch_string_addresses(SerializedMappings* m, uint64_t string_alloc_va);

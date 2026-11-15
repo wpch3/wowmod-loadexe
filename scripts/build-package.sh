@@ -66,7 +66,7 @@ echo "==> 检查 cmd 脚本的编码安全字符"
 # 已两次踩到：cmd.exe 在 chcp 65001 下解析含【顿号 U+3001】或【行内方括号】的
 # echo 行会错位，把句子后半段当成命令执行（"'回切几个角色' is not recognized"）。
 # 这类错误在 Linux 上完全看不出来，只能靠硬性扫描拦住。
-for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd; do
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd wowmod-install.cmd; do
   [ -f "$_f" ] || continue
   if grep -q $'\xe3\x80\x81' "$_f"; then
     fail "$_f 含中文顿号（U+3001），cmd.exe 会把它后面的内容当命令执行"
@@ -77,7 +77,7 @@ echo "   无顿号，行内方括号已确认"
 echo "==> 检查 cmd 的 echo 行全为可安全解析的字符"
 # 已三次踩到：chcp 65001 下 cmd.exe 解析 echo 里的全角标点会错位，
 # 把句子后半段当成命令执行。凡 echo 行出现全角逗号/顿号/分号一律拦下。
-for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd; do
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd wowmod-install.cmd; do
   [ -f "$_f" ] || continue
   if grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x8c' "$_f" ||
      grep -qE $'^[[:space:]]*echo[^\r]*\xe3\x80\x81' "$_f" ||
@@ -90,7 +90,7 @@ echo "   echo 行标点检查通过"
 echo "==> 检查 rem 行的全角标点"
 # rem 不是 echo 的例外：chcp 65001 下 cmd.exe 对 rem 行里的全角逗号/分号
 # 同样会错位，把后半句当命令执行（"'认识的' is not recognized"）。
-for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd tools/fetch-listfile.cmd; do
+for _f in wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-start.cmd wowmod-scout.cmd wowmod-load.cmd wowmod-install.cmd tools/fetch-listfile.cmd; do
   [ -f "$_f" ] || continue
   if grep -qiE $'^[[:space:]]*rem[^\r]*(\xe3\x80\x8c|\xe3\x80\x81|\xef\xbc\x8c|\xef\xbc\x9b|\xe3\x80\x8d|\xef\xbc\x88|\xef\xbc\x89|\xef\xbc\x9a)' "$_f"; then
     fail "$_f 的 rem 行含全角标点，cmd.exe 会把它后面的内容当命令执行"
@@ -116,6 +116,17 @@ echo "    $_simres"
 echo "$_simres" | grep -q "0 项失败" || fail "有测试失败: $_simres"
 rm -f "$_simlog" "$_simlog.bin"
 
+# ---- 模组目录形状解析（用用户真实遇到的三种包结构回归） ----
+# 用户上传的三类包：
+#   T21WarriorNSFW/item/...                  根就是包的父目录
+#   Titaa Hawkstrider Mount/Creature/...     根就是包的父目录
+#   Wrath NPC Pack/Textures/BakedNpcTextures 前缀完全不叫 creature/
+# 第三种以前会被整体丢弃 -> "扫到 0 个文件"。这里做端到端回归：
+# 三种形状都必须解析出正确的游戏相对路径，歧义文件名必须被拒绝。
+echo "==> 验证模组目录形状解析"
+_shape=$(python3 "$(dirname "$0")/check-mod-shapes.py")
+[ "$_shape" = "OK" ] || fail "模组目录形状解析回归失败: $_shape"
+
 # ---- 模式白名单一致性 ----
 # 已经踩过两次：scout 和 mods 都实现好了，但 launcher_main.cpp 的
 # known 白名单没加，脚本一跑就被"未知模式"挡回去，看起来像功能没做。
@@ -134,6 +145,17 @@ print(' '.join(missing))
 PYEOF
 )
 [ -z "$_missing_modes" ] || fail "脚本用到了未在模式白名单里的模式: $_missing_modes（改 launcher_main.cpp 的 known）"
+
+[ -f wowmod-install.cmd ] || fail "缺少 wowmod-install.cmd（自包含一键入口）"
+grep -aq -- "--mods" wowmod-install.cmd || fail "wowmod-install.cmd 没有传 --mods（自包含模式）"
+grep -aq -- "--listfile" wowmod-install.cmd || fail "wowmod-install.cmd 没有传 --listfile"
+_ic=$(wc -l < wowmod-install.cmd | tr -d ' ')
+_icrlf=$(grep -c $'\r$' wowmod-install.cmd || true)
+[ "$_ic" = "$_icrlf" ] || fail "wowmod-install.cmd 不是全 CRLF"
+# 自包含模式与 anti-crash 必须真的编进 exe
+grep -aq -- "--mods" wowmod_loader.exe || fail "wowmod_loader.exe 不含 --mods（自包含模式没编进去）"
+grep -aq "anti-crash" wowmod_loader.exe || fail "wowmod_loader.exe 不含 anti-crash（Arctium PrepareAntiCrash 缺失）"
+grep -aq "字符串块自检" wowmod_loader.exe || fail "wowmod_loader.exe 不含绝对路径自检"
 
 [ -f wowmod-load.cmd ] || fail "缺少 wowmod-load.cmd（模组加载器）"
 grep -aq -- "--mode mods" wowmod-load.cmd || fail "wowmod-load.cmd 没有调用 --mode mods"
@@ -175,7 +197,7 @@ echo "   参数 / 产物校验 / CRLF 行尾 / probe 模式 都在"
 
 echo "==> 组装"
 mkdir -p "$STAGE/scripts"
-cp wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-scout.cmd wowmod-load.cmd README.md "$STAGE/"
+cp wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-scout.cmd wowmod-load.cmd wowmod-install.cmd README.md "$STAGE/"
 cp scripts/wowmod-start.ps1 "$STAGE/scripts/"
 mkdir -p "$STAGE/tools"
 cp tools/listid.py tools/build-mod-mappings.py tools/fetch-listfile.cmd "$STAGE/tools/"
@@ -183,7 +205,7 @@ cp tools/listid.py tools/build-mod-mappings.py tools/fetch-listfile.cmd "$STAGE/
 echo "==> 压缩"
 rm -f "$ZIP"
 ( cd "$STAGE" && zip -9 -r "$ZIP" \
-    wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-scout.cmd wowmod-load.cmd wowmod.exe wowmod_loader.exe wowmod_rt.dll \
+    wowmod-start.cmd wowmod-dump.cmd wowmod-probe.cmd wowmod-patch.cmd wowmod-mod.cmd wowmod-scout.cmd wowmod-load.cmd wowmod-install.cmd wowmod.exe wowmod_loader.exe wowmod_rt.dll \
     scripts/wowmod-start.ps1 tools/listid.py tools/build-mod-mappings.py tools/fetch-listfile.cmd README.md >/dev/null )
 
 echo "==> 复验 zip 内容"

@@ -8,11 +8,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <sstream>
 
+#include "windows/anticrash.hpp"
 #include "windows/arctium_clone.hpp"
 #include "windows/arctium_patch.hpp"
 #include "windows/arctium_sig.hpp"
@@ -43,23 +45,17 @@ std::string lower(std::string s) {
   return s;
 }
 
-// 把游戏相对路径规整成客户端期望的形式：
-//   * 反斜杠 -> 正斜杠
-//   * 全部小写（客户端内部按小写查表）
-//   * 去掉开头的 ./ 或 /
-// 注意：**不要去掉空格**。listfile 里有 31944 条路径本身就带空格
-// （例如 "Character/NightElf/Female/NightElfFemaleNakedPelvisSkin00_ 14.blp"），
-// 那是官方命名，去掉空格反而永远匹配不到。
-std::string normalize_game_path(const std::string& in) {
-  std::string s = in;
-  std::replace(s.begin(), s.end(), '\\', '/');
-  s = lower(s);
-  while (s.rfind("./", 0) == 0) s = s.substr(2);
-  while (!s.empty() && s[0] == '/') s = s.substr(1);
-  return s;
-}
 
 }  // namespace
+
+// files 目录的绝对路径。Arctium 存进字符串块的就是这个前缀 + 相对路径。
+std::string files_dir_for(const std::string& wowmod_dir) {
+  std::error_code ec;
+  fs::path p = fs::u8path(wowmod_dir) / "files";
+  const fs::path abs = fs::absolute(p, ec);
+  if (ec) return p.u8string();
+  return abs.u8string();
+}
 
 MappingLoadReport load_mappings(const std::string& wowmod_dir) {
   MappingLoadReport rep;
@@ -191,6 +187,12 @@ std::string format_mod_loader_report(const ModLoaderResult& r) {
     os << "  未安装\n";
   }
 
+  os << "\n[anti-crash] Arctium PrepareAntiCrash 机制\n";
+  if (r.anticrash_patches)
+    os << "  已写 " << r.anticrash_patches << " 条（完整性校验 ret 0 / remap 跳转错位）\n";
+  else
+    os << "  本次没有写入（该版本可能没有这些校验，或相关代码段尚未解密）\n";
+
   os << "\n[数据] 可用 " << r.entries_loaded << " 项，磁盘缺失 " << r.entries_missing << " 项\n";
 
   if (!r.steps.empty()) {
@@ -203,7 +205,23 @@ std::string format_mod_loader_report(const ModLoaderResult& r) {
 
 ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir,
                                    uint32_t wait_ms, StubKind kind) {
+  // 默认来源：<wowmod_dir>/mappings + <wowmod_dir>/files（Arctium 的磁盘形态）
+  MappingLoadReport data = load_mappings(wowmod_dir);
+  ModDataSet ds;
+  ds.entries = data.entries;
+  ds.files_dir = files_dir_for(wowmod_dir);
+  ds.source_note = "mappings/files 目录";
+  ModLoaderResult r = install_mod_loader_with_data(process, wowmod_dir, ds, wait_ms, kind);
+  // 把 parse 统计补回去（自包含模式没有这些）
+  r.entries_missing = data.missing_local;
+  return r;
+}
+
+ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& wowmod_dir,
+                                             const ModDataSet& ds_in, uint32_t wait_ms,
+                                             StubKind kind) {
   ModLoaderResult r;
+  const ModDataSet& ds = ds_in;
   auto step = [&](const std::string& s) {
     r.steps.push_back(s);
     std::printf("  %s\n", s.c_str());
@@ -281,20 +299,14 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   step("客户端可扫（第 " + std::to_string(init_round + 1) + " 轮开始，明文 " +
        std::to_string(best_low) + "/" + std::to_string(last_checked) + " 页）");
 
-  // ---- 2. 读数据 ----
-  const auto data = load_mappings(wowmod_dir);
-  if (data.entries.empty()) {
-    r.error = data.error.empty() ? "没有可用的映射" : data.error;
+  // ---- 2. 数据侧（已由调用方准备好）----
+  if (ds.entries.empty()) {
+    r.error = "没有可用的映射条目";
     return r;
   }
-  r.entries_loaded = data.entries.size();
-  r.entries_missing = data.missing_local;
-  step("读到 " + std::to_string(data.files_read) + " 个 mappings 文件, 可用 " +
-       std::to_string(data.entries.size()) + " 项" +
-       (data.missing_local ? "（磁盘缺失 " + std::to_string(data.missing_local) + " 项，已跳过）"
-                           : ""));
-  if (data.bad_lines)
-    step("警告: " + std::to_string(data.bad_lines) + " 行格式不对，已跳过");
+  r.entries_loaded = ds.entries.size();
+  step("数据来源 " + ds.source_note + ", 可用 " + std::to_string(ds.entries.size()) + " 项" +
+       (ds.files_dir.empty() ? "" : ("（files 目录 " + ds.files_dir + "）")));
 
   // ---- 3. 找 hook 点 ----
   //
@@ -395,6 +407,18 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     if (suspend_process(process, &serr)) {
       suspended = true;
       step("已全进程挂起（NtSuspendProcess），准备写入");
+      // Arctium 的顺序（src/Launcher.cs LaunchGame）：
+      //     NtSuspendProcess
+      //     PrepareAntiCrash(...)   <- 只 queue，不写
+      //     NowPatching: NoJump 也 queue
+      //     NtResumeProcess
+      //     RemapAndPatch(antiCrash) <- 真正写
+      // 我们这里在挂起状态下直接写，效果等价（线程全停，没有撕裂窗口），
+      // 而且不需要 materialize antiCrash 的 remap 逻辑。
+      //
+      // anti-crash 必须【最先】规划并写入：它要关掉的是客户端对代码页的
+      // 完整性/remap 校验。晚一步写入，客户端可能在两次写入之间跑到校验，
+      // 直接 EXCEPTION_INTERNAL_ERROR (0xC00000E5)。用户的崩溃就是这个。
     } else {
       step("警告: 全进程挂起失败（" + serr + "），将依赖写入瞬间的线程冻结");
     }
@@ -417,6 +441,31 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   // 用户实测踩过：跳板装成功、NoJump 失败，结果是「改了内存但行为没变」——
   // 比什么都不做更糟，因为占用了 id 表/字符串块并且 hook 了文件加载主函数。
   // 所以顺序改成：先把 NoJump 的规划做完（纯读），确认能打，再动第二半。
+  // ---- 3a2. anti-crash（Arctium PrepareAntiCrash）----
+  //
+  // 缺了它，NoJump / 跳板即便装对了，客户端也会在几十秒内以
+  // EXCEPTION_INTERNAL_ERROR 结束 —— 崩溃栈落在 ntdll!RtlReportCriticalFailure，
+  // 因为那是"完整性校验失败"的统一出口，不是客户端代码的问题。
+  {
+    AntiCrashPlan ac = plan_anti_crash(process);
+    if (!ac.ok) {
+      step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
+    } else {
+      step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
+           " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
+           std::to_string(ac.remap_jump_patches) + " 条");
+      if (!ac.patches.empty()) {
+        if (apply_anti_crash(process, &ac)) {
+          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
+          r.anticrash_patches = ac.patches.size();
+        } else {
+          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
+        }
+      }
+      for (const auto& n : ac.notes) step("  " + n);
+    }
+  }
+
   std::map<std::string, uint32_t> by_rva;
   for (const auto& s2 : arctium_signature_specs()) {
     // 注意："s2.name != \"...\"" 是指针比较，两个字符串字面量在不同编译单元里
@@ -454,9 +503,28 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
   // 默认走 kArctium，因为用户要的是「Arctium 能做什么就做到什么」。
   if (kind == StubKind::kArctium) {
     // 4a. 序列化表（12 字节/项）
-    std::vector<std::pair<uint64_t, std::string>> entries;
-    entries.reserve(data.entries.size());
-    for (const auto& e : data.entries) entries.emplace_back(e.file_data_id, e.game_path);
+    //
+    // 【这里曾经是错的】。Arctium（ModLoader.cs GetFileMappingData）写进
+    // 字符串块的是 files 目录下的**磁盘绝对路径**：
+    //     var pathBytes = Encoding.UTF8.GetBytes(f);   // f = 枚举出来的绝对路径
+    //     loadedMappings.Add((BitConverter.GetBytes(id), pathBytes, stringLength));
+    // 相对路径只用来在 mappings 里查 id，查完就丢。
+    //
+    // 我们过去存的是 game_path（"character/bloodelf/female/x.blp"），
+    // 于是 stub 命中后返回给客户端的是一个相对路径指针，客户端拿去打开
+    // 会相对它自己的当前目录（游戏根）解析 —— 那里没有这个文件。
+    // 结果就是「两半都装上了、id 也命中、但一点都不生效」，而且与文件
+    // 类型无关：.blp 贴图、.m2 模型、.skin 骨骼走的是同一条查表返回。
+    // 这解释了为什么换模型/换贴图都没反应。
+    const std::string files_dir_abs = ds.files_dir;
+    std::vector<arctium::MappingEntry> entries;
+    entries.reserve(ds.entries.size());
+    for (const auto& e : ds.entries) {
+      arctium::MappingEntry m;
+      m.file_id = e.file_data_id;
+      m.string_to_store = arctium::arctium_stored_path(files_dir_abs, e.game_path);
+      entries.push_back(std::move(m));
+    }
     auto ser = arctium::serialize_arctium_mappings(entries);
     if (ser.table.empty() || ser.strings.empty()) {
       r.error = "序列化映射表失败（表或字符串块为空）";
@@ -487,6 +555,33 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     VirtualProtectEx(process, str_blk.addr(), str_blk.size(), PAGE_READONLY, &oldp);
     step("映射表写入完成: " + std::to_string(ser.count) + " 项, 12 字节/项, id 表 @0x" +
          to_hex(id_va, 16) + ", 字符串块 @0x" + to_hex(str_va, 16));
+    // 【自检】字符串块里存的必须是可打开的绝对路径。
+    // 这不是"顺便打印一下"：只要这里不是绝对路径，模组就一定不生效，
+    // 而现场表现（跳板装好、客户端不崩、画面不变）极难反推回来。
+    {
+      size_t abs_count = 0, sample_n = 0;
+      std::string sample;
+      for (const auto& m : entries) {
+        const bool is_abs = (m.string_to_store.size() >= 3 &&
+                             std::isalpha(static_cast<unsigned char>(m.string_to_store[0])) &&
+                             m.string_to_store[1] == ':' && m.string_to_store[2] == '/');
+        if (is_abs) ++abs_count;
+        if (sample_n < 1 && !m.string_to_store.empty()) {
+          sample = m.string_to_store;
+          ++sample_n;
+        }
+      }
+      step("字符串块自检: " + std::to_string(abs_count) + "/" + std::to_string(entries.size()) +
+           " 条是绝对路径" + (abs_count == entries.size() ? "" : "  <-- 有问题"));
+      if (!sample.empty()) step("  示例: " + sample);
+      // 相对路径 = 客户端按自己的当前目录解析 = 找不到文件 = 什么都不生效。
+      if (abs_count != entries.size()) {
+        r.error = "字符串块里有 " + std::to_string(entries.size() - abs_count) +
+                  " 条不是绝对路径。Arctium 存的是 files 下的磁盘绝对路径，"
+                  "存相对路径客户端打不开对应文件，装了也不会生效 —— 已停止，不写入 hook。";
+        return r;
+      }
+    }
 
     // 4d. 读 hook 点 13 字节原始指令（Arctium: memory.Read(hookAddress, 13)）
     std::vector<uint8_t> orig(kArctiumHookLen, 0);
@@ -566,8 +661,13 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
     // 覆盖 13 字节（Arctium 的 hook 长度）。这个序言 13 字节正好是指令边界，
     // 下一条指令 1433E06AD `lea rcx,[rip+...]` 从 +13 开始。
     req.min_cover = 13;
-    req.entries.reserve(data.entries.size());
-    for (const auto& e : data.entries) req.entries.emplace_back(e.file_data_id, e.game_path);
+    // 同样的问题：返回给客户端的必须是能直接打开的磁盘绝对路径。
+    req.entries.reserve(ds.entries.size());
+    {
+      const std::string fda = ds.files_dir;
+      for (const auto& e : ds.entries)
+        req.entries.emplace_back(e.file_data_id, arctium::arctium_stored_path(fda, e.game_path));
+    }
 
     FileIdHook hook;
     hook.set_process(process);

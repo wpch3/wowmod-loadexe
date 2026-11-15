@@ -53,28 +53,52 @@ std::vector<uint8_t> build_hook_jump(uint64_t dst) {
   return j;
 }
 
-SerializedMappings serialize_arctium_mappings(
-    const std::vector<std::pair<uint64_t, std::string>>& entries) {
+std::string arctium_stored_path(const std::string& files_dir_abs,
+                                const std::string& relative_path) {
+  // 已经是绝对路径（带盘符或 UNC）就原样返回，避免拼成两遍。
+  const std::string rel = relative_path;
+  const bool abs = (rel.size() >= 2 && rel[1] == ':') ||
+                   (rel.size() >= 2 && rel[0] == '\\' && rel[1] == '\\') ||
+                   (rel.size() >= 1 && rel[0] == '/');
+  std::string base = files_dir_abs;
+  // 统一成正斜杠：Arctium 存的是 .NET 的 Path 组合结果，Windows 上原本是
+  // 反斜杠；但客户端对两种都接受，而正斜杠在报告/日志里不会引出转义问题。
+  std::replace(base.begin(), base.end(), '\\', '/');
+  while (!base.empty() && base.back() == '/') base.pop_back();
+  if (abs) return rel;
+  std::string out = base + "/" + rel;
+  // 相对路径里可能含 ./ 或重复斜杠，规整一次
+  std::string norm;
+  norm.reserve(out.size());
+  for (size_t i = 0; i < out.size(); ++i) {
+    if (out[i] == '/' && !norm.empty() && norm.back() == '/') continue;
+    norm.push_back(out[i]);
+  }
+  return norm;
+}
+
+SerializedMappings serialize_arctium_mappings(const std::vector<MappingEntry>& entries) {
   SerializedMappings out;
   out.count = entries.size();
   out.table.assign(entries.size() * EntryLayout::kStride, 0);
   out.offsets.reserve(entries.size());
 
   for (size_t i = 0; i < entries.size(); ++i) {
-    const uint64_t id = entries[i].first;
+    const uint64_t id = entries[i].file_id;
     uint8_t* row = out.table.data() + i * EntryLayout::kStride;
 
     // Arctium: BitConverter.GetBytes(id) 是 u32
     const uint32_t id32 = static_cast<uint32_t>(id);
     std::memcpy(row + EntryLayout::kId, &id32, 4);
 
-    // 路径：ToLowerInvariant + 反斜杠转正斜杠（Arctium 在 ModLoader 里
-    // 对写入字符串块的路径做了 .Replace("\\", "/").ToLowerInvariant()，
-    // 不过实际是作用在 files 目录枚举出来的相对路径上；这里的 path
-    // 已经是游戏相对路径，做同样的规整最稳妥）
-    std::string p = entries[i].second;
-    std::replace(p.begin(), p.end(), '\\', '/');
-    for (auto& c : p) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    // 字符串原样写入。
+    //
+    // 注意：**不要**小写、不要改斜杠。
+    // Arctium 存的是它在 files 目录里枚举出来的真实文件名，Windows
+    // 不区分大小写，所以大小写不影响打开；而这里再去 lower 一次，
+    // 反倒会让报告里显示的名字和磁盘上的不一致，排查时更费劲。
+    // （我们过去是 lower + 反斜杠转正斜杠，两处都改掉了。）
+    const std::string& p = entries[i].string_to_store;
 
     const uint32_t off = static_cast<uint32_t>(out.strings.size());
     out.offsets.push_back(off);
@@ -86,6 +110,19 @@ SerializedMappings serialize_arctium_mappings(
     out.strings.push_back(0);   // Arctium: pathBytes 含结尾 NUL，stringLength += len+1
   }
   return out;
+}
+
+SerializedMappings serialize_arctium_mappings(
+    const std::vector<std::pair<uint64_t, std::string>>& entries) {
+  std::vector<MappingEntry> conv;
+  conv.reserve(entries.size());
+  for (const auto& e : entries) {
+    MappingEntry m;
+    m.file_id = e.first;
+    m.string_to_store = e.second;
+    conv.push_back(std::move(m));
+  }
+  return serialize_arctium_mappings(conv);
 }
 
 void patch_string_addresses(SerializedMappings* m, uint64_t string_alloc_va) {
