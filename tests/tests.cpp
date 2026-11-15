@@ -1281,13 +1281,23 @@ static void test_plain_page_accounting() {
     // 正是那个门槛让用户第 1 轮明明 `Init 有` 却被判失败。
     // 测试去"验证实现细节"而不是"验证行为"，就会把 bug 焊死。
     //
-    // 现在断言的是 Arctium 的真实语义（src/Launcher.cs WaitForUnpack）：
-    //   Init 出现  => 客户端初始化完成 => 可以打补丁
-    CHECK(ml.find("if (init_found) {") != std::string::npos,
-          "Init 出现后必须立刻结束等待（这是 Arctium 的通过条件）");
-    CHECK(ml.find("if (init_found) {") != std::string::npos &&
-              ml.find("ready = true;") != std::string::npos,
-          "Init 出现时应置 ready");
+    // 【这条断言本身也曾经是错的，必须记下来】
+    //
+    // 它原先写着 "Init 出现后必须立刻结束等待（这是 Arctium 的通过条件）"。
+    // 但 Arctium 的 WaitForUnpack 是【两步】：
+    //   1) Init 特征码出现
+    //   2) initOffset += *(int*)(match+2) + 10; 等该地址上的字节 != 0
+    // 第 1 步只说明那段代码被解密了，不说明客户端执行过它。
+    // 照着这条错断言，实现就停在第一步，于是壳还没解密 Integrity/Remap
+    // 那几个函数时我们就去扫描 -> "完整性校验 0 处" -> 闪退。
+    //
+    // 现在断言的是完整的两步语义。
+    CHECK(ml.find("init_target_va") != std::string::npos,
+          "必须从 Init 的 mov 立即数算出标记地址（WaitForUnpack 第二步）");
+    CHECK(ml.find("解包完成") != std::string::npos,
+          "标记置位后才算解包完成");
+    CHECK(ml.find("仍为 0") != std::string::npos,
+          "标记为 0 时必须继续等，不能看到特征码就走");
     // 我自己发明的分数门槛必须彻底消失，不能再回来
     CHECK(ml.find("kNeedScore") == std::string::npos,
           "kNeedScore（自造的 6/8 门槛）必须彻底移除 —— Arctium 没有这个概念");
@@ -2130,28 +2140,49 @@ static void test_mod_loader_ordering() {
   CHECK(src.find("struct ResumeGuard") != std::string::npos,
         "必须有 ResumeGuard 保证进程被恢复（否则客户端会永久挂起）");
 
-  // ---- anti-crash 必须在 NoJump 之后、resume 之后写 ----
+  // ---- anti-crash 的实际位置（以 Arctium 原文为准，不再凭推理）----
   //
-  // 这条断言曾经写成反的（要求 anti-crash 最先写、且在任何其它写入之前），
-  // 依据是"越早关掉校验越好"。但第 5 轮线上实测推翻了它：
-  // 在进程仍挂起时规划 anti-crash，日志是
-  //     anti-crash 规划: 完整性校验 0 处, remap 校验 1 处, 跳转补丁 1 条
-  // —— 完整性校验那 3 个函数此刻还没被壳解密，特征码一个都匹配不到。
-  // 结果只写进 1 条 remap，客户端 resume 后即以 EXCEPTION_INTERNAL_ERROR
-  // (0xC00000E5) 结束。
+  // 这条断言被改过两次方向，两次都是凭"应该是这样"推断的，两次都错。
+  // 现在只照抄 src/Launcher.cs 的事实：
   //
-  // Arctium Launcher.cs 的真实顺序是不容再猜的：
-  //   NoJump -> LoadFileMappings -> HookClient -> NtResumeProcess -> RemapAndPatch(antiCrash)
-  // 也就是 anti-crash 是【恢复进程之后】才做的。这里断言上游顺序。
+  //   WaitForUnpack()                       <- 等 Init 特征码 + 等标记置位
+  //     if (antiCrash) PrepareAntiCrash()   <- 【挂起】+ 规划 Integrity/Remap
+  //   QueuePatch(LoadByFileIdAlternate, 3)  <- NoJump 入队（仍挂起）
+  //   QueuePatch(LoadByFilePathAlternate,3)
+  //   ModLoader.HookClient(...)
+  //   NtResumeProcess()
+  //   RemapAndPatch(antiCrash)              <- 统一写入
+  //
+  // 注意 PrepareAntiCrash 里自己做 NtSuspendProcess，不需要"先挂起再规划"。
+  // 所以 anti-crash 规划必须在 NoJump 规划【之前】、resume【之前】。
   const size_t p_ac_plan = src.find("plan_anti_crash(process");
   const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac)");
   CHECK(p_ac_plan != std::string::npos, "必须调用 plan_anti_crash（Arctium PrepareAntiCrash）");
   CHECK(p_ac_apply != std::string::npos, "必须调用 apply_anti_crash");
-  CHECK(p_suspend < p_ac_plan, "anti-crash 必须在挂起之后规划（要读已解密的映像）");
-  CHECK(p_apply_branch < p_ac_apply,
-        "anti-crash 必须在 NoJump 写入之后（对齐 Arctium: RemapAndPatch 在 NtResumeProcess 之后）");
-  CHECK(p_resume < p_ac_apply,
-        "anti-crash 必须在 resume 之后（挂起时代码页未解密，Integrity 特征码 0 命中）");
+  CHECK(p_ac_plan < p_plan,
+        "anti-crash 规划必须在 NoJump 规划之前（Arctium: PrepareAntiCrash 在 WaitForUnpack 末尾）");
+  CHECK(p_ac_apply < p_resume,
+        "anti-crash 写入必须在 resume 之前（Arctium 在 NtResumeProcess 前完成所有写入）");
+
+  // ---- WaitForUnpack 的第二步：等 Init 立即数指向的标记置位 ----
+  //
+  // 上游原文：
+  //   initOffset += BitConverter.ToUInt32(memory.Read(initOffset + base + 2, 4), 0) + 10;
+  //   while (memory.Read(initOffset + base, 1)?[0] == 0) ...
+  // 只等"Init 特征码出现"是不够的 —— 那只说明代码被解密，
+  // 不说明客户端执行过它。实测后果就是 "完整性校验 0 处"，然后闪退。
+  CHECK(src.find("init_target_va") != std::string::npos,
+        "必须实现 WaitForUnpack 第二步：读取 Init 的 mov 立即数得到标记地址");
+  CHECK(src.find("解包完成") != std::string::npos || src.find("仍为 0") != std::string::npos,
+        "必须等待标记字节由 0 变为非 0，而不是看到特征码就走");
+
+  // ---- 不能用页保护属性过滤命中 ----
+  //
+  // Arctium 的 FindPattern 只做字节匹配，从不看 VirtualQueryEx 的保护位。
+  // 我们曾要求 has_rx，结果壳把 .text 映射成 RW(0x04) 时
+  // 每一个命中都被丢掉（日志里的 "可执行 否" / "明文页 22/260"）。
+  CHECK(src.find("h.name == \"Init\" && h.has_rx") == std::string::npos,
+        "Init 命中不能用 has_rx 过滤（Arctium 不看页保护）");
 
   // ---- 字符串块必须存绝对路径 ----
   //
@@ -2818,6 +2849,58 @@ static void test_protect_plan() {
 // 线上症状：诊断（读缓存）说「明文且位置正确」，规划（现场 read_exact）
 // 却说「找不到 0F 84」，于是 NoJump 7 次重试全部失败。
 // 根因是 read_exact 在读取失败时静默返回全 0。
+// 命中筛选与解包判据 —— 这两条正是第 5 轮失败的直接原因。
+//
+// 用纯函数测，而不是 grep 源码文本：上一轮我用 grep 断言
+// `h.name == "Init" && h.has_rx` 不存在，结果变异把 has_rx 加回
+// hook 选择那段，测试完全没报错。文本断言会漏。
+static void test_hit_selection_and_unpack() {
+  group("hit-selection");
+
+  // 1) 页不可执行【不能】导致命中被丢弃。
+  //    第 2 轮实测：CustomFileIdHook 1 处, 可执行 否 -> 跳板没装。
+  std::vector<wowmod::HitCandidate> plain = {{0x1000, 0, false}};
+  int sc = -1;
+  CHECK(wowmod::pick_hook_target(plain, &sc) == 0x1000,
+        "命中页不可执行时仍必须采用（壳把 .text 映射成 RW，Arctium 不看保护位）");
+  CHECK(sc == 0, "分数应原样带出");
+
+  // 2) 取分数最高者
+  std::vector<wowmod::HitCandidate> multi = {
+      {0x1000, 2, true}, {0x2000, 7, false}, {0x3000, 5, true}};
+  CHECK(wowmod::pick_hook_target(multi, &sc) == 0x2000,
+        "应选语义分最高的命中，即便它所在页不可执行");
+  CHECK(sc == 7, "分数应为最高者");
+
+  // 3) 空候选 -> 0（调用方据此判断"没找到"）
+  CHECK(wowmod::pick_hook_target({}, &sc) == 0, "空候选必须返回 0");
+
+  // 4) 同分取先到者
+  std::vector<wowmod::HitCandidate> tie = {{0x1000, 3, true}, {0x2000, 3, true}};
+  CHECK(wowmod::pick_hook_target(tie, &sc) == 0x1000, "同分取先到者");
+
+  // ---- WaitForUnpack 第二步 ----
+  // Init 形态：C7 05 <rel32=0x100> 01 00 00 00，位于 0x5000
+  // 目标 = 0x5000 + 10 + 0x100
+  // 0x5000 + 10 + 0x100 = 0x510A
+  CHECK(wowmod::compute_init_flag_address(0x5000, 0x100) == 0x510A,
+        "标记地址 = init_va + 10 + rel32（rel32 相对下一条指令）");
+  CHECK(wowmod::compute_init_flag_address(0x5000, -0x10) == 0x5000 - 0x10 + 10,
+        "负 rel32 也必须正确");
+  CHECK(wowmod::compute_init_flag_address(0, 0x100) == 0, "init_va 为 0 时返回 0");
+
+  // 5) 只有特征码、标记还是 0 -> 未解包完成（我们过去的 bug：这一步没做）
+  CHECK(!wowmod::unpack_is_done(true, true, 0),
+        "看到 Init 特征码但标记为 0 时，解包【尚未】完成 —— 不能往下走");
+  // 6) 标记读不到 -> 未完成
+  CHECK(!wowmod::unpack_is_done(true, false, 1), "标记读不到时不能判为完成");
+  // 7) 特征码没出现 -> 未完成
+  CHECK(!wowmod::unpack_is_done(false, true, 1), "没见到 Init 时不能判为完成");
+  // 8) 两步都满足 -> 完成
+  CHECK(wowmod::unpack_is_done(true, true, 1), "特征码出现且标记非 0 才算解包完成");
+  CHECK(wowmod::unpack_is_done(true, true, 0xFF), "任意非 0 值都算置位");
+}
+
 static void test_site_window_fallback() {
   group("site-window");
   const uint64_t rva = 0x20;
@@ -3010,6 +3093,7 @@ int main() {
   test_file_layout_remap();
   test_no_false_negative();
   test_protect_plan();
+  test_hit_selection_and_unpack();
   test_site_window_fallback();
   test_arctium_signature_table();
   {

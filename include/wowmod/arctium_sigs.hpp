@@ -54,6 +54,41 @@ bool resolve_site_window(std::vector<uint8_t> live,
                          const std::vector<uint8_t>* scanned,
                          uint64_t rva_in_image);
 
+// ---- 命中筛选（纯函数，便于单测）----
+//
+// Arctium 的 FindPattern 只做字节匹配，**从不查 VirtualQueryEx 的保护位**。
+// 我们过去在挑选命中时要求 has_rx（命中页可执行），后果是：
+//     第 2 轮: CustomFileIdHook 1 处 (可执行 否, 语义分 0/8)
+//     全轮结束 hook 目标为空 -> 跳板没装 -> 模组不加载
+// 壳把 .text 映射成 PAGE_READWRITE(0x04)，所以每一个命中都会被这条规则丢掉。
+// 写入时本来就会临时改保护，命中页的原属性不是拒绝理由。
+struct HitCandidate {
+  uint64_t va = 0;
+  int semantic_score = 0;
+  bool executable = false;
+};
+
+// 从候选里选 hook 目标：分数最高者胜，同分取先到者。
+// 注意：executable 不参与筛选（只用于日志措辞）。
+uint64_t pick_hook_target(const std::vector<HitCandidate>& cands, int* score_out);
+
+// ---- WaitForUnpack 的第二步（纯函数，便于单测）----
+//
+// 上游 Arctium Launcher.cs：
+//   initOffset += BitConverter.ToUInt32(memory.Read(initOffset + base + 2, 4), 0) + 10;
+//   while (memory.Read(initOffset + base, 1)?[0] == null ||
+//          memory.Read(initOffset + base, 1)?[0] == 0) ...
+//
+// Init 的特征码是 `C7 05 <rel32> 01 00 00 00`（mov dword ptr [x], 1）。
+// 特征码出现只证明【这段代码被解密】，不证明客户端【执行过它】。
+// 真正的"解包完成"信号是 x 处的字节变成非 0。
+//
+// 返回：标记地址（init_va + 10 + rel32）。读不到返回 0。
+uint64_t compute_init_flag_address(uint64_t init_va, int32_t rel32);
+
+// 判据：解包是否完成。flag_read_ok=false 表示读不到，视为未完成。
+bool unpack_is_done(bool init_seen, bool flag_read_ok, uint8_t flag_value);
+
 // 指针失效风险：返回的是静态表的引用，进程生命周期内有效。
 const std::vector<ArctiumSignatureSpec>& arctium_signature_specs();
 

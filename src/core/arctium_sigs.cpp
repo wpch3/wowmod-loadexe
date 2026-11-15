@@ -108,6 +108,31 @@ bool window_has_je(const std::vector<uint8_t>& b) {
 }
 }  // namespace
 
+uint64_t pick_hook_target(const std::vector<HitCandidate>& cands, int* score_out) {
+  uint64_t best_va = 0;
+  int best_score = 0;
+  for (const auto& c : cands) {
+    // executable 不参与筛选 —— 这是 Arctium 的行为，也是修掉
+    // "CustomFileIdHook 1 处 (可执行 否)" 导致跳板没装的关键。
+    if (best_va == 0 || c.semantic_score > best_score) {
+      best_va = c.va;
+      best_score = c.semantic_score;
+    }
+  }
+  if (score_out) *score_out = best_score;
+  return best_va;
+}
+
+uint64_t compute_init_flag_address(uint64_t init_va, int32_t rel32) {
+  if (!init_va) return 0;
+  // 指令是 `C7 05 <rel32> <imm32>`，共 10 字节；rel32 相对下一条指令。
+  return init_va + 10 + static_cast<int64_t>(rel32);
+}
+
+bool unpack_is_done(bool init_seen, bool flag_read_ok, uint8_t flag_value) {
+  return init_seen && flag_read_ok && flag_value != 0;
+}
+
 bool resolve_site_window(std::vector<uint8_t> live,
                          const std::vector<uint8_t>* scanned,
                          uint64_t rva_in_image) {

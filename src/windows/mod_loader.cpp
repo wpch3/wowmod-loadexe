@@ -262,7 +262,9 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   uint64_t last_image_base = 0;
   size_t last_image_size = 0, last_image_read = 0;
   bool init_found = false;
+  bool init_flag_seen = false;
   uint64_t init_va = 0;
+  uint64_t init_target_va = 0;
   size_t best_low = 0, last_checked = 0;
   int hook_hits = 0, hook_best = 0;
   const DWORD t0 = GetTickCount();
@@ -273,13 +275,13 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     int round_best = 0;
     size_t hits_n = 0;
     for (const auto& h : sig.hits) {
-      if (h.name == "Init" && h.has_rx) {
+      if (h.name == "Init") {
         round_init = true;
         if (!init_va) init_va = h.match_va;
       }
       if (h.name == "CustomFileIdHook") {
         ++hits_n;
-        if (h.has_rx && h.semantic_score > round_best) round_best = h.semantic_score;
+        if (h.semantic_score > round_best) round_best = h.semantic_score;
       }
     }
     if (round_init) init_found = true;
@@ -299,8 +301,60 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
                  static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
                  init_found ? "有" : "无", best_low, last_checked, hits_n, round_best);
 
-    // Arctium 的通过条件。
-    if (init_found) {
+    // ---- Arctium WaitForUnpack 的【第二步】（我们过去完全没做）----
+    //
+    // 上游原文：
+    //   initOffset += BitConverter.ToUInt32(memory.Read(initOffset + base + 2, 4), 0) + 10;
+    //   while (memory.Read(initOffset + base, 1)?[0] == null ||
+    //          memory.Read(initOffset + base, 1)?[0] == 0)
+    //       memory.Data = memory.Read(...);
+    //
+    // 也就是说：Init 特征码是 `C7 05 <rel32> 01 00 00 00`（mov dword ptr [x], 1）。
+    // 特征码出现只证明【这段代码被解密了】，不证明客户端【已经执行过它】。
+    // 真正的"解包完成"信号，是那条 mov 的目标地址 x 上的字节变成非 0。
+    //
+    // 我们过去只做了第一步就往下走 —— 于是在壳还没把 Integrity/Remap 那
+    // 几个函数解密时就扫描，实测得到 "完整性校验 0 处"，随后只写进 1 条
+    // remap 补丁，客户端 resume 后立即 EXCEPTION_INTERNAL_ERROR。
+    if (init_found && init_va) {
+      if (!init_target_va) {
+        // mov 的 rel32 紧跟在操作码之后：C7 05 [rel32] ...
+        int32_t off = 0;
+        SIZE_T got = 0;
+        if (ReadProcessMemory(process, reinterpret_cast<const void*>(init_va + 2), &off, 4, &got) &&
+            got == 4) {
+          // 指令长 10 字节，rel32 相对【下一条指令】的地址
+          init_target_va = init_va + 10 + static_cast<int64_t>(off);
+        }
+      }
+      if (init_target_va) {
+        uint8_t flag = 0;
+        SIZE_T fgot = 0;
+        const bool fok = ReadProcessMemory(process, reinterpret_cast<const void*>(init_target_va),
+                                           &flag, 1, &fgot) && fgot == 1;
+        const bool flagged = wowmod::unpack_is_done(round_init, fok, flag);
+        if (round_init && flagged) {
+          step("解包完成（Init 立即数指向的标记 0x" + to_hex(init_target_va, 16) +
+               " 已变为 " + std::to_string(static_cast<int>(flag)) + "）");
+          ready = true;
+          break;
+        }
+        if (round_init && !init_flag_seen) {
+          init_flag_seen = true;
+          step("Init 特征码已出现，但标记 0x" + to_hex(init_target_va, 16) +
+               " 仍为 0 —— 客户端还没执行到初始化，继续等（Arctium WaitForUnpack 第二步）");
+        }
+        // 已见到 Init 但标记迟迟不置位：超过一半等待时间后不再死等，
+        // 但必须如实说明，绝不假装"已初始化"。
+        if (round_init && GetTickCount() - t0 > wait_ms / 2) {
+          step("警告: 标记 0x" + to_hex(init_target_va, 16) +
+               " 在等待期内始终为 0，按已初始化继续（可能该版本 mov 语义不同）");
+          ready = true;
+          break;
+        }
+      }
+    }
+    if (init_found && !init_va) {
       ready = true;
       break;
     }
@@ -401,16 +455,22 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     bool round_any = false;
     uint64_t round_any_va = 0;
     size_t hits_n = 0;
+    std::vector<wowmod::HitCandidate> cands;
+    bool any_rx = false;
     for (const auto& h : sig.hits) {
-      if (h.name == "Init" && h.has_rx) init_seen = true;
+      if (h.name == "Init") init_seen = true;
       if (h.name != "CustomFileIdHook") continue;
       ++hits_n;
-      round_any = true;
-      if (!round_any_va) round_any_va = h.match_va;
-      if (h.has_rx && (!round_rx || h.semantic_score > round_best)) {
-        round_best = h.semantic_score;
-        round_rx = true;
-        round_target = h.match_va;
+      cands.push_back(wowmod::HitCandidate{h.match_va, h.semantic_score, h.has_rx});
+      if (h.has_rx) any_rx = true;
+    }
+    {
+      int sc = 0;
+      const uint64_t picked = wowmod::pick_hook_target(cands, &sc);
+      if (picked) {
+        round_target = picked;
+        round_best = sc;
+        round_rx = any_rx;
       }
     }
     wowmod::logf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
@@ -515,6 +575,42 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       }
     }
   } resume_guard{process, suspended, false};
+
+  // ---- 3b2. anti-crash 规划（Arctium PrepareAntiCrash，挂起状态下、NoJump 之前）----
+  //
+  // 精确对齐 src/Launcher.cs：
+  //   WaitForUnpack() 末尾 -> if (antiCrash) PrepareAntiCrash()
+  //       NtSuspendProcess
+  //       RefreshMemoryData -> 重新读整块模块镜像
+  //       FindPattern(Integrity,  int.MaxValue, size)   <- 【全部命中】
+  //       FindPattern(Integrity2, int.MaxValue, size)   <- 【全部命中】
+  //       FindPattern(Remap,      int.MaxValue, size)   <- 【全部命中】
+  //       QueuePatch(...)                               <- 只入队，不写
+  //   随后才 QueuePatch NoJump -> HookClient -> NtResumeProcess -> RemapAndPatch
+  //
+  // 我前几轮把这一步挪到 resume 之后，是错的：resume 之后壳可能已经开始
+  // 改这些页，而且此时再扫描时映像已被 RemapAndPatch 之外的路径改写。
+  // 正确时机就是【解包完成之后、任何写入之前、进程挂起时】。
+  {
+    AntiCrashPlan ac = plan_anti_crash(process, opts.cert_patches);
+    if (!ac.ok) {
+      step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
+    } else {
+      step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
+           " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
+           std::to_string(ac.remap_jump_patches) + " 条" +
+           (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
+      if (!ac.patches.empty()) {
+        if (apply_anti_crash(process, &ac)) {
+          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
+          r.anticrash_patches = ac.patches.size();
+        } else {
+          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
+        }
+      }
+      for (const auto& n : ac.notes) step("  " + n);
+    }
+  }
 
   // ---- 3b. 先【规划】NoJump（只读，不写）----
   //
@@ -820,47 +916,6 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     } else {
       r.error = "补丁已写入，但恢复进程失败: " + rerr + "（请手动结束客户端后重试）";
       return r;
-    }
-  }
-
-  // ---- 6. anti-crash（对齐 Arctium：NoJump 之后、resume 之后才做）----
-  //
-  // 曾经放在挂起阶段（resume 之前），线上实测 “完整性校验 0 处” ——
-  // 因为壳此时还没解密那些函数，特征码一个都匹配不到；随后只写进了
-  // 1 条 remap，客户端 resume 后几十秒就 EXCEPTION_INTERNAL_ERROR。
-  //
-  // Arctium Launcher.cs 的真实顺序是：
-  //   NoJump -> LoadFileMappings -> HookClient -> NtResumeProcess -> RemapAndPatch(antiCrash)
-  // 即 anti-crash 是【恢复进程之后】才做的。这里照做，并对 “0 命中”
-  // 做短重试，给按需解密留时间。
-  {
-    AntiCrashPlan ac;
-    int integ = 0;
-    for (int attempt = 0; attempt < 8; ++attempt) {
-      if (attempt) {
-        step("anti-crash 第 " + std::to_string(attempt) + " 次重试（完整性校验尚未解密）");
-        ::Sleep(1500);
-      }
-      ac = plan_anti_crash(process, opts.cert_patches);
-      integ = ac.ok ? ac.integrity_hits : 0;
-      if (ac.ok && (integ > 0 || ac.remap_hits > 0)) break;
-    }
-    if (!ac.ok) {
-      step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
-    } else {
-      step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
-           " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
-           std::to_string(ac.remap_jump_patches) + " 条" +
-           (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
-      if (!ac.patches.empty()) {
-        if (apply_anti_crash(process, &ac)) {
-          step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
-          r.anticrash_patches = ac.patches.size();
-        } else {
-          step("anti-crash 写入不完整 —— 客户端可能被完整性校验结束");
-        }
-      }
-      for (const auto& n : ac.notes) step("  " + n);
     }
   }
 
