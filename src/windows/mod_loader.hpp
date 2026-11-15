@@ -68,6 +68,12 @@ struct ModLoaderResult {
 
 // 已经准备好的数据侧（来自 mappings/files 目录，或来自 --mods 自包含扫描）。
 // 两条来源产出的结构完全一样，安装流程只认这个。
+struct ModLoaderOptions {
+  // 是否同时打 Arctium 的证书补丁。只有连私有服务器才需要（客户端不校验
+  // 登录服务器证书）。模组加载完全不需要，所以默认关。
+  bool cert_patches = false;
+};
+
 struct ModDataSet {
   std::vector<ModEntry> entries;
   std::string files_dir;      // 绝对路径：表里存的路径必须落在它下面
@@ -96,7 +102,8 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
 // wowmod_dir 只用来放报告；数据不再从 <wowmod_dir>/mappings 读。
 ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& wowmod_dir,
                                              const ModDataSet& data, uint32_t wait_ms,
-                                             StubKind kind = StubKind::kArctium);
+                                             StubKind kind = StubKind::kArctium,
+                                             const ModLoaderOptions& opts = {});
 
 std::string format_mod_loader_report(const ModLoaderResult& r);
 

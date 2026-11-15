@@ -62,6 +62,46 @@ size_t tail_score(const std::string& a, const std::string& b) {
   return n;
 }
 
+// 把「磁盘上的相对路径」裁剪成「游戏内相对路径」。
+//
+// 模组的真实形态五花八门，实测过的四种：
+//   Character\BloodElf\...                          -> 已经在游戏根
+//   T21WarriorNSFW\item\texturecomponents\...       -> 多一层包名
+//   Titaa Hawkstrider Mount\Creature\cockatrice\... -> 多一层包名
+//   Wrath NPC Pack\Textures\BakedNpcTextures\...    -> 根本没有游戏前缀
+//
+// 所以不能用一个"全局基准目录"去算（那样只能符合同一种形态）。
+// 正确做法是【逐文件】在路径里找第一个已知游戏前缀目录，从那里截断。
+// 找不到前缀时返回空串，交给"文件名 + 尾部目录"那条模糊路径处理。
+std::string strip_to_game_prefix(const std::string& rel) {
+  const std::string low = norm_key(rel);
+  // 切段，逐段比对
+  std::vector<std::string> segs;
+  std::string cur;
+  for (char c : low) {
+    if (c == '/') { segs.push_back(cur); cur.clear(); }
+    else cur.push_back(c);
+  }
+  segs.push_back(cur);
+
+  for (size_t i = 0; i + 1 < segs.size(); ++i) {
+    for (const char* pfx : kPrefixes) {
+      // kPrefixes 带结尾 '/'，段名比对时去掉
+      std::string name(pfx);
+      if (!name.empty() && name.back() == '/') name.pop_back();
+      if (segs[i] == name) {
+        std::string out;
+        for (size_t k = i; k < segs.size(); ++k) {
+          if (k != i) out.push_back('/');
+          out += segs[k];
+        }
+        return out;
+      }
+    }
+  }
+  return "";
+}
+
 struct ListfileTable {
   std::unordered_map<std::string, uint64_t> by_key;    // 归一化路径 -> id
   std::unordered_map<std::string, std::string> path_of; // 归一化路径 -> 官方写法
@@ -155,40 +195,22 @@ SelfContainedReport build_selfcontained_mods(const std::string& mods_dir,
   }
   rep.files_scanned = files.size();
 
-  // 相对路径的基准：模组目录的父目录（这样 Character/BloodElf/... 最外层不丢），
-  // 但如果模组目录本身就是游戏根（里面直接有 character/ item/ ...），
-  // 那基准就是它自己。
-  std::string base = abs_root;
-  {
-    bool has_prefix = false;
-    for (const auto& rel : files) {
-      const std::string low = norm_key(rel);
-      for (const char* p : kPrefixes) {
-        if (low.rfind(p, 0) == 0) { has_prefix = true; break; }
-      }
-      if (has_prefix) break;
-    }
-    if (!has_prefix) base = parent_path(abs_root);
-  }
-  rep.game_root = base;
-
-  auto rel_of = [&](const std::string& abs) -> std::string {
-    std::string b = base;
-    std::replace(b.begin(), b.end(), '\\', '/');
-    std::string a = abs;
-    std::replace(a.begin(), a.end(), '\\', '/');
-    if (a.size() > b.size() && a.compare(0, b.size(), b) == 0) {
-      std::string r = a.substr(b.size());
-      while (!r.empty() && r.front() == '/') r.erase(r.begin());
-      return r;
-    }
-    return "";
-  };
+  // game_root 只用于报告（"这份模组是相对哪个目录组织的"）。
+  // 游戏内路径不再依赖它 —— 见 strip_to_game_prefix。
+  rep.game_root = abs_root;
 
   std::unordered_set<uint64_t> seen;
+  const std::string root_prefix = abs_root + "/";
   for (const auto& abs : files) {
-    const std::string rel = rel_of(abs);
-    if (rel.empty()) continue;
+    // 相对模组目录的路径
+    std::string disk_rel = abs;
+    if (disk_rel.size() > root_prefix.size() &&
+        disk_rel.compare(0, root_prefix.size(), root_prefix) == 0)
+      disk_rel = disk_rel.substr(root_prefix.size());
+    if (disk_rel.empty()) continue;
+    // 裁剪成游戏内路径；裁不出来就保留整条（后面按文件名模糊匹配）
+    std::string rel = strip_to_game_prefix(disk_rel);
+    if (rel.empty()) rel = disk_rel;
     // 说明文件 / listfile 本身不是游戏资源，别报成"解析不出来"
     {
       const std::string low = norm_key(rel);

@@ -54,11 +54,39 @@ LM=("$(obj src/windows/launcher_main.cpp)" "$(obj src/windows/remote_load.cpp)" 
 "$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod_loader.exe" \
   "${CORE[@]}" "${LM[@]}" "${LINK[@]}" -Wl,--subsystem,console
 
-echo "==> wowmod.exe（CLI）"
+echo "==> wowmod.exe（正式应用，GUI，无控制台）"
+APP=("$(obj src/app/main.cpp)" "$(obj src/windows/listfile_fetch.cpp)" \
+     "$(obj src/windows/archive_extract.cpp)")
+# 注意：不能用 ${LM[@]} —— 它包含 launcher_main.cpp，那个文件有 main()，
+# 会和 GUI 的 main 冲突（duplicate symbol: main）。引擎侧只需要真正会写
+# 内存 / 扫描映像的那些 TU。
+ENGINE=("$(obj src/windows/remote_load.cpp)" "$(obj src/windows/inject_first.cpp)" \
+        "$(obj src/windows/agent_code.cpp)" "$(obj src/windows/remote_analyze.cpp)" \
+        "$(obj src/windows/diagnose.cpp)" "$(obj src/windows/detour.cpp)" \
+        "$(obj src/windows/fd_hook.cpp)" "$(obj src/windows/scan_images.cpp)" \
+        "$(obj src/windows/arctium_sig.cpp)" "$(obj src/windows/arctium_patch.cpp)" \
+        "$(obj src/windows/mod_loader.cpp)" "$(obj src/core/arctium_clone.cpp)" \
+        "$(obj src/core/x64sim.cpp)" "$(obj src/core/anticrash_plan.cpp)" \
+        "$(obj src/windows/process_suspend.cpp)" "$(obj src/windows/anticrash.cpp)" \
+        "$(obj src/windows/fs_scan.cpp)" "$(obj src/windows/probe_reader.cpp)" \
+        "$(obj src/windows/crash_evidence.cpp)")
+# 链接顺序：CORE 已经包含引擎（mod_loader 依赖的 core 部分），
+# 这里再补 launcher 侧真正会写内存的那几个 TU。
+# 清单必须编译进 exe（不是放个同名文件在旁边）：
+#   DPI 感知 / Common Controls v6 / UTF-8 代码页 / 长路径
+# 没有它，125% 缩放下整个界面是糊的，深目录直接打不开。
+"$ZIG" rc /fo "$OUT/wowmod.res" src/app/wowmod.rc
+"$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod.exe" \
+  "${CORE[@]}" "${ENGINE[@]}" "${APP[@]}" "$OUT/wowmod.res" "${LINK[@]}" \
+  -Wl,--subsystem,windows -lwinhttp -lcomctl32 -lole32 -loleaut32 -lshlwapi -lshell32 -lgdi32 -lcomdlg32
+
+# CLI 独立成 wowmod-cli.exe，不再占用 wowmod.exe —— 用户双击的那个
+# 必须是应用，不能是一个"给你传参数的命令行工具"。
+echo "==> wowmod-cli.exe（高级命令行工具，保留给排查用）"
 CLI=("$(obj src/cli/main.cpp)")
 LAUNCH=("$(obj src/windows/launch.cpp)")
 INJECT=("$(obj src/windows/inject.cpp)")
-"$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod.exe" \
+"$ZIG" c++ -target x86_64-windows-gnu -Wl,--strip-all -o "$DIST/wowmod-cli.exe" \
   "${CORE[@]}" "${CLI[@]}" "${LAUNCH[@]}" "${INJECT[@]}" \
   "${LINK[@]}" -lshell32 -Wl,--subsystem,console
 
@@ -78,7 +106,7 @@ rm -f "$DIST"/*.pdb "$DIST"/*.lib
 # 少了这一步 zip 里就会是上一次的旧二进制（曾经因此白跑两轮）。
 echo "==> 同步到仓库根目录"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-for f in wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod_hook.dll; do
+for f in wowmod.exe wowmod_loader.exe wowmod_rt.dll wowmod_hook.dll wowmod-cli.exe; do
   if [ -f "$DIST/$f" ]; then cp -f "$DIST/$f" "$ROOT/$f"; fi
 done
 

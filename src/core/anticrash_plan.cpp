@@ -23,6 +23,26 @@ const char* kIntegrity2Pattern =
     "44 89 ?? 24 ?? 44 89 ?? 24 ?? 89 ?? 24 ?? 48 89 ?? 24 ?? 53 57";
 const char* kRemapPattern = "48 ?? ?? 1E 0F 83";
 
+// ---- 证书补丁（Arctium Launcher.cs dev-mode 分支）----
+//
+// 这些补丁让客户端不去校验登录服务器的证书，因此只对「连私有服务器」有意义。
+// 模组加载不需要它们，所以默认不装（plan_anti_crash_from_image 的
+// cert_patches 参数控制），但既然用户要「Arctium 的全部功能」，实现必须是
+// 完整的、能用的。
+//
+// 模式与补丁逐字节来自 Arctium：
+//   Patterns/Windows.cs CertBundle     = { 0x75, 0x06, 0x48, ??, ??, 0x60, 0x5F, 0xC3 }
+//   Patches/Windows.cs  CertBundle     = { 0x90, 0x90 }                offset 0
+//   Patterns/Windows.cs CertCommonName = { 0x80, ??, 0x2A, 0x75, ??, 0x32, 0xC0, 0x48 }
+//   Patches/Windows.cs  CertCommonName = { 0xB0, 0x01 }                offset 5
+//   Patterns/Windows.cs CertChain      = { 0x32, 0xDB, 0xEB, 0x02, 0xB3, 0x01, 0x48, 0x83, ??, ??, 0x00, 0x00, 0x00, 0x00 }
+//   Patches/Windows.cs  CertChain      = { 0xB3, 0x01 }                offset 0
+//   Patterns/Windows.cs CertCheck      = { 0x44, 0x24, 0x70, 0x48, 0x89, 0x44, 0x24, 0x60, 0xE8, 0xD0, 0x42, 0x00, 0x00, 0x0F, 0xB6 }
+//   Patches/Windows.cs  CertCheck      = { 0xBF, 0x01, 0x00, 0x72, 0x72 }   offset 8
+//
+// 注意 CertCheck 的补丁是 5 字节（mov edi, 0x72720001），比它替换的
+// call 少 1 字节 —— 这是 Arctium 原样，多出来的那个字节保持原值不动。
+
 // 这三个判据必须与 Arctium（WinMemory.cs）逐字节一致：
 //
 //     IsJump(i)             : p[i]==0x0F && p[i+1] in 0x80..0x8F    (Jcc rel32, 6B)
@@ -44,9 +64,21 @@ bool is_unconditional_jump(const uint8_t* p, size_t n, size_t i) {
 
 }  // namespace
 
+const std::vector<CertPatchSpec>& cert_patch_specs() {
+  static const std::vector<CertPatchSpec> kSpecs = {
+      {"CertBundle", "75 06 48 ?? ?? 60 5F C3", 0, {0x90, 0x90}},
+      {"CertCommonName", "80 ?? 2A 75 ?? 32 C0 48", 5, {0xB0, 0x01}},
+      {"CertChain", "32 DB EB 02 B3 01 48 83 ?? ?? 00 00 00 00", 0, {0xB3, 0x01}},
+      {"CertCheck", "44 24 70 48 89 44 24 60 E8 D0 42 00 00 0F B6", 8,
+       {0xBF, 0x01, 0x00, 0x72, 0x72}},
+  };
+  return kSpecs;
+}
+
 // 允许命名空间内的常量被下面的访问函数使用
 
-AntiCrashPlan plan_anti_crash_from_image(const std::vector<uint8_t>& image, uint64_t image_base) {
+AntiCrashPlan plan_anti_crash_from_image(const std::vector<uint8_t>& image, uint64_t image_base,
+                                         bool cert_patches) {
   AntiCrashPlan plan;
   const size_t n = image.size();
   if (n < 0x1000) {
@@ -173,6 +205,40 @@ AntiCrashPlan plan_anti_crash_from_image(const std::vector<uint8_t>& image, uint
         }
         last_address = a;
       }
+    }
+  }
+
+  // ---- 3. 证书补丁（可选）----
+  if (cert_patches) {
+    for (const auto& spec : cert_patch_specs()) {
+      std::string perr;
+      const Pattern pat = Pattern::parse(spec.pattern, &perr);
+      if (!pat.valid()) {
+        plan.notes.push_back(std::string(spec.name) + ": 特征码解析失败 " + perr);
+        continue;
+      }
+      const auto offs = pat.find_all(image);
+      if (offs.empty()) {
+        plan.notes.push_back(std::string(spec.name) + ": 本版本没有命中（跳过）");
+        continue;
+      }
+      // Arctium 用 FindPattern（只取第一处），而且不存在时它直接取消整次启动。
+      // 我们只取第一处，但不存在时跳过 —— 证书补丁不该让模组加载失败。
+      const size_t at = offs[0] + static_cast<size_t>(spec.offset);
+      if (at + spec.bytes.size() > n) {
+        plan.notes.push_back(std::string(spec.name) + ": 偏移越界（跳过）");
+        continue;
+      }
+      AntiCrashPatch p;
+      p.va = image_base + at;
+      p.bytes = spec.bytes;
+      p.name = spec.name;
+      p.cert = true;
+      plan.patches.push_back(std::move(p));
+      ++plan.cert_patches;
+      if (offs.size() > 1)
+        plan.notes.push_back(std::string(spec.name) + ": 命中 " + std::to_string(offs.size()) +
+                             " 处，按 Arctium 只改第一处");
     }
   }
 

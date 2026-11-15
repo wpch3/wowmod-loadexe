@@ -38,7 +38,9 @@ namespace wowmod {
 namespace win {
 
 // 读主映像、调用纯逻辑算出补丁计划。只读，不写。
-AntiCrashPlan plan_anti_crash(HANDLE process);
+//
+// cert_patches: 是否同时算证书补丁（连私有服务器才需要）。默认 false。
+AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches = false);
 
 // 写入计划里的补丁。返回是否全部成功。
 bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan);

@@ -1459,6 +1459,80 @@ static void test_anticrash_plan() {
 //   Wrath NPC Pack/Textures/BakedNpcTextures/CreatureDisplayExtra-*.blp
 //   T21WarriorNSFW/item/texturecomponents|objectcomponents|weapon
 //   Titaa Hawkstrider Mount/Creature/cockatrice/cockatricelite.m2/.skin/.blp
+// 证书补丁（CertBundle / CertCommonName / CertChain / CertCheck）。
+//
+// 这四条只有连私有服务器才需要，但既然要实现就必须和 Arctium 逐字节一致：
+// 偏移写错一个字节 = 改写指令中间 = 客户端起不来。
+// 这里用合成映像验证「命中点 + offset -> 写入位置」这条唯一的算术。
+static void test_cert_patches() {
+  group("cert_patches");
+  using namespace wowmod;
+
+  // 四条特征码各自放一份，位置分散
+  struct Case {
+    const char* name;
+    size_t at;
+    std::vector<uint8_t> pattern;   // 已填好通配字节
+    int offset;
+    std::vector<uint8_t> expect;
+  };
+  std::vector<Case> cases = {
+      // CertBundle: 75 06 48 ?? ?? 60 5F C3  -> +0 = 90 90
+      {"CertBundle", 0x100, {0x75, 0x06, 0x48, 0xAA, 0xBB, 0x60, 0x5F, 0xC3}, 0, {0x90, 0x90}},
+      // CertCommonName: 80 ?? 2A 75 ?? 32 C0 48 -> +5 = B0 01
+      {"CertCommonName", 0x200, {0x80, 0x11, 0x2A, 0x75, 0x22, 0x32, 0xC0, 0x48}, 5, {0xB0, 0x01}},
+      // CertChain: 32 DB EB 02 B3 01 48 83 ?? ?? 00 00 00 00 -> +0 = B3 01
+      {"CertChain", 0x300,
+       {0x32, 0xDB, 0xEB, 0x02, 0xB3, 0x01, 0x48, 0x83, 0xEC, 0x20, 0, 0, 0, 0}, 0, {0xB3, 0x01}},
+      // CertCheck: ... E8 D0 42 00 00 0F B6 -> +8 = BF 01 00 72 72
+      {"CertCheck", 0x400,
+       {0x44, 0x24, 0x70, 0x48, 0x89, 0x44, 0x24, 0x60, 0xE8, 0xD0, 0x42, 0x00, 0x00, 0x0F, 0xB6},
+       8, {0xBF, 0x01, 0x00, 0x72, 0x72}},
+  };
+
+  std::vector<uint8_t> img(0x20000, 0xCC);
+  for (const auto& c : cases) {
+    std::copy(c.pattern.begin(), c.pattern.end(), img.begin() + static_cast<long>(c.at));
+  }
+
+  // 默认不装证书补丁
+  {
+    const auto p0 = plan_anti_crash_from_image(img, 0x140000000ull);
+    CHECK_EQ(p0.cert_patches, 0u);
+    for (const auto& p : p0.patches) CHECK(!p.cert, "默认不应包含证书补丁");
+  }
+
+  const auto plan = plan_anti_crash_from_image(img, 0x140000000ull, true);
+  CHECK(plan.ok, "规划应成功");
+  CHECK_EQ(plan.cert_patches, cases.size());
+
+  for (const auto& c : cases) {
+    const uint64_t want_va = 0x140000000ull + c.at + static_cast<size_t>(c.offset);
+    bool found = false;
+    for (const auto& p : plan.patches) {
+      if (!p.cert || p.name != c.name) continue;
+      found = true;
+      CHECK(p.va == want_va, std::string(c.name) + " 的写入地址错了");
+      CHECK(p.bytes == c.expect, std::string(c.name) + " 的补丁字节错了");
+    }
+    CHECK(found, std::string("缺少补丁: ") + c.name);
+  }
+
+  // 偏移必须真的落在指令边界上，不能落在前一条指令中间 ——
+  // 这里用一个"仅字节相同但位置不同"的映像验证：把 CertBundle 的模式
+  // 放到映像结尾附近，确保不会越界写。
+  {
+    std::vector<uint8_t> small(0x1000, 0xCC);
+    const std::vector<uint8_t> pat = {0x75, 0x06, 0x48, 0xAA, 0xBB, 0x60, 0x5F, 0xC3};
+    std::copy(pat.begin(), pat.end(), small.end() - static_cast<long>(pat.size()));
+    const auto p = plan_anti_crash_from_image(small, 0x10000000ull, true);
+    for (const auto& q : p.patches) {
+      CHECK(q.va >= 0x10000000ull, "写入地址不能低于映像基址");
+      CHECK(q.va + q.bytes.size() <= 0x10000000ull + small.size(), "写入不能越界");
+    }
+  }
+}
+
 static void test_mods_selfcontained() {
   group("mods_selfcontained");
   using wowmod::win::build_selfcontained_mods;
@@ -1538,6 +1612,37 @@ static void test_mods_selfcontained() {
     if (e.file_data_id == 8 || e.file_data_id == 9) picked_common = true;
   CHECK(!picked_common, "重名文件必须拒绝，不能猜一个 id");
 
+  // ---- 精确匹配必须真的走到 ----
+  //
+  // 这一段是回归测试。之前的实现拿【绝对路径】去做 "character/" /
+  // "spells/" 这种前缀判断，于是永远不成立，base 被算成模组目录的父目录，
+  // 游戏内相对路径多出一层 "T21WarriorNSFW/"，精确匹配全部失效 ——
+  // 只能退到"文件名+尾部目录打分"这条模糊路径。
+  // 模糊路径虽然在这个例子里恰好也能对，但它对"看起来像、其实是另一个
+  // 资源"的文件会选错，而且用户看不出任何异常。必须保证精确匹配生效。
+  CHECK(rep.by_exact >= 2, "以 item/ 打头的包必须走精确匹配（by_exact >= 2）");
+  {
+    bool found_belt = false, found_sword = false;
+    for (const auto& e : rep.entries) {
+      if (e.file_data_id == 3) {
+        found_belt = true;
+        CHECK_EQ(e.game_path, std::string("item/texturecomponents/t21warrior_belt.blp"));
+      }
+      if (e.file_data_id == 4) {
+        found_sword = true;
+        CHECK_EQ(e.game_path, std::string("item/weapon/t21warrior_sword.blp"));
+      }
+      if (e.file_data_id == 5)
+        CHECK_EQ(e.game_path, std::string("creature/cockatrice/cockatricelite.m2"));
+    }
+    CHECK(found_belt && found_sword, "item 包的两条必须都解析出来");
+  }
+  // game_path 必须永远是【游戏内】路径，不能把模组目录名带进去
+  for (const auto& e : rep.entries)
+    CHECK(e.game_path.rfind("t21warrior", 0) != 0 && e.game_path.rfind("titaa", 0) != 0 &&
+              e.game_path.rfind("wowmod-selfcontained-test", 0) != 0,
+          "游戏内路径不能带模组目录名: " + e.game_path);
+
   fs::remove_all(root, ec);
 }
 
@@ -1579,7 +1684,7 @@ static void test_mod_loader_ordering() {
   // 我们改的每一个字节都会被判定为篡改 -> EXCEPTION_INTERNAL_ERROR
   // (0xC00000E5)，崩溃栈落在 ntdll!RtlReportCriticalFailure。
   // 所以 anti-crash 必须在【任何】其它写入之前完成，并且在挂起状态下。
-  const size_t p_ac_plan = src.find("plan_anti_crash(process)");
+  const size_t p_ac_plan = src.find("plan_anti_crash(process");
   const size_t p_ac_apply = src.find("apply_anti_crash(process, &ac)");
   CHECK(p_ac_plan != std::string::npos, "必须调用 plan_anti_crash（Arctium PrepareAntiCrash）");
   CHECK(p_ac_apply != std::string::npos, "必须调用 apply_anti_crash");
@@ -2389,6 +2494,7 @@ int main() {
   test_peb_image_protect_and_reach();
   test_anticrash_plan();
   test_mods_selfcontained();
+  test_cert_patches();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

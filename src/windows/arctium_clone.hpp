@@ -59,7 +59,14 @@ std::vector<uint8_t> arctium_stub_template();
 // 按 Arctium 的三处回填生成完整 stub。
 //   id_alloc_va  写入偏移 12
 //   count        写入偏移 35
-//   js_rel32     写入偏移 4（默认 42）
+//   js_rel32     写入偏移 4（恒为 42）
+//
+// 42 从哪来（照 Arctium ModLoader.cs HookClient 的公式）：
+//   rel32 = asm.Length - 2 - 6 = 50 - 8 = 42
+// js 指令本身在 +2、长 6 字节，下一条指令地址是 stub+8，加 42 = stub+50，
+// 正好是紧跟在 stub 之后的【原始指令第 0 字节】。也就是说负 id（Arctium
+// 用负数表示"这次不走自定义文件"）会正确落回原函数继续执行。
+// 注意这里只看 stub 自己的长度，与跳板后面接什么无关 —— 所以不需要调整。
 std::vector<uint8_t> build_arctium_stub(uint64_t id_alloc_va, uint32_t count,
                                         int32_t js_rel32 = 42);
 

@@ -3,6 +3,8 @@
 #ifdef _WIN32
 
 #include "windows/mod_loader.hpp"
+
+#include "wowmod/log.hpp"
 #include "windows/process_suspend.hpp"
 
 #include <algorithm>
@@ -163,16 +165,16 @@ MappingLoadReport load_mappings(const std::string& wowmod_dir) {
 std::string format_mod_loader_report(const ModLoaderResult& r) {
   std::ostringstream os;
   os << "=========== 模组加载器（Arctium 机制完整版）===========\n";
-  os << "\n[第一半] NoJump 分支补丁\n";
+  os << "[第一半] NoJump 分支补丁: ";
   if (r.branch_patched)
-    os << "  已打 " << r.branch_count << " 条（je rel32 -> 00 00 00 00）\n";
+    os << "已打 " << r.branch_count << " 条（je rel32 -> 00 00 00 00）\n";
   else
-    os << "  未完成\n";
+    os << "未完成\n";
 
-  os << "\n[第二半] FileDataID -> 本地路径 查表跳板\n";
+  os << "[第二半] FileDataID -> 本地路径 查表跳板: ";
   if (r.hook_installed) {
     char b[256];
-    std::snprintf(b, sizeof(b), "  已安装于 0x%llX\n",
+    std::snprintf(b, sizeof(b), "已安装于 0x%llX\n",
                   static_cast<unsigned long long>(r.hook_target));
     os << b;
     std::snprintf(b, sizeof(b), "  id 表 0x%llX / 字符串块 0x%llX\n",
@@ -184,19 +186,19 @@ std::string format_mod_loader_report(const ModLoaderResult& r) {
                   static_cast<unsigned long long>(r.trampoline_va));
     os << b;
   } else {
-    os << "  未安装\n";
+    os << "未安装\n";
   }
 
-  os << "\n[anti-crash] Arctium PrepareAntiCrash 机制\n";
+  os << "[anti-crash] PrepareAntiCrash 机制: ";
   if (r.anticrash_patches)
-    os << "  已写 " << r.anticrash_patches << " 条（完整性校验 ret 0 / remap 跳转错位）\n";
+    os << "已写 " << r.anticrash_patches << " 条（完整性校验 ret 0 / remap 跳转错位）\n";
   else
-    os << "  本次没有写入（该版本可能没有这些校验，或相关代码段尚未解密）\n";
+    os << "本次没有写入（该版本可能没有这些校验，或相关代码段尚未解密）\n";
 
-  os << "\n[数据] 可用 " << r.entries_loaded << " 项，磁盘缺失 " << r.entries_missing << " 项\n";
+  os << "[数据] 可用 " << r.entries_loaded << " 项，磁盘缺失 " << r.entries_missing << " 项\n";
 
   if (!r.steps.empty()) {
-    os << "\n步骤:\n";
+    os << "步骤:\n";
     for (const auto& s : r.steps) os << "  " << s << "\n";
   }
   if (!r.ok && !r.error.empty()) os << "\n[失败] " << r.error << "\n";
@@ -219,13 +221,12 @@ ModLoaderResult install_mod_loader(HANDLE process, const std::string& wowmod_dir
 
 ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& wowmod_dir,
                                              const ModDataSet& ds_in, uint32_t wait_ms,
-                                             StubKind kind) {
+                                             StubKind kind, const ModLoaderOptions& opts) {
   ModLoaderResult r;
   const ModDataSet& ds = ds_in;
   auto step = [&](const std::string& s) {
     r.steps.push_back(s);
-    std::printf("  %s\n", s.c_str());
-    std::fflush(stdout);
+    wowmod::logf("  %s", s.c_str());
   };
 
   const int kNeedScore = 6;   // 满分 8；6 分 = 三个手指印里至少命中两个
@@ -270,7 +271,7 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       best_low = probe.text_low_entropy;
       last_checked = probe.text_pages_total ? probe.text_pages_total : probe.text_checked;
     }
-    std::printf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
+    wowmod::logf("  第 %d 轮: 扫了 %zu 区域 / %.1f MB | 主映像 %.1f MB 读到 %.1f MB | "
                 "Init %s | 明文页 %zu/%zu (不可读 %zu, 空白 %zu) | "
                 "CustomFileIdHook %zu 处, 最佳 %d/8\n",
                 init_round + 1, sig.images_scanned,
@@ -279,7 +280,6 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
                 static_cast<double>(sig.main_image_read) / (1024.0 * 1024.0),
                 init_found ? "有" : "无", best_low, last_checked,
                 probe.text_pages_unreadable, probe.text_pages_blank, hits_n, round_best);
-    std::fflush(stdout);
 
     // 唯一门槛：目标特征码够分。Init 只做参考。
     if (round_target && round_best >= kNeedScore) {
@@ -343,14 +343,13 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
         }
       }
     }
-    std::printf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB, CustomFileIdHook %zu 处命中, 最佳可执行 %d/8\n",
+    wowmod::logf("  第 %d 轮: 扫了 %zu 个区域 / %.1f MB, CustomFileIdHook %zu 处命中, 最佳可执行 %d/8\n",
                 scan_round + 1, sig.images_scanned,
                 static_cast<double>(sig.bytes_scanned) / (1024.0 * 1024.0), hits_n, round_best);
     if (cands == 0) {
-      std::printf("          （0 命中 ≠ 没解密 —— 而是这些区域里没有目标函数。"
-                  "若下面 MB 数明显小于客户端体积，说明扫描范围没覆盖到代码段）\n");
+      wowmod::logf("          （0 命中 ≠ 没解密 —— 而是这些区域里没有目标函数。"
+                   "若下面 MB 数明显小于客户端体积，说明扫描范围没覆盖到代码段）");
     }
-    std::fflush(stdout);
 
     if (round_target && round_best >= kNeedScore) {
       target = round_target;
@@ -447,13 +446,14 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   // EXCEPTION_INTERNAL_ERROR 结束 —— 崩溃栈落在 ntdll!RtlReportCriticalFailure，
   // 因为那是"完整性校验失败"的统一出口，不是客户端代码的问题。
   {
-    AntiCrashPlan ac = plan_anti_crash(process);
+    AntiCrashPlan ac = plan_anti_crash(process, opts.cert_patches);
     if (!ac.ok) {
       step("anti-crash 规划失败: " + ac.error + "（继续，但客户端可能自行结束）");
     } else {
       step("anti-crash 规划: 完整性校验 " + std::to_string(ac.integrity_hits) +
            " 处, remap 校验 " + std::to_string(ac.remap_hits) + " 处, 跳转补丁 " +
-           std::to_string(ac.remap_jump_patches) + " 条");
+           std::to_string(ac.remap_jump_patches) + " 条" +
+           (opts.cert_patches ? (", 证书补丁 " + std::to_string(ac.cert_patches) + " 条") : ""));
       if (!ac.patches.empty()) {
         if (apply_anti_crash(process, &ac)) {
           step("anti-crash 已写入 " + std::to_string(ac.patches.size()) + " 条");
@@ -516,13 +516,24 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     // 结果就是「两半都装上了、id 也命中、但一点都不生效」，而且与文件
     // 类型无关：.blp 贴图、.m2 模型、.skin 骨骼走的是同一条查表返回。
     // 这解释了为什么换模型/换贴图都没反应。
-    const std::string files_dir_abs = ds.files_dir;
+    //
+    // 【必须用条目自己的 local_path】
+    //
+    // 自包含模式（--mods）下，文件散落在用户自己的模组目录里，
+    // 只有一个"游戏相对路径"，磁盘位置和 game_path 完全不对应。
+    // 如果这里用 files_dir + game_path 去拼，拼出来的路径根本不存在，
+    // 客户端打开失败 —— 又是"装好了但不生效"。
+    // load_mappings 那边已经把 local_path 算成 files\<game_path>，
+    // 所以两种来源都只需原样取 e.local_path。
     std::vector<arctium::MappingEntry> entries;
     entries.reserve(ds.entries.size());
     for (const auto& e : ds.entries) {
       arctium::MappingEntry m;
       m.file_id = e.file_data_id;
-      m.string_to_store = arctium::arctium_stored_path(files_dir_abs, e.game_path);
+      // 兜底：local_path 为空时才退回 files_dir + game_path（老数据形态）
+      m.string_to_store = e.local_path.empty()
+                              ? arctium::arctium_stored_path(ds.files_dir, e.game_path)
+                              : e.local_path;
       entries.push_back(std::move(m));
     }
     auto ser = arctium::serialize_arctium_mappings(entries);
@@ -571,10 +582,26 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
           ++sample_n;
         }
       }
+      // 还要确认这些路径在磁盘上【真的存在】。绝对路径但文件不存在，
+      // 客户端依然打不开 —— 那和存相对路径的结果一模一样。
+      size_t exist_count = 0;
+      for (const auto& m : entries) {
+        std::error_code fec;
+        if (!m.string_to_store.empty() &&
+            std::filesystem::is_regular_file(std::filesystem::u8path(m.string_to_store), fec))
+          ++exist_count;
+      }
       step("字符串块自检: " + std::to_string(abs_count) + "/" + std::to_string(entries.size()) +
-           " 条是绝对路径" + (abs_count == entries.size() ? "" : "  <-- 有问题"));
+           " 条是绝对路径, " + std::to_string(exist_count) + " 条磁盘上存在" +
+           ((abs_count == entries.size() && exist_count == entries.size()) ? ""
+                                                                          : "  <-- 有问题"));
       if (!sample.empty()) step("  示例: " + sample);
       // 相对路径 = 客户端按自己的当前目录解析 = 找不到文件 = 什么都不生效。
+      if (exist_count != entries.size()) {
+        r.error = "字符串块里有 " + std::to_string(entries.size() - exist_count) +
+                  " 条路径在磁盘上不存在（客户端打开会失败，装了也不生效）—— 已停止，不写入 hook。";
+        return r;
+      }
       if (abs_count != entries.size()) {
         r.error = "字符串块里有 " + std::to_string(entries.size() - abs_count) +
                   " 条不是绝对路径。Arctium 存的是 files 下的磁盘绝对路径，"
@@ -663,11 +690,11 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     req.min_cover = 13;
     // 同样的问题：返回给客户端的必须是能直接打开的磁盘绝对路径。
     req.entries.reserve(ds.entries.size());
-    {
-      const std::string fda = ds.files_dir;
-      for (const auto& e : ds.entries)
-        req.entries.emplace_back(e.file_data_id, arctium::arctium_stored_path(fda, e.game_path));
-    }
+    for (const auto& e : ds.entries)
+      req.entries.emplace_back(e.file_data_id, e.local_path.empty()
+                                                   ? arctium::arctium_stored_path(ds.files_dir,
+                                                                                 e.game_path)
+                                                   : e.local_path);
 
     FileIdHook hook;
     hook.set_process(process);

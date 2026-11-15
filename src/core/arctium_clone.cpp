@@ -40,7 +40,7 @@ std::vector<uint8_t> arctium_stub_template() {
 std::vector<uint8_t> build_arctium_stub(uint64_t id_alloc_va, uint32_t count,
                                         int32_t js_rel32) {
   std::vector<uint8_t> s = arctium_stub_template();
-  std::memcpy(s.data() + 4, &js_rel32, 4);       // js 的 rel32
+  std::memcpy(s.data() + 4, &js_rel32, 4);       // js 的 rel32（恒为 42）
   std::memcpy(s.data() + 12, &id_alloc_va, 8);   // movabs r9, idAlloc
   std::memcpy(s.data() + 35, &count, 4);         // cmp eax, count
   return s;

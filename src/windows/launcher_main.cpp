@@ -341,6 +341,10 @@ struct Options {
   // 这里允许直接把「模组目录 + listfile」交给 exe，由 exe 自己换算。
   std::string mods_dir;
   std::string listfile_spec;   // 多个文件用 ';' 分隔
+
+  // 连私有服务器时才需要：同时打 Arctium 的四个证书补丁。
+  // 对模组加载没有任何作用，所以默认关。
+  bool cert_patches = false;
 };
 
 void say(const std::string& s) {
@@ -562,6 +566,7 @@ int main(int argc, char** argv) {
     else if (a == "--no-detach") o.detach = false;
     else if (a == "--mods") o.mods_dir = glue_path(argc, argv, &i);
     else if (a == "--listfile") o.listfile_spec = glue_path(argc, argv, &i);
+    else if (a == "--cert-patches") o.cert_patches = true;
     else if (a == "--verbose") o.verbose = true;
     else if (a == "--stub") {
       const std::string v = next("arctium");
@@ -570,6 +575,7 @@ int main(int argc, char** argv) {
     else if (a == "--version") {
       std::printf("wowmod_loader build: %s\n", WOWMOD_LOADER_BUILD_TAG);
       std::printf("modes: observe auto hook analyze diagnose sigscan probe scout patch mods\n");
+      std::printf("engine: anti-crash + NoJump + FileDataID hook + cert-patches(optional)\n");
       return 0;
     }
     else if (a == "-h" || a == "--help") {
@@ -597,6 +603,7 @@ int main(int argc, char** argv) {
           "  --mods DIR       自包含模式：直接扫这个模组目录（exe 自己换算 FileDataID，\n"
           "                   不需要 python、不需要预先生成 mappings\\files\n"
           "  --listfile PATH  与 --mods 配合；多个文件用 ';' 分隔\n"
+          "  --cert-patches   同时打 Arctium 的四个证书补丁（连私有服务器时才需要）\n"
           "  --wait MS        等待客户端解密完成的最长时间（默认 30000）\n"
           "  --terminate-on-fail  失败时终止客户端（默认保留）\n"
           "  --wait-exit      一直等到客户端退出再返回（默认启动后即返回）\n\n"
@@ -754,8 +761,10 @@ int main(int argc, char** argv) {
       // 自包含模式下 local_path 已经是绝对路径；files_dir 只用于报告。
       ds.files_dir = sc.game_root;
       ds.source_note = "--mods 自包含（" + std::to_string(sc.matched) + " 项）";
+      wowmod::win::ModLoaderOptions mopts;
+      mopts.cert_patches = o.cert_patches;
       r = wowmod::win::install_mod_loader_with_data(pi.hProcess, wowmod_dir, ds, o.wait_ms,
-                                                    kind);
+                                                    kind, mopts);
     } else {
       r = wowmod::win::install_mod_loader(pi.hProcess, wowmod_dir, o.wait_ms, kind);
     }

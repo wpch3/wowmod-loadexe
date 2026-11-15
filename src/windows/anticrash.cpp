@@ -13,7 +13,7 @@
 namespace wowmod {
 namespace win {
 
-AntiCrashPlan plan_anti_crash(HANDLE process) {
+AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches) {
   // 用最大那块映像（= PEB 基址上的整幅映像）来规划：Arctium 也是在自己的
   // memory.Data 上找。
   AntiCrashPlan plan;
@@ -29,7 +29,7 @@ AntiCrashPlan plan_anti_crash(HANDLE process) {
     plan.error = "主映像内容为空（不可读）";
     return plan;
   }
-  plan = plan_anti_crash_from_image(main_img->bytes, main_img->base);
+  plan = plan_anti_crash_from_image(main_img->bytes, main_img->base, cert_patches);
   plan.notes.push_back("规划基于映像 0x" + to_hex(main_img->base, 16) + " （" +
                        std::to_string(main_img->bytes.size() / 1048576) + " MB）");
   return plan;
