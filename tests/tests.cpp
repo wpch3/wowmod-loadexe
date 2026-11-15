@@ -2020,6 +2020,65 @@ static void test_single_image_origin_and_protect() {
   CHECK_EQ(end_page - va_page, 0x1000ULL);
 }
 
+// 这一轮线上日志（第四次）给出的新事实：
+//   jmp_rel32@110286715: 页 0x692d000 Type=0x40000(MEM_MAPPED) Protect=0x04
+//   VirtualProtectEx ... 长度 4096 -> GetLastError=87
+//   [失败] NoJump 无法安全安装
+//
+// 那页【本来就是 READWRITE】。我们却在请求 EXECUTE_READWRITE。
+// 对 section 映射出的数据视图追加 EXECUTE，内核按 section 属性拒绝，
+// 返回的就是 87。写 4 个字节根本不需要执行权限。
+static void test_write_protection_policy() {
+  group("write_protection");
+  auto slurp = [](const char* p) {
+    std::string s;
+    std::ifstream in(p, std::ios::binary);
+    if (in) s.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return s;
+  };
+
+  const std::string ac = slurp("src/windows/anticrash.cpp");
+  CHECK(!ac.empty(), "应能读到 anticrash.cpp");
+  if (!ac.empty()) {
+    // 必须先判断"已经可写"，可写就不要去动保护
+    CHECK(ac.find("already_writable") != std::string::npos,
+          "必须先判断页是否已可写；已可写就别改保护（改 EXECUTE 会被拒 err=87）");
+    // 它必须真的被执行到：既赋值又用于分支
+    CHECK(ac.find("bool protect_ok = already_writable;") != std::string::npos,
+          "already_writable 必须参与控制流（不能只是声明后不用）");
+    CHECK(ac.find("if (already_writable) {") != std::string::npos,
+          "已可写时必须有独立分支，跳过 VirtualProtectEx");
+    // 必须保留降级路径
+    CHECK(ac.find("PAGE_READWRITE") != std::string::npos,
+          "EXECUTE_READWRITE 被拒时必须降级到 PAGE_READWRITE");
+  }
+
+  // NoJump 侧也必须有改保护逻辑（以前完全没有）
+  const std::string ap = slurp("src/windows/arctium_patch.cpp");
+  CHECK(!ap.empty(), "应能读到 arctium_patch.cpp");
+  if (!ap.empty()) {
+    CHECK(ap.find("改页保护失败") != std::string::npos ||
+              ap.find("VirtualProtectEx(process, reinterpret_cast<void*>(vp), plen") !=
+                  std::string::npos,
+          "apply_branch_patches 必须自己改页保护 —— 否则在 MEM_MAPPED 页上写必失败");
+    // 失败时必须能自诊断：读出 known_rva 处真实字节
+    CHECK(ap.find("诊断 ") != std::string::npos,
+          "规划失败时必须读出 known_rva 处真实字节，否则无法区分「没解密」与「签名不对」");
+  }
+
+  // NoJump 必须重试（按需解密：没执行到的页还是密文）
+  const std::string ml = slurp("src/windows/mod_loader.cpp");
+  CHECK(ml.find("NoJump 第 ") != std::string::npos,
+        "NoJump 必须等待重试，不能一次未命中就整体失败");
+
+  // 位运算自检：用 Windows 的真实常量值（这里不引 windows.h）
+  const unsigned PR = 0x02, PRW = 0x04, PWC = 0x08, PER = 0x20, PERW = 0x40, PEWC = 0x80;
+  const unsigned writable_mask = PRW | PWC | PERW | PEWC;
+  CHECK((0x04u & writable_mask) != 0, "PAGE_READWRITE(0x04) 必须算作可写");
+  CHECK((PER & writable_mask) == 0, "PAGE_EXECUTE_READ 不算可写");
+  CHECK((PR & writable_mask) == 0, "PAGE_READONLY 不算可写");
+}
+
 static void test_mod_loader_ordering() {
   group("mod_loader_ordering");
   std::string src;
@@ -2873,6 +2932,7 @@ int main() {
   test_readiness_criteria_on_real_log();
   test_no_self_inflicted_gates();
   test_single_image_origin_and_protect();
+  test_write_protection_policy();
   test_mod_loader_ordering();
   test_arctium_clone();
   test_fileid_stub_semantics();

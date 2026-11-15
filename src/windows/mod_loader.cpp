@@ -566,7 +566,40 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   }
   BranchPatchReport branch_plan;
   {
-    branch_plan = plan_branch_patches(process, by_rva);
+    // 【NoJump 必须重试，不能一次失败就放弃】
+    //
+    // 线上实测：CustomFileIdHook 在 RVA 0x33E06A0 能稳定命中，
+    // 但 LoadByFileId/Path 的 RVA（0x33D7976 / 0x33D7B58）在同一个
+    // .text 段里却 0 命中，同时明文页只有 22/260 (8.5%)。
+    //
+    // 说明壳是【按需解密】：只有客户端真正执行到的页才是明文。
+    // 那两处是 CASC 加载分支，客户端要到「开始读资源/进登录界面」
+    // 才会执行到。Arctium 的 WaitForUnpack 一直在重读整幅映像，
+    // 直到 Init 那条特征码出现 —— 它天然覆盖了这个等待。
+    //
+    // 所以这里对 NoJump 也做等待重试，而不是一次不中就直接失败。
+    const DWORD br_t0 = GetTickCount();
+    for (int attempt = 0;; ++attempt) {
+      branch_plan = plan_branch_patches(process, by_rva);
+      if (branch_plan.ok) {
+        if (attempt > 0) step("NoJump 第 " + std::to_string(attempt + 1) + " 次重试后定位成功");
+        break;
+      }
+      // 客户端是不是已经没了？没了就别等了。
+      DWORD code = 0;
+      if (GetExitCodeProcess(process, &code) && code != STILL_ACTIVE) {
+        r.error = "客户端在等待 NoJump 目标期间退出（exit=0x" + to_hex(code, 8) + "）";
+        return r;
+      }
+      if (GetTickCount() - br_t0 > wait_ms) {
+        step("NoJump 重试 " + std::to_string(attempt + 1) + " 次仍未定位（已等 " +
+             std::to_string((GetTickCount() - br_t0) / 1000) + " 秒）");
+        break;
+      }
+      step("NoJump 第 " + std::to_string(attempt + 1) +
+           " 次未定位到目标（代码页可能还没解密），1 秒后重试…");
+      ::Sleep(1000);
+    }
     if (!branch_plan.ok) {
       r.error = "NoJump 无法安全安装: " + branch_plan.error +
                 "（第 4 步之前就停止，没有改动客户端任何字节）";

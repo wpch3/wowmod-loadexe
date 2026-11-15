@@ -485,7 +485,44 @@ BranchPatchReport plan_branch_patches(HANDLE process,
     if (p.error.empty() && p.match_va != 0) ++n;
   }
   rep.ok = (n > 0);
-  if (n == 0) rep.error = "没有任何一条可以安全安装的分支补丁";
+  if (n == 0) {
+    // 【失败时自己去读那两处 RVA，把真实字节写进报告】
+    //
+    // 没有这个，"0 命中"永远只能猜：是没解密？版本不符？范围不对？
+    // 直接把 known_rva 处的 16 字节读出来，一眼就能分辨：
+    //   * 读到 01 0F 84 ...  -> 代码是明文，是签名/比较逻辑的问题
+    //   * 读到高熵随机字节     -> 这页还没解密
+    //   * 读不到               -> 页没提交/地址不对
+    std::string diag;
+    if (!images.empty() && !images[0].bytes.empty()) {
+      const ScannedImage& im = images[0];
+      for (const auto& s2 : arctium_signature_specs()) {
+        if (!s2.known_rva || s2.known_build != 68974) continue;
+        const std::string nm = s2.name ? s2.name : "";
+        if (nm != "LoadByFileIdAlternate" && nm != "LoadByFilePathAlternate") continue;
+        char buf[128];
+        if (s2.known_rva + 16 <= im.bytes.size()) {
+          const uint8_t* q = im.bytes.data() + s2.known_rva;
+          std::snprintf(buf, sizeof(buf),
+                        "  诊断 %s RVA 0x%X 处 16 字节 = %02X %02X %02X %02X %02X %02X %02X %02X "
+                        "%02X %02X %02X %02X %02X %02X %02X %02X",
+                        nm.c_str(), s2.known_rva, q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7],
+                        q[8], q[9], q[10], q[11], q[12], q[13], q[14], q[15]);
+          // 是否以 01 0F 84 开头 = 明文且位置正确
+          if (q[0] == 0x01 && q[1] == 0x0F && q[2] == 0x84)
+            std::strcat(buf, "  <- 明文且位置正确(签名/比较逻辑问题)");
+        } else {
+          std::snprintf(buf, sizeof(buf), "  诊断 %s RVA 0x%X 超出已读范围(读到 %zu MB)",
+                        nm.c_str(), s2.known_rva, im.bytes.size() / 1048576);
+        }
+        diag += std::string(buf) + "\n";
+      }
+    }
+    rep.error = "没有任何一条可以安全安装的分支补丁（映像 0x" +
+                to_hex(images.empty() ? 0 : images[0].base, 16) + "，已读 " +
+                std::to_string(images.empty() ? 0 : images[0].bytes.size() / 1048576) +
+                " MB）\n" + diag;
+  }
   rep.plannable = n;
   return rep;
 }
@@ -511,8 +548,48 @@ bool apply_branch_patches(HANDLE process, BranchPatchReport* rep) {
     }
 
     const uint8_t zero[4] = {0x00, 0x00, 0x00, 0x00};
+
+    // 【这里以前完全没有改页保护】
+    //
+    // 目标常常是壳映射出来的 MEM_MAPPED / READWRITE 视图（线上实测
+    // Protect=0x04）。在不可写的页上直接 WriteProcessMemory 会失败，
+    // 而且失败信息只有"写入失败"，看不出是权限问题。
+    //
+    // 注意：只请求 READWRITE，不要请求 EXECUTE_READWRITE ——
+    // 对 section 映射视图追加 EXECUTE 会被内核拒（err=87），
+    // 而写这 4 个字节根本不需要执行权限。
+    const uint64_t pmask = 0xFFF;
+    const uint64_t vp = p.patch_va & ~pmask;
+    const uint64_t ep = (p.patch_va + sizeof(zero) + pmask) & ~pmask;
+    const size_t plen = static_cast<size_t>(ep - vp);
+    DWORD oldp = 0;
+    bool changed = false;
+    {
+      MEMORY_BASIC_INFORMATION mbi;
+      std::memset(&mbi, 0, sizeof(mbi));
+      if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(p.patch_va), &mbi, sizeof(mbi))) {
+        const bool writable = (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                                              PAGE_EXECUTE_READWRITE |
+                                              PAGE_EXECUTE_WRITECOPY)) != 0;
+        if (!writable) {
+          if (VirtualProtectEx(process, reinterpret_cast<void*>(vp), plen, PAGE_READWRITE, &oldp))
+            changed = true;
+          else
+            p.error = "改页保护失败 (err=" + std::to_string(GetLastError()) +
+                      ", Protect=0x" + to_hex(mbi.Protect, 8) +
+                      ", Type=0x" + to_hex(mbi.Type, 8) + ")";
+        }
+      }
+    }
+    if (!p.error.empty()) continue;
+
     std::string werr;
-    if (!write_remote(process, p.patch_va, zero, sizeof(zero), &werr)) {
+    const bool wok = write_remote(process, p.patch_va, zero, sizeof(zero), &werr);
+    if (changed) {
+      DWORD tmp = 0;
+      VirtualProtectEx(process, reinterpret_cast<void*>(vp), plen, oldp, &tmp);
+    }
+    if (!wok) {
       p.error = "写入失败: " + werr;
       continue;
     }

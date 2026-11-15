@@ -87,6 +87,7 @@ bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan) {
     // 只靠"规划时算出来的地址"不够 —— 一次错误的命中也会给出一个
     // 看起来合理的地址，然后在 VirtualProtectEx 处以 87 失败。
     // 先问内核这块内存是什么，能立刻区分「地址错」与「权限问题」。
+    DWORD mbi_prev_protect = 0;
     {
       MEMORY_BASIC_INFORMATION mbi;
       std::memset(&mbi, 0, sizeof(mbi));
@@ -100,22 +101,62 @@ bool apply_anti_crash(HANDLE process, AntiCrashPlan* plan) {
                              to_hex(mbi.State, 8) + ")");
         continue;
       }
+      mbi_prev_protect = mbi.Protect;
       plan->notes.push_back("  " + p.name + ": 页 0x" + to_hex(va_page, 16) +
                            " State=committed Type=0x" + to_hex(mbi.Type, 8) +
                            " Protect=0x" + to_hex(mbi.Protect, 8));
     }
 
-    if (!VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len,
-                          PAGE_EXECUTE_READWRITE, &old)) {
-      plan->notes.push_back("VirtualProtectEx 失败 @" + p.name + " (va=0x" +
-                           to_hex(p.va, 16) + ", 保护 0x" + to_hex(va_page, 16) +
-                           " 长度 " + std::to_string(prot_len) + "): GetLastError=" +
-                           std::to_string(GetLastError()));
-      continue;
+    // 【失败原因：我一直在请求 PAGE_EXECUTE_READWRITE】
+    //
+    // 线上日志：
+    //   jmp_rel32@110286715: 页 0x692d000 Type=0x40000(MEM_MAPPED) Protect=0x04(READWRITE)
+    //   VirtualProtectEx ... 长度 4096 -> GetLastError=87
+    //
+    // 这页【本来就是 READWRITE】。我却在请求 EXECUTE_READWRITE。
+    // 对一个 MEM_MAPPED 的只读/可写数据视图，内核按 section 属性
+    // 拒绝追加 EXECUTE —— 返回就是 87。
+    //
+    // 而写这几个字节根本不需要 EXECUTE：写入只需要可写。
+    // 执行权限由客户端自己的执行视图负责（这是壳的双视图结构）。
+    //
+    // 所以按协议降级：先试 EXECUTE_READWRITE（正常代码页），
+    // 失败就只请求 READWRITE；本来就可写则完全不改保护。
+    const bool already_writable = (mbi_prev_protect & (PAGE_READWRITE | PAGE_WRITECOPY |
+                                                      PAGE_EXECUTE_READWRITE |
+                                                      PAGE_EXECUTE_WRITECOPY)) != 0;
+    bool protect_ok = already_writable;
+    std::string how;
+    if (already_writable) {
+      how = "页本就可写，未改保护";
+      old = mbi_prev_protect;
+    } else if (VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len,
+                                PAGE_EXECUTE_READWRITE, &old)) {
+      how = "PAGE_EXECUTE_READWRITE";
+      protect_ok = true;
+    } else {
+      const DWORD e1 = GetLastError();
+      if (VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len,
+                           PAGE_READWRITE, &old)) {
+        how = "PAGE_EXECUTE_READWRITE 被拒(err=" + std::to_string(e1) +
+              ")，降级 PAGE_READWRITE 成功";
+        protect_ok = true;
+      } else {
+        plan->notes.push_back("VirtualProtectEx 失败 @" + p.name + " (va=0x" +
+                             to_hex(p.va, 16) + ", 页 0x" + to_hex(va_page, 16) +
+                             ", 长度 " + std::to_string(prot_len) +
+                             "): EXECUTE_READWRITE err=" + std::to_string(e1) +
+                             ", READWRITE err=" + std::to_string(GetLastError()));
+      }
     }
+    if (!protect_ok) continue;
+    plan->notes.push_back("  " + p.name + ": " + how);
+
     const bool ok = write_remote(process, p.va, p.bytes.data(), len, &err);
-    DWORD tmp = 0;
-    VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len, old, &tmp);
+    if (!already_writable) {
+      DWORD tmp = 0;
+      VirtualProtectEx(process, reinterpret_cast<void*>(va_page), prot_len, old, &tmp);
+    }
     if (!ok) {
       plan->notes.push_back("写入失败 @" + p.name + ": " + err);
       continue;
