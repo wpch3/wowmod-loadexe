@@ -265,6 +265,7 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   bool init_found = false;
   bool init_flag_seen = false;
   int settle = 0;
+  size_t last_settle_low = 0;
   uint64_t init_va = 0;
   uint64_t init_target_va = 0;
   size_t best_low = 0, last_checked = 0;
@@ -349,6 +350,13 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
           //
           // 所以在"标记已置位但明文页很少"时，再多给几轮时间让壳继续解密，
           // 并把每轮明文页数打出来（这正是判断"该不该继续等"的唯一依据）。
+          // 【等待必须看"是否还在变化"，不是看"是否过半"】
+          //
+          // 上一版条件 best_low * 2 >= last_checked 永远不成立
+          // （实测 49/260，一半都到不了），于是固定空转 12 轮，
+          // 最后打印"等待期内 Init 特征码未出现"——而每轮日志都写着
+          // Init 有。自相矛盾，且白等 12 秒。
+          // 现在改成：明文页数【不再增长】就停（说明解密停滞，再等无益）。
           const int settle_rounds = 12;
           if (settle++ == 0) {
             step("解包标记已置位（0x" + to_hex(init_target_va, 16) + " = " +
@@ -356,7 +364,9 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
                  std::to_string(best_low) + "/" + std::to_string(last_checked) +
                  " —— 继续观察解密进度最多 " + std::to_string(settle_rounds) + " 轮");
           }
-          if (settle >= settle_rounds || best_low * 2 >= last_checked) {
+          const bool stalled = (best_low == last_settle_low && settle >= 3);
+          if (stalled) last_settle_low = best_low;
+          if (settle >= settle_rounds || stalled || best_low * 2 >= last_checked) {
             step("解包完成（标记已置位，明文页 " + std::to_string(best_low) + "/" +
                  std::to_string(last_checked) + "）");
             ready = true;
@@ -408,11 +418,19 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   }
   if (!ready) {
     // 不是「找不到特征码就失败」—— 而是 Init 在等待期内确实没出现。
+    // 注意：init_found 为真却走到这里，说明是"解密停滞"而不是"没出现"，
+    // 措辞必须区分，否则日志自己打自己的脸（上一版就是）。
     // 这仍然可以继续（有些版本/完整包里这条特征码形态不同），
     // 但必须如实说明，让后面的判定自己决定。
-    step("警告: 等待期内 Init 特征码未出现（" + std::to_string(init_round + 1) +
-         " 轮，明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
-         " 页）。继续尝试定位，不中止。");
+    if (init_found) {
+      step("警告: 解密停滞（" + std::to_string(init_round + 1) + " 轮，明文 " +
+           std::to_string(best_low) + "/" + std::to_string(last_checked) +
+           " 页不再增长）。Init 已出现，继续安装但不中止。");
+    } else {
+      step("警告: 等待期内 Init 特征码未出现（" + std::to_string(init_round + 1) +
+           " 轮，明文 " + std::to_string(best_low) + "/" + std::to_string(last_checked) +
+           " 页）。继续尝试定位，不中止。");
+    }
   } else {
     step("客户端已初始化（Init 出现，第 " + std::to_string(init_round + 1) +
          " 轮；CustomFileIdHook 命中 " + std::to_string(hook_hits) + " 处，最佳语义分 " +
@@ -611,6 +629,8 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
   bool ac_planned = false;
   // hook 点的 13 字节跳转先算出来存着，等统一写入时一起打进快照。
   std::vector<uint8_t> hook_bytes_for_remap;
+  std::vector<uint8_t> orig_hook_bytes;   // hook 点原始 13 字节（写前复读用）
+  uint64_t tramp_va_saved = 0;
 
   // ---- 3b2. anti-crash 规划（Arctium PrepareAntiCrash，挂起状态下、NoJump 之前）----
   //
@@ -894,6 +914,8 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
     // 由最后的 RemapAndPatch 统一写穿透。我们照做 ——
     // 在壳自己的视图上直接写会被完整性校验抓到（0xC00000E5）。
     hook_bytes_for_remap = arctium::build_hook_jump(tramp_va);
+    orig_hook_bytes = orig;
+    tramp_va_saved = tramp_va;
     step("hook 已规划: 0x" + to_hex(target, 16) + " -> 0x" + to_hex(tramp_va, 16) +
          "（等统一写入）");
 
@@ -1097,7 +1119,36 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
            " —— 不启用重映射，改用逐条写入，客户端仍可能被校验结束");
     }
 
+    // 【逐条打印 VA 与区间的关系】
+    //
+    // 上一版只报"有 8/12 条落在快照之外"，但不说【是哪几条、它们的 VA 是多少】。
+    // 于是无从判断到底是 anti-crash 算错了地址，还是 NoJump/hook 落错地方。
+    // 这里在写入前把每一条都摆出来（区间外的高亮标记）。
+    {
+      std::string lst;
+      size_t outside = 0;
+      for (const auto& p : module_patches) {
+        const bool in = p.va >= remap_base && p.va + p.bytes.size() <= remap_base + remap_size;
+        if (!in) ++outside;
+        char b[160];
+        std::snprintf(b, sizeof(b), "\n    %-28s VA=0x%llX len=%zu %s", p.name.c_str(),
+                      static_cast<unsigned long long>(p.va), p.bytes.size(),
+                      in ? "(区间内)" : "(【区间外】)");
+        lst += b;
+      }
+      step("补丁清单（区间 0x" + to_hex(remap_base, 16) + " + " +
+           std::to_string(remap_size / 1048576) + " MB）:" + lst);
+      if (outside) {
+        step("  其中 " + std::to_string(outside) + " 条在区间外");
+      }
+    }
+
     std::string rerr;
+    // 【即使不重映射，NoJump + hook 也必须写进去】
+    //
+    // 上一版 remap 一旦不可用就 fallback 到逐条写 —— 但那条路径只写
+    // NoJump，hook 从未写入（已在下面补上）。这次再保证一点：
+    // 只要 NoJump/hook 在区间内，就一定要送达。
     const bool remapped = integrity_off && !module_patches.empty() && remap_size > 0 &&
                           remap_and_patch(process, remap_base, remap_size,
                                           module_patches, sec_specs, &rerr, suspended);
@@ -1140,6 +1191,49 @@ ModLoaderResult install_mod_loader_with_data(HANDLE process, const std::string& 
       r.branch_patched = true;
       r.branch_count = branch_plan.applied_count;
       step("NoJump 已打 " + std::to_string(branch_plan.applied_count) + " 条（逐条）");
+
+      // ---- 【致命遗漏】回退路径从来不写 hook ----
+      //
+      // 上一版把 hook 跳转只放进 module_patches，指望 remap_and_patch 写。
+      // 可一旦重映射被跳过（本次就是：8/12 条补丁落在快照外），
+      // 回退到逐条写入时【只有 NoJump 被写了，hook 从没写进客户端】。
+      //
+      // 后果正是用户这次的日志：
+      //     hook 已规划: 0x6f006a0 -> 0x850000（等统一写入）
+      //     stub 观测: 调用 0 次, 命中 0 次
+      // 跳板建好了、映射表也建好了，但客户端那个函数头【一个字节都没改】，
+      // 所以永远走不到 stub。模组当然完全不生效。
+      //
+      // 这里必须把 hook 补上。它和 NoJump 一样是"模块内 13 字节补丁"。
+      if (r.hook_installed && hook_bytes_for_remap.size() == kArctiumHookLen) {
+        std::string herr;
+        const uint64_t hp = r.hook_target;
+        // 写前复读：确认那 13 字节还是原样（与 NoJump 同样的保护）
+        std::vector<uint8_t> cur(kArctiumHookLen, 0);
+        if (!read_remote(process, hp, cur.data(), cur.size(), &herr)) {
+          r.error = "写 hook 前复读失败: " + herr;
+          return r;
+        }
+        if (cur != orig_hook_bytes) {
+          r.error = "写 hook 前发现那 13 字节已变（壳重映射？）—— 为安全起见中止";
+          return r;
+        }
+        // 改保护 -> 写 -> 恢复
+        DWORD oldh = 0;
+        const uint64_t hp_page = hp & ~static_cast<uint64_t>(0xFFF);
+        const size_t hlen = (kArctiumHookLen + (hp - hp_page) + 0xFFF) & ~static_cast<size_t>(0xFFF);
+        VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen,
+                         PAGE_EXECUTE_READWRITE, &oldh);
+        if (!write_remote(process, hp, hook_bytes_for_remap.data(), hook_bytes_for_remap.size(),
+                          &herr)) {
+          r.error = "写入 hook 跳转失败: " + herr;
+          return r;
+        }
+        DWORD tmp = 0;
+        VirtualProtectEx(process, reinterpret_cast<void*>(hp_page), hlen, oldh, &tmp);
+        FlushInstructionCache(process, reinterpret_cast<void*>(hp), hook_bytes_for_remap.size());
+        step("hook 已写入（逐条）: 0x" + to_hex(hp, 16) + " -> 0x" + to_hex(tramp_va_saved, 16));
+      }
     }
   }
 

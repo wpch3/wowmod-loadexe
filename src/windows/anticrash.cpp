@@ -78,22 +78,28 @@ AntiCrashPlan plan_anti_crash(HANDLE process, bool cert_patches) {
       if (im.bytes.size() < 0x1000) continue;
       AntiCrashPlan sub = plan_anti_crash_from_image(im.bytes, im.base, cert_patches);
       if (sub.integrity_hits == 0 && sub.remap_jump_patches == 0) continue;
-      // 只并入非证书补丁（证书补丁与映像位置无关，主映像那次已经算过）
-      for (auto& p : sub.patches) {
-        if (p.cert) continue;
-        plan.patches.push_back(std::move(p));
-      }
-      plan.integrity_hits += sub.integrity_hits;
-      plan.remap_hits += sub.remap_hits;
-      plan.remap_jump_patches += sub.remap_jump_patches;
+      // 【只记录，不并入补丁】
+      //
+      // 上一版把这里的补丁直接 push 进 plan.patches，结果它们的 VA 属于
+      // 这些【别的映像】（如 0x7ffd8d5b1000），而 remap_and_patch 只处理
+      // 主映像区间 —— 于是必然报"8/12 条补丁落在快照之外"。
+      //
+      // 更重要的是：那些映像多半是系统 DLL（ntdll/kernelbase）。
+      // 往它们里面写 ret 0 会毁掉整个进程的运行时，比不修更糟。
+      // 主映像之外的副本只作为【诊断信息】记录，绝不写入。
+      // 这些副本的存在说明壳把代码解密到了别处；但客户端真正执行的是
+      // 主映像（或其私有 section），改外面的副本既无效又危险。
       extra_hits += sub.integrity_hits;
       plan.notes.push_back("补充扫描映像 0x" + to_hex(im.base, 16) + "（" +
                            std::to_string(im.bytes.size() / 1048576) + " MB）: 完整性 " +
-                           std::to_string(sub.integrity_hits) + " 处");
+                           std::to_string(sub.integrity_hits) + " 处, remap 跳转 " +
+                           std::to_string(sub.remap_jump_patches) + " 条（仅记录，不写入）");
     }
     if (extra_hits) {
       plan.notes.push_back("主映像内完整性校验 0 处，但在其它映像里找到 " +
-                           std::to_string(extra_hits) + " 处（12.0.7 把解密副本放在主映像之外）");
+                           std::to_string(extra_hits) +
+                           " 处副本 —— 那些是系统 DLL 或壳的私有副本，改动会毁掉进程，"
+                           "因此不写入。真正要改的副本在主映像里仍是密文。");
     } else {
       plan.notes.push_back("已扫全部 " + std::to_string(images.size()) +
                            " 份映像，仍未找到完整性校验 —— 这批特征码在本版本确实不适用");

@@ -2892,6 +2892,38 @@ static void test_remap_range_pure() {
 //
 // 这里不复刻 x64 语义，而是直接校验【三个跳转的相对位移】算得对不对 ——
 // 这正是手工编码最容易错、错了又最难查的地方。
+// 【回归】回退路径必须写 hook。
+//
+// 这是上一版最要命的一个 bug：hook 跳转只被放进 module_patches，
+// 指望 remap_and_patch 写。一旦重映射被跳过（实测 8/12 条区间外），
+// 回退到逐条写入时【只写了 NoJump，hook 一个字节都没写】。
+// 结果：跳板建好了、映射表建好了、日志写"hook 已规划"，
+// 但客户端函数头没动 -> stub 调用 0 次 -> 模组完全不生效。
+static void test_hook_written_on_fallback() {
+  group("hook-fallback");
+  // 读源码验证：回退分支里必须有写 hook 的代码
+  std::string src;
+  {
+    std::ifstream in("src/windows/mod_loader.cpp", std::ios::binary);
+    src.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  CHECK(!src.empty(), "应能读到 mod_loader.cpp");
+  const size_t fb = src.find("回退为逐条写入");
+  CHECK(fb != std::string::npos, "必须有回退分支");
+  const size_t hook_write = src.find("hook 已写入（逐条）");
+  CHECK(hook_write != std::string::npos,
+        "回退路径必须真正写入 hook —— 否则跳板永远不被调用（实测 stub 调用 0 次）");
+  CHECK(hook_write > fb, "写 hook 必须发生在回退分支之内");
+  // 写 hook 前必须复读原字节，避免壳重映射后写错地方
+  CHECK(src.find("写 hook 前复读失败") != std::string::npos,
+        "写 hook 前必须复读 13 字节确认未被改动");
+  // 写 hook 必须 flush 指令缓存
+  const size_t hw = src.find("hook 已写入（逐条）");
+  const size_t flush = src.rfind("FlushInstructionCache", hw);
+  CHECK(flush != std::string::npos && hw - flush < 400,
+        "写 hook 之后必须 FlushInstructionCache");
+}
+
 static void test_instrumented_stub() {
   group("instrumented-stub");
   const uint64_t id_alloc = 0x1000, call_ctr = 0x9000, hit_ctr = 0x9008;
@@ -3331,6 +3363,7 @@ int main() {
   test_no_false_negative();
   test_protect_plan();
   test_remap_range_pure();
+  test_hook_written_on_fallback();
   test_instrumented_stub();
   test_section_protection();
   test_patch_snapshot();
